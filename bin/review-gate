@@ -18,8 +18,138 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
-# Source shared library
-source "$SCRIPT_DIR/review-gate-lib.sh"
+# =============================================================================
+# Shared Library Functions (inlined)
+# =============================================================================
+
+# Get project hash from transcript path or calculate from project root
+get_project_hash() {
+    local transcript_path="${1:-}"
+
+    if [[ -n "$transcript_path" ]]; then
+        local dir_name
+        dir_name=$(basename "$(dirname "$transcript_path")")
+        if [[ "$dir_name" == -* ]]; then
+            echo "$dir_name"
+            return 0
+        fi
+    fi
+
+    local project_root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+    echo "$project_root" | sed 's|^/|-|' | tr '/' '-'
+}
+
+# Resolve the review directory for a session
+resolve_review_dir() {
+    local session_id="${1:-}"
+    local transcript_path="${2:-}"
+
+    local project_hash
+    project_hash=$(get_project_hash "$transcript_path")
+
+    local base_dir="$HOME/.claude/projects/$project_hash/cerberus"
+
+    if [[ -n "$session_id" ]]; then
+        echo "$base_dir/$session_id"
+    else
+        echo "$base_dir"
+    fi
+}
+
+# Get project-level review base directory
+get_review_base_dir() {
+    resolve_review_dir "" "${1:-}"
+}
+
+# Archive previous reviews to a timestamped directory
+archive_reviews() {
+    local review_dir="$1"
+    local reviews_dir="$2"
+    local iteration="${3:-0}"
+
+    if [[ ! -d "$reviews_dir" ]]; then
+        return 0
+    fi
+
+    local has_reviews=false
+    for f in "$reviews_dir"/*.json; do
+        if [[ -f "$f" ]]; then
+            has_reviews=true
+            break
+        fi
+    done
+
+    if [[ "$has_reviews" != "true" ]]; then
+        return 0
+    fi
+
+    local archive_dir="$review_dir/reviews-iter-${iteration}"
+
+    if [[ -d "$archive_dir" ]]; then
+        local ts
+        ts=$(date +%Y%m%d-%H%M%S)
+        archive_dir="$review_dir/reviews-iter-${iteration}-${ts}"
+    fi
+
+    mv "$reviews_dir" "$archive_dir"
+    echo "$archive_dir" >&2
+    return 0
+}
+
+# Unwrap review JSON from various wrapper formats
+unwrap_review_json() {
+    local json="$1"
+    if [[ -z "$json" ]]; then
+        return 1
+    fi
+
+    if echo "$json" | jq -e '.structured_output' >/dev/null 2>&1; then
+        json=$(echo "$json" | jq -c '.structured_output' 2>/dev/null || echo "")
+    fi
+
+    if [[ -n "$json" ]] && echo "$json" | jq -e '.response' >/dev/null 2>&1; then
+        local response
+        response=$(echo "$json" | jq -r '.response' 2>/dev/null || echo "")
+        if [[ -n "$response" ]] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            json=$(echo "$response" | jq -c '.' 2>/dev/null || echo "")
+        fi
+    fi
+
+    if [[ -z "$json" ]]; then
+        return 1
+    fi
+
+    echo "$json"
+}
+
+# Find active review gate for current project
+find_active_gate() {
+    local transcript_path="${1:-}"
+    local base_dir
+    base_dir=$(get_review_base_dir "$transcript_path")
+
+    [[ ! -d "$base_dir" ]] && return 1
+
+    for session_dir in "$base_dir"/*/; do
+        [[ ! -d "$session_dir" ]] && continue
+        local state_file="$session_dir/gate-state.json"
+        [[ ! -f "$state_file" ]] && continue
+
+        local status
+        status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+
+        if [[ "$status" == "pending" || "$status" == "awaiting_decision" ]]; then
+            basename "$session_dir"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# =============================================================================
+# Main Script
+# =============================================================================
 
 # Model defaults (override with env vars)
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.2-codex}"
@@ -118,262 +248,6 @@ compute_sha256() {
     fi
 
     return 1
-}
-
-review_gate_generate() {
-    local review_type="healthcheck"
-    local prompt_file=""
-    local prompt_inline=""
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --type=*)
-                review_type="${1#*=}"
-                shift
-                ;;
-            --type)
-                review_type="${2:-healthcheck}"
-                shift 2
-                ;;
-            --prompt-file=*)
-                prompt_file="${1#*=}"
-                shift
-                ;;
-            --prompt-file)
-                prompt_file="${2:-}"
-                shift 2
-                ;;
-            --prompt=*)
-                prompt_inline="${1#*=}"
-                shift
-                ;;
-            --prompt)
-                prompt_inline="${2:-}"
-                shift 2
-                ;;
-            -h|--help)
-                cat <<'USAGE'
-Usage: review-gate generate [options]
-
-Options:
-  --type <type>         Named preset: healthcheck, architecture-review (default: healthcheck)
-  --prompt-file <path>  Path to custom prompt file
-  --prompt <text>       Inline prompt text
-
-Spawns generators (Codex, Gemini, Claude) to analyze the codebase. Outputs drafts to stdout.
-USAGE
-                return 0
-                ;;
-            *)
-                die "Unknown option '$1'"
-                ;;
-        esac
-    done
-
-    # Resolve prompt content
-    local prompt_content=""
-
-    if [[ -n "$prompt_inline" ]]; then
-        prompt_content="$prompt_inline"
-    elif [[ -n "$prompt_file" ]]; then
-        if [[ ! -f "$prompt_file" ]]; then
-            die "Prompt file not found: $prompt_file"
-        fi
-        prompt_content=$(cat "$prompt_file")
-    else
-        # Look for named preset (relative to this script's repo)
-        local prompt_path="$SCRIPT_DIR/../prompts/generators/${review_type}.md"
-
-        if [[ -f "$prompt_path" ]]; then
-            prompt_content=$(cat "$prompt_path")
-        else
-            die "No prompt found for type '$review_type' at $prompt_path"
-        fi
-    fi
-
-    # Create temp directory for drafts
-    local draft_dir
-    draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
-
-    local codex_draft="$draft_dir/draft-codex.md"
-    local gemini_draft="$draft_dir/draft-gemini.md"
-    local claude_draft="$draft_dir/draft-claude.md"
-    local codex_done="$draft_dir/codex.done"
-    local gemini_done="$draft_dir/gemini.done"
-    local claude_done="$draft_dir/claude.done"
-    local codex_failed="$draft_dir/codex.failed"
-    local gemini_failed="$draft_dir/gemini.failed"
-    local claude_failed="$draft_dir/claude.failed"
-
-    # Write prompt to temp file for generators
-    local prompt_tmp="$draft_dir/prompt.md"
-    echo "$prompt_content" > "$prompt_tmp"
-
-    echo "Starting generators for type: $review_type" >&2
-    echo "Draft directory: $draft_dir" >&2
-
-    # Spawn Codex (with repo access via read-only sandbox)
-    local codex_model="$CODEX_MODEL"
-    if command -v codex >/dev/null 2>&1; then
-        echo "Spawning Codex generator (model: $codex_model)..." >&2
-        (
-            if codex exec -m "$codex_model" -c model_reasoning_effort=high -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
-                touch "$codex_done"
-            else
-                touch "$codex_failed"
-            fi
-        ) &
-        local pid_codex=$!
-    else
-        echo "Warning: codex not found, skipping" >&2
-        touch "$codex_failed"
-        local pid_codex=""
-    fi
-
-    # Spawn Gemini (yolo for auto tool approval, prompt enforces read-only)
-    local gemini_model="$GEMINI_MODEL"
-    if command -v gemini >/dev/null 2>&1; then
-        echo "Spawning Gemini generator (model: $gemini_model)..." >&2
-        (
-            if gemini -m "$gemini_model" --yolo -o text "$prompt_content" > "$gemini_draft" 2>&1; then
-                touch "$gemini_done"
-            else
-                touch "$gemini_failed"
-            fi
-        ) &
-        local pid_gemini=$!
-    else
-        echo "Warning: gemini not found, skipping" >&2
-        touch "$gemini_failed"
-        local pid_gemini=""
-    fi
-
-    # Spawn Claude (print mode, no interaction, stdin for prompt)
-    local claude_model="$CLAUDE_MODEL"
-    if command -v claude >/dev/null 2>&1; then
-        echo "Spawning Claude generator (model: $claude_model)..." >&2
-        (
-            if echo "$prompt_content" | claude -p --model "$claude_model" > "$claude_draft" 2>&1; then
-                touch "$claude_done"
-            else
-                touch "$claude_failed"
-            fi
-        ) &
-        local pid_claude=$!
-    else
-        echo "Warning: claude not found, skipping" >&2
-        touch "$claude_failed"
-        local pid_claude=""
-    fi
-
-    # Wait for all generators
-    echo "Waiting for generators to complete..." >&2
-    local wait_start
-    wait_start=$(date +%s)
-    local timeout=600  # 10 minutes
-
-    while true; do
-        local codex_complete=false
-        local gemini_complete=false
-        local claude_complete=false
-
-        [[ -f "$codex_done" || -f "$codex_failed" ]] && codex_complete=true
-        [[ -f "$gemini_done" || -f "$gemini_failed" ]] && gemini_complete=true
-        [[ -f "$claude_done" || -f "$claude_failed" ]] && claude_complete=true
-
-        if $codex_complete && $gemini_complete && $claude_complete; then
-            break
-        fi
-
-        local elapsed=$(( $(date +%s) - wait_start ))
-        if [[ $elapsed -ge $timeout ]]; then
-            echo "Timeout waiting for generators after ${elapsed}s" >&2
-            # Kill any remaining processes
-            [[ -n "${pid_codex:-}" ]] && kill "$pid_codex" 2>/dev/null || true
-            [[ -n "${pid_gemini:-}" ]] && kill "$pid_gemini" 2>/dev/null || true
-            [[ -n "${pid_claude:-}" ]] && kill "$pid_claude" 2>/dev/null || true
-            break
-        fi
-
-        sleep 2
-    done
-
-    # Count successful drafts
-    local draft_count=0
-    local drafts=()
-
-    if [[ -f "$codex_done" && -f "$codex_draft" && -s "$codex_draft" ]]; then
-        ((draft_count++)) || true
-        drafts+=("$codex_draft")
-        echo "Codex: completed successfully" >&2
-    elif [[ -f "$codex_failed" ]]; then
-        echo "Codex: failed" >&2
-    else
-        echo "Codex: timed out" >&2
-    fi
-
-    if [[ -f "$gemini_done" && -f "$gemini_draft" && -s "$gemini_draft" ]]; then
-        ((draft_count++)) || true
-        drafts+=("$gemini_draft")
-        echo "Gemini: completed successfully" >&2
-    elif [[ -f "$gemini_failed" ]]; then
-        echo "Gemini: failed" >&2
-    else
-        echo "Gemini: timed out" >&2
-    fi
-
-    if [[ -f "$claude_done" && -f "$claude_draft" && -s "$claude_draft" ]]; then
-        ((draft_count++)) || true
-        drafts+=("$claude_draft")
-        echo "Claude: completed successfully" >&2
-    elif [[ -f "$claude_failed" ]]; then
-        echo "Claude: failed" >&2
-    else
-        echo "Claude: timed out" >&2
-    fi
-
-    echo "Completed: $draft_count drafts" >&2
-
-    if [[ $draft_count -eq 0 ]]; then
-        die "No drafts generated. Check generator availability."
-    elif [[ $draft_count -eq 1 ]]; then
-        echo "Warning: Only one generator succeeded. Proceeding with partial results." >&2
-    fi
-
-    # Output drafts for synthesis
-    echo ""
-    echo "# Generator Drafts for Synthesis"
-    echo ""
-    echo "The following drafts were generated by multiple models analyzing the codebase."
-    echo "Synthesize these into a single coherent artifact."
-    echo ""
-
-    local draft_num=1
-    for draft in "${drafts[@]}"; do
-        local model_name
-        model_name=$(basename "$draft" .md | sed 's/draft-//')
-        echo "---"
-        echo ""
-        echo "## Draft $draft_num"
-        echo ""
-        cat "$draft"
-        echo ""
-        ((draft_num++)) || true
-    done
-
-    echo "---"
-    echo ""
-    echo "# Synthesis Instructions"
-    echo ""
-    echo "Merge the above drafts into a single artifact:"
-    echo "1. Identify common findings across drafts"
-    echo "2. Resolve conflicts by using your judgment"
-    echo "3. Deduplicate similar issues"
-    echo "4. Produce a coherent final artifact"
-    echo ""
-
-    # Cleanup
-    rm -rf "$draft_dir"
 }
 
 review_gate_spawn_code_review() {

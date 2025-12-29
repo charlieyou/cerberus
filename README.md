@@ -10,6 +10,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 - **Automatic iteration**: Reviews loop until unanimous approval (up to 5 rounds)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan review**: Review implementation plans before execution
+- **Spec review**: Review feature specifications before implementation
 
 ## Installation
 
@@ -55,6 +56,14 @@ Review an implementation plan:
 ```
 /cerberus:review-plan                    # Review most recent session plan
 /cerberus:review-plan path/to/plan.md    # Review specific plan file
+```
+
+### Spec Review
+
+Review a feature specification:
+
+```
+/cerberus:review-spec path/to/spec.md    # Review a feature spec
 ```
 
 ## How It Works
@@ -103,6 +112,14 @@ Review an implementation plan:
 - **Order of Operations** - Dependencies sequenced correctly?
 - **Edge Cases** - Error paths addressed?
 - **Testability** - Can it be verified?
+
+### Spec Review
+
+- **Clarity of Goals** - Is it clear what problem this solves?
+- **Scope Definition** - Are boundaries explicit?
+- **Technical Feasibility** - Are proposed components realistic?
+- **Actionability** - Could a developer implement without clarification?
+- **Edge Cases** - Are error paths addressed?
 
 ## Manual Override
 
