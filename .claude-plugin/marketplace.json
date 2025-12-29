@@ -13,7 +13,7 @@
       "author": {
         "name": "charlieyou"
       },
-      "source": ".",
+      "source": "./",
       "license": "MIT",
       "repository": "https://github.com/charlieyou/cerberus"
     }
