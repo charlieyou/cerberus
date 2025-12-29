@@ -1540,6 +1540,10 @@ main() {
             shift
             review_gate_spawn_plan_review "$@"
             ;;
+        spawn-spec-review)
+            shift
+            review_gate_spawn_spec_review "$@"
+            ;;
         resolve)
             shift
             review_gate_resolve "$@"
