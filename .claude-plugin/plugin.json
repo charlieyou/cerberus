@@ -5,7 +5,7 @@
   "author": {
     "name": "cyou"
   },
-  "repository": "https://github.com/cyou/cerberus",
+  "repository": "https://github.com/charlieyou/cerberus",
   "license": "MIT",
   "keywords": ["code-review", "plan-review", "multi-model", "quality-gate", "cerberus"],
   "hooks": "./hooks/hooks.json"

@@ -28,17 +28,11 @@ Missing reviewers are skipped with a warning—you can run with just one or two.
 ### Install Plugin
 
 ```bash
-# Add the marketplace (if not already added)
-/plugin marketplace add cyou/cerberus
+# Add the marketplace
+/plugin marketplace add charlieyou/cerberus
 
 # Install the plugin
-/plugin install cerberus@cyou-plugins
-```
-
-Or install directly from the repository:
-
-```bash
-claude --plugin-dir /path/to/cerberus
+/plugin install cerberus
 ```
 
 ## Usage
