@@ -301,7 +301,7 @@ review_gate_check() {
         log "review-gate: state file missing"
     fi
 
-    # --- [AC8] Extract JSON from potential markdown code fences ---
+    # --- [AC8] Unwrap review JSON (wrapper for lib function) ---
 
     unwrap_review_json_logged() {
         local json="$1"
