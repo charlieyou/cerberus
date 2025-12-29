@@ -45,15 +45,15 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn <artifact-path>
+  spawn [--agents <list>] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--uncommitted | --base <branch> | --commit <sha> | <range>]
+  spawn-code-review [--agents <list>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, <range>
 
-  spawn-plan-review [plan-path]
+  spawn-plan-review [--agents <list>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     all reviewers pass.
@@ -63,6 +63,10 @@ Commands:
 
   artifact-path [--session-id <id>] [--transcript-path <path>]
     Print the session-scoped review artifact path.
+
+Agents list:
+  --agents <list>
+    Comma-separated subset of agents: codex, gemini, claude
 USAGE
 }
 
@@ -77,9 +81,26 @@ review_gate_spawn_code_review() {
     local diff_mode="--uncommitted"
     local diff_target=""
     local diff_args_str="--uncommitted"  # Default matches diff_mode default
+    local agents_csv=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --agents=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --agents)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
+            --reviewers=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --reviewers)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
             --uncommitted)
                 diff_mode="--uncommitted"
                 diff_args_str="--uncommitted"
@@ -102,6 +123,7 @@ review_gate_spawn_code_review() {
 Usage: ${CLI_CMD} spawn-code-review [options]
 
 Options:
+  --agents <list>      Comma-separated subset of agents: codex,gemini,claude
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha>      Review a specific commit
@@ -210,6 +232,9 @@ USAGE
     {
         echo "<!-- review-type: code-review-iterative -->"
         echo "<!-- diff-args: $diff_args_str -->"
+        if [[ -n "$agents_csv" ]]; then
+            echo "<!-- agents: $agents_csv -->"
+        fi
         echo ""
         echo "# Code Review (Iterative)"
         echo ""
@@ -235,15 +260,20 @@ USAGE
     echo "$prompt_content" > "$prompt_file"
 
     # --- Spawn reviewers using existing infrastructure ---
+    local -a agents_arg=()
+    if [[ -n "$agents_csv" ]]; then
+        agents_arg=(--agents "$agents_csv")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "$artifact_path"
+    "$0" spawn "${agents_arg[@]}" "$artifact_path"
 }
 
 review_gate_spawn_plan_review() {
     local plan_path=""
+    local agents_csv=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -251,6 +281,22 @@ review_gate_spawn_plan_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --agents=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --agents)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
+            --reviewers=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --reviewers)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -267,6 +313,7 @@ Spawn reviewers for a plan file. If no plan path is provided, attempts to find
 the most recent session plan from ~/.claude/plans/.
 
 Options:
+  --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -332,6 +379,9 @@ USAGE
     {
         echo "<!-- review-type: plan-review-iterative -->"
         echo "<!-- plan-path: $plan_path -->"
+        if [[ -n "$agents_csv" ]]; then
+            echo "<!-- agents: $agents_csv -->"
+        fi
         echo ""
         echo "# Plan Review (Iterative)"
         echo ""
@@ -348,10 +398,14 @@ USAGE
     echo "Artifact written: $artifact_path" >&2
 
     # --- Spawn reviewers using existing infrastructure ---
+    local -a agents_arg=()
+    if [[ -n "$agents_csv" ]]; then
+        agents_arg=(--agents "$agents_csv")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan-review-iterative" \
-    "$0" spawn --type="plan-review-iterative" "$artifact_path"
+    "$0" spawn --type="plan-review-iterative" "${agents_arg[@]}" "$artifact_path"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -370,6 +424,7 @@ USAGE
 
 review_gate_spawn_spec_review() {
     local spec_path=""
+    local agents_csv=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -377,6 +432,22 @@ review_gate_spawn_spec_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --agents=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --agents)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
+            --reviewers=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --reviewers)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -392,6 +463,7 @@ Usage: ${CLI_CMD} spawn-spec-review [options] <spec-path>
 Spawn reviewers for a feature specification file.
 
 Options:
+  --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -451,6 +523,9 @@ USAGE
     {
         echo "<!-- review-type: spec -->"
         echo "<!-- spec-path: $spec_path -->"
+        if [[ -n "$agents_csv" ]]; then
+            echo "<!-- agents: $agents_csv -->"
+        fi
         echo ""
         echo "# Spec Review (Iterative)"
         echo ""
@@ -467,10 +542,14 @@ USAGE
     echo "Artifact written: $artifact_path" >&2
 
     # --- Spawn reviewers using existing infrastructure ---
+    local -a agents_arg=()
+    if [[ -n "$agents_csv" ]]; then
+        agents_arg=(--agents "$agents_csv")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
-    "$0" spawn --type="spec" "$artifact_path"
+    "$0" spawn --type="spec" "${agents_arg[@]}" "$artifact_path"
 
     # Update state to include spec path in mode
     local state_file="$review_dir/gate-state.json"
@@ -533,9 +612,26 @@ review_gate_spawn() {
     OWNER_TRANSCRIPT_PATH="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     local artifact_arg=""
+    local agents_csv=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --agents=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --agents)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
+            --reviewers=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --reviewers)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
             --type=*)
                 REVIEW_TYPE="${1#*=}"
                 shift
@@ -554,7 +650,7 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
                 return 0
                 ;;
@@ -597,8 +693,8 @@ USAGE
             exit 1
         fi
 
-        # Optional: codex, gemini (warn if missing, but continue)
-        for cmd in codex gemini; do
+        # Optional: agents (warn if missing, but continue)
+        for cmd in "${agents_list[@]}"; do
             if ! command -v "$cmd" >/dev/null; then
                 echo "Warning: $cmd not found, will skip this reviewer" >&2
             fi
@@ -849,6 +945,43 @@ PROMPT
         esac
     }
 
+    # --- Parse reviewer subset ---
+    local -a agents_list=()
+    local agents_raw=""
+    if [[ -n "$agents_csv" ]]; then
+        agents_raw=$(echo "$agents_csv" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        if [[ -z "$agents_raw" ]]; then
+            die "Agents list cannot be empty"
+        fi
+        IFS=',' read -r -a agents_list <<< "$agents_raw"
+    else
+        agents_list=(gemini codex claude)
+    fi
+
+    # Validate and dedupe agents list
+    local -A agents_seen=()
+    local -a agents_final=()
+    local -A agents_allowed=([codex]=1 [gemini]=1 [claude]=1)
+    local agent
+    for agent in "${agents_list[@]}"; do
+        if [[ -z "$agent" ]]; then
+            die "Invalid agents list (empty entry). Use comma-separated names: codex,gemini,claude"
+        fi
+        if [[ -z "${agents_allowed[$agent]:-}" ]]; then
+            die "Unknown agent '$agent'. Valid: codex, gemini, claude"
+        fi
+        if [[ -z "${agents_seen[$agent]:-}" ]]; then
+            agents_final+=("$agent")
+            agents_seen[$agent]=1
+        fi
+    done
+
+    if [[ ${#agents_final[@]} -eq 0 ]]; then
+        die "Agents list cannot be empty"
+    fi
+
+    agents_list=("${agents_final[@]}")
+
     preflight_check
 
     local artifact_path
@@ -982,7 +1115,7 @@ SCHEMA
     local reviewers_json='{}'
     local spawned=0
 
-    for reviewer in gemini codex claude; do
+    for reviewer in "${agents_list[@]}"; do
         if spawn_reviewer "$reviewer" "$reviewer" "$prompt_file" "$schema_file"; then
             reviewers_json=$(echo "$reviewers_json" | jq \
                 --arg name "$reviewer" \

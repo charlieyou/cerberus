@@ -47,6 +47,7 @@ Review git changes with external reviewers:
 /cerberus:review-code --base main        # Review changes from main to HEAD
 /cerberus:review-code --commit abc123    # Review a specific commit
 /cerberus:review-code main..feature      # Review a commit range
+/cerberus:review-code --agents codex,gemini  # Only run selected reviewers
 ```
 
 ### Plan Review
@@ -54,8 +55,9 @@ Review git changes with external reviewers:
 Review an implementation plan:
 
 ```
-/cerberus:review-plan                    # Review most recent session plan
-/cerberus:review-plan path/to/plan.md    # Review specific plan file
+/cerberus:review-plan                             # Review most recent session plan
+/cerberus:review-plan path/to/plan.md             # Review specific plan file
+/cerberus:review-plan --agents codex,gemini path/to/plan.md
 ```
 
 ### Spec Review
@@ -63,7 +65,8 @@ Review an implementation plan:
 Review a feature specification:
 
 ```
-/cerberus:review-spec path/to/spec.md    # Review a feature spec
+/cerberus:review-spec path/to/spec.md             # Review a feature spec
+/cerberus:review-spec --agents codex,gemini path/to/spec.md
 ```
 
 ## How It Works

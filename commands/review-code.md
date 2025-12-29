@@ -1,11 +1,11 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--uncommitted | --base <branch> | --commit <sha> | <range>]
+argument-hint: [--agents <list>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
 ---
 
 # Code Review (Iterative)
 
-Multi-model code review that automatically iterates until all reviewers pass. External reviewers (Codex, Gemini) evaluate the code diff directly, and you fix the code until unanimous pass.
+Multi-model code review that automatically iterates until all reviewers pass. External reviewers (Codex, Gemini, Claude) evaluate the code diff directly, and you fix the code until unanimous pass.
 
 ## Usage
 
@@ -15,12 +15,13 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code --base main        # Review changes from main to HEAD
 /cerberus:review-code --commit abc123    # Review a specific commit
 /cerberus:review-code main..feature      # Review a commit range
+/cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 ```
 
 ## How It Works
 
 1. **Spawn Review**: Run the spawn command to start the review
-2. **Reviewers Evaluate**: Codex and Gemini analyze the diff in parallel
+2. **Reviewers Evaluate**: Codex, Gemini, and Claude analyze the diff in parallel
 3. **Fix Issues**: If reviewers find issues, fix the code
 4. **Re-review**: Reviews automatically re-run after you make changes
 5. **Pass**: When all reviewers agree (PASS), the gate resolves

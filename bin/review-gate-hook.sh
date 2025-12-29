@@ -127,6 +127,18 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract agents list from artifact frontmatter ---
+    extract_agents() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            local agents
+            agents=$(sed -n 's/^<!-- *agents: *\(.*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1)
+            if [[ -z "$agents" ]]; then
+                agents=$(sed -n 's/^<!-- *reviewers: *\(.*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1)
+            fi
+            echo "$agents" | tr -d '[:space:]'
+        fi
+    }
+
     # --- Helper: Spawn reviewers for current artifact ---
     # Returns 0 on success (caller should proceed to polling), exits on error/resolved
     spawn_reviewers() {
@@ -135,6 +147,13 @@ review_gate_check() {
         log "review-gate: spawn reviewers (type=${detected_type:-none})"
 
         local spawn_success=false
+        local agents_csv
+        agents_csv=$(extract_agents)
+        local -a agents_arg=()
+        if [[ -n "$agents_csv" ]]; then
+            agents_arg=(--agents "$agents_csv")
+            log "review-gate: using agents filter '$agents_csv'"
+        fi
 
         # For code-review-iterative, re-fetch the diff to capture fixes
         if [[ "$detected_type" == "code-review-iterative" ]]; then
@@ -152,7 +171,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-               "$0" spawn-code-review "${args_array[@]}" >/dev/null 2>&1; then
+               "$0" spawn-code-review "${agents_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         # For plan-review-iterative, re-read the plan file to capture edits
@@ -166,7 +185,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-plan-review "$plan_path" >/dev/null 2>&1; then
+                   "$0" spawn-plan-review "${agents_arg[@]}" "$plan_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -176,7 +195,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -191,7 +210,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-spec-review "$spec_path" >/dev/null 2>&1; then
+                   "$0" spawn-spec-review "${agents_arg[@]}" "$spec_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -201,7 +220,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -211,7 +230,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
-               "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+               "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         fi
@@ -828,4 +847,3 @@ $REVISION_INSTRUCTIONS"
         output_block "$REASON"
     fi
 }
-

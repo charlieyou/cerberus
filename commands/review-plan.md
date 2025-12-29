@@ -1,11 +1,11 @@
 ---
 description: Iterative plan review with external reviewers
-argument-hint: [path/to/plan.md]
+argument-hint: [--agents <list>] [path/to/plan.md]
 ---
 
 # Plan Review (Iterative)
 
-Spawn external reviewers (Codex, Gemini) to evaluate a plan file directly. Fix issues until all reviewers pass.
+Spawn external reviewers (Codex, Gemini, Claude) to evaluate a plan file directly. Fix issues until all reviewers pass.
 
 ## Usage
 
@@ -17,9 +17,15 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review $ARGUMENTS
 
 If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
 
+Example to run a subset of reviewers:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --agents codex,gemini path/to/plan.md
+```
+
 ## How It Works
 
-1. External reviewers (Codex, Gemini) evaluate the plan for:
+1. External reviewers (Codex, Gemini, Claude) evaluate the plan for:
    - Completeness and correctness
    - Order of operations and dependencies
    - Edge cases and error handling
