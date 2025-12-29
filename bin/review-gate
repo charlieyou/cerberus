@@ -1505,7 +1505,7 @@ review_gate_check() {
         if [[ -n "${REVIEW_GATE_LOG_FILE:-}" ]]; then
             LOG_FILE="$REVIEW_GATE_LOG_FILE"
         else
-            LOG_FILE="$REVIEW_DIR/review-gate.log"
+            LOG_FILE="$REVIEW_DIR/cerberus.log"
         fi
         mkdir -p "$(dirname "$LOG_FILE")"
     }

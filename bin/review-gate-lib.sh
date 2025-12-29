@@ -40,7 +40,7 @@ resolve_review_dir() {
     local project_hash
     project_hash=$(get_project_hash "$transcript_path")
 
-    local base_dir="$HOME/.claude/projects/$project_hash/review-gate"
+    local base_dir="$HOME/.claude/projects/$project_hash/cerberus"
 
     if [[ -n "$session_id" ]]; then
         echo "$base_dir/$session_id"
