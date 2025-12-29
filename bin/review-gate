@@ -2134,6 +2134,57 @@ PY
         echo -e "$all_issues"
     }
 
+    # --- Resolve revision template ---
+    resolve_revision_template() {
+        local type="$1"
+
+        local project_root
+        project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+        local search_paths=(
+            "$project_root/prompts/revisions/${type}.md"
+            "$SCRIPT_DIR/../prompts/revisions/${type}.md"
+        )
+
+        for path in "${search_paths[@]}"; do
+            if [[ -f "$path" ]]; then
+                cat "$path"
+                return 0
+            fi
+        done
+
+        return 1
+    }
+
+    # --- Safe template substitution using awk ---
+    # Handles special chars (&, \, newlines) that break sed/bash expansion
+    # Uses ENVIRON to avoid awk -v backslash interpretation and ARG_MAX limits
+    substitute_template() {
+        local template="$1"
+        local placeholder="$2"
+        local replacement="$3"
+
+        # Use ENVIRON to pass values safely (no backslash interpretation, no ARG_MAX)
+        SUBST_PLACEHOLDER="$placeholder" \
+        SUBST_REPLACEMENT="$replacement" \
+        awk '
+        BEGIN {
+            placeholder = ENVIRON["SUBST_PLACEHOLDER"]
+            replacement = ENVIRON["SUBST_REPLACEMENT"]
+        }
+        {
+            line = $0
+            idx = index(line, placeholder)
+            while (idx > 0) {
+                printf "%s%s", substr(line, 1, idx - 1), replacement
+                line = substr(line, idx + length(placeholder))
+                idx = index(line, placeholder)
+            }
+            print line
+        }
+        ' <<< "$template"
+    }
+
     # --- Format revision instructions based on trigger type ---
     format_revision_instructions() {
         local trigger_source="$1"
@@ -2143,7 +2194,13 @@ PY
 
         case "$trigger_source" in
             code-review-iterative)
-                cat <<INSTRUCTIONS
+                local template result
+                if template=$(resolve_revision_template "code"); then
+                    result=$(substitute_template "$template" '${ISSUES}' "$issues")
+                    echo "$result"
+                else
+                    # Fallback if template not found
+                    cat <<INSTRUCTIONS
 Please revise the **code** to address the following issues:
 
 $issues
@@ -2152,28 +2209,45 @@ $issues
 
 **After fixing the code, STOP immediately.** The stop hook will automatically re-run the review.
 INSTRUCTIONS
+                fi
                 ;;
             plan-review-iterative)
                 local plan_display="$mode_plan_path"
                 [[ -z "$plan_display" ]] && plan_display="the plan"
-                cat <<INSTRUCTIONS
+                local template result
+                if template=$(resolve_revision_template "plan"); then
+                    # Replace specific placeholders first to prevent injection
+                    result=$(substitute_template "$template" '${PLAN_PATH}' "$plan_display")
+                    result=$(substitute_template "$result" '${ISSUES}' "$issues")
+                    echo "$result"
+                else
+                    cat <<INSTRUCTIONS
 Please revise **$plan_display** to address the following issues:
 
 $issues
 
 **After updating the plan, STOP immediately.** The stop hook will spawn the next review round.
 INSTRUCTIONS
+                fi
                 ;;
             spec)
                 local spec_display="$mode_spec_path"
                 [[ -z "$spec_display" ]] && spec_display="the spec"
-                cat <<INSTRUCTIONS
+                local template result
+                if template=$(resolve_revision_template "spec"); then
+                    # Replace specific placeholders first to prevent injection
+                    result=$(substitute_template "$template" '${SPEC_PATH}' "$spec_display")
+                    result=$(substitute_template "$result" '${ISSUES}' "$issues")
+                    echo "$result"
+                else
+                    cat <<INSTRUCTIONS
 Please revise **$spec_display** to address the following issues:
 
 $issues
 
 **After updating the spec, STOP immediately.** The stop hook will spawn the next review round.
 INSTRUCTIONS
+                fi
                 ;;
             *)
                 cat <<INSTRUCTIONS
