@@ -1,0 +1,2465 @@
+#!/usr/bin/env bash
+# review-gate - Multi-model review gate entrypoint
+#
+# Subcommands:
+#   check          Stop hook logic (reads JSON from stdin)
+#   spawn          Spawn reviewers for an artifact
+#   resolve        Resolve gate with proceed|revise|abort
+#   artifact-path  Print session-scoped artifact path
+
+set -euo pipefail
+
+# Resolve helper scripts relative to this file (follows symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# Source shared library
+source "$SCRIPT_DIR/review-gate-lib.sh"
+
+# Model defaults (override with env vars)
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.2-codex}"
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
+CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
+
+usage() {
+    cat <<'USAGE'
+Usage: review-gate <command> [args]
+
+Cerberus - Three-headed guardian of code quality.
+Multi-model consensus review with Codex, Gemini, and Claude.
+
+Commands:
+  check
+    Stop hook logic (reads JSON from stdin)
+
+  spawn <artifact-path>
+    Spawn reviewers for an artifact. If no artifact path is provided, uses the
+    session-scoped latest.md when available.
+
+  spawn-code-review [--uncommitted | --base <branch> | --commit <sha> | <range>]
+    Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
+    Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, <range>
+
+  spawn-plan-review [plan-path]
+    Spawn reviewers for a plan file. If no plan path is provided, uses the
+    most recent session plan from ~/.claude/plans/. Claude fixes plan until
+    all reviewers pass.
+
+  resolve <proceed|revise|abort>
+    Resolve the active gate with a decision.
+
+  artifact-path [--session-id <id>] [--transcript-path <path>]
+    Print the session-scoped review artifact path.
+USAGE
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+find_latest_transcript() {
+    local project_hash base_dir
+    project_hash=$(get_project_hash "")
+    base_dir="$HOME/.claude/projects/$project_hash"
+
+    [[ -d "$base_dir" ]] || return 1
+
+    # Get transcripts sorted by modification time (newest first)
+    local transcripts
+    transcripts=$(ls -t "$base_dir"/*.jsonl 2>/dev/null | grep -v '/agent-' || true)
+    if [[ -z "$transcripts" ]]; then
+        transcripts=$(ls -t "$base_dir"/agent-*.jsonl 2>/dev/null || true)
+    fi
+
+    [[ -n "$transcripts" ]] || return 1
+
+    # Find the first transcript that doesn't have an active review gate
+    local transcript session_id state_file status
+    while IFS= read -r transcript; do
+        [[ -z "$transcript" ]] && continue
+        session_id=$(basename "$transcript" .jsonl)
+        state_file="$base_dir/review-gate/$session_id/gate-state.json"
+
+        if [[ -f "$state_file" ]]; then
+            status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+            # Skip sessions with active review gates
+            if [[ "$status" == "pending" || "$status" == "awaiting_decision" ]]; then
+                continue
+            fi
+        fi
+
+        # Found a transcript without active gate
+        echo "$transcript"
+        return 0
+    done <<< "$transcripts"
+
+    # Fallback: return newest if all have active gates (shouldn't happen)
+    echo "$transcripts" | head -n 1
+}
+
+# --- Helper: Compute sha256 (portable-ish) ---
+compute_sha256() {
+    local file="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d' ' -f1
+        return 0
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d' ' -f1
+        return 0
+    fi
+
+    return 1
+}
+
+review_gate_generate() {
+    local review_type="healthcheck"
+    local prompt_file=""
+    local prompt_inline=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type=*)
+                review_type="${1#*=}"
+                shift
+                ;;
+            --type)
+                review_type="${2:-healthcheck}"
+                shift 2
+                ;;
+            --prompt-file=*)
+                prompt_file="${1#*=}"
+                shift
+                ;;
+            --prompt-file)
+                prompt_file="${2:-}"
+                shift 2
+                ;;
+            --prompt=*)
+                prompt_inline="${1#*=}"
+                shift
+                ;;
+            --prompt)
+                prompt_inline="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate generate [options]
+
+Options:
+  --type <type>         Named preset: healthcheck, architecture-review (default: healthcheck)
+  --prompt-file <path>  Path to custom prompt file
+  --prompt <text>       Inline prompt text
+
+Spawns generators (Codex, Gemini, Claude) to analyze the codebase. Outputs drafts to stdout.
+USAGE
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    # Resolve prompt content
+    local prompt_content=""
+
+    if [[ -n "$prompt_inline" ]]; then
+        prompt_content="$prompt_inline"
+    elif [[ -n "$prompt_file" ]]; then
+        if [[ ! -f "$prompt_file" ]]; then
+            die "Prompt file not found: $prompt_file"
+        fi
+        prompt_content=$(cat "$prompt_file")
+    else
+        # Look for named preset (relative to this script's repo)
+        local prompt_path="$SCRIPT_DIR/../prompts/generators/${review_type}.md"
+
+        if [[ -f "$prompt_path" ]]; then
+            prompt_content=$(cat "$prompt_path")
+        else
+            die "No prompt found for type '$review_type' at $prompt_path"
+        fi
+    fi
+
+    # Create temp directory for drafts
+    local draft_dir
+    draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
+
+    local codex_draft="$draft_dir/draft-codex.md"
+    local gemini_draft="$draft_dir/draft-gemini.md"
+    local claude_draft="$draft_dir/draft-claude.md"
+    local codex_done="$draft_dir/codex.done"
+    local gemini_done="$draft_dir/gemini.done"
+    local claude_done="$draft_dir/claude.done"
+    local codex_failed="$draft_dir/codex.failed"
+    local gemini_failed="$draft_dir/gemini.failed"
+    local claude_failed="$draft_dir/claude.failed"
+
+    # Write prompt to temp file for generators
+    local prompt_tmp="$draft_dir/prompt.md"
+    echo "$prompt_content" > "$prompt_tmp"
+
+    echo "Starting generators for type: $review_type" >&2
+    echo "Draft directory: $draft_dir" >&2
+
+    # Spawn Codex (with repo access via read-only sandbox)
+    local codex_model="$CODEX_MODEL"
+    if command -v codex >/dev/null 2>&1; then
+        echo "Spawning Codex generator (model: $codex_model)..." >&2
+        (
+            if codex exec -m "$codex_model" -c model_reasoning_effort=high -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
+                touch "$codex_done"
+            else
+                touch "$codex_failed"
+            fi
+        ) &
+        local pid_codex=$!
+    else
+        echo "Warning: codex not found, skipping" >&2
+        touch "$codex_failed"
+        local pid_codex=""
+    fi
+
+    # Spawn Gemini (yolo for auto tool approval, prompt enforces read-only)
+    local gemini_model="$GEMINI_MODEL"
+    if command -v gemini >/dev/null 2>&1; then
+        echo "Spawning Gemini generator (model: $gemini_model)..." >&2
+        (
+            if gemini -m "$gemini_model" --yolo -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                touch "$gemini_done"
+            else
+                touch "$gemini_failed"
+            fi
+        ) &
+        local pid_gemini=$!
+    else
+        echo "Warning: gemini not found, skipping" >&2
+        touch "$gemini_failed"
+        local pid_gemini=""
+    fi
+
+    # Spawn Claude (print mode, no interaction, stdin for prompt)
+    local claude_model="$CLAUDE_MODEL"
+    if command -v claude >/dev/null 2>&1; then
+        echo "Spawning Claude generator (model: $claude_model)..." >&2
+        (
+            if echo "$prompt_content" | claude -p --model "$claude_model" > "$claude_draft" 2>&1; then
+                touch "$claude_done"
+            else
+                touch "$claude_failed"
+            fi
+        ) &
+        local pid_claude=$!
+    else
+        echo "Warning: claude not found, skipping" >&2
+        touch "$claude_failed"
+        local pid_claude=""
+    fi
+
+    # Wait for all generators
+    echo "Waiting for generators to complete..." >&2
+    local wait_start
+    wait_start=$(date +%s)
+    local timeout=600  # 10 minutes
+
+    while true; do
+        local codex_complete=false
+        local gemini_complete=false
+        local claude_complete=false
+
+        [[ -f "$codex_done" || -f "$codex_failed" ]] && codex_complete=true
+        [[ -f "$gemini_done" || -f "$gemini_failed" ]] && gemini_complete=true
+        [[ -f "$claude_done" || -f "$claude_failed" ]] && claude_complete=true
+
+        if $codex_complete && $gemini_complete && $claude_complete; then
+            break
+        fi
+
+        local elapsed=$(( $(date +%s) - wait_start ))
+        if [[ $elapsed -ge $timeout ]]; then
+            echo "Timeout waiting for generators after ${elapsed}s" >&2
+            # Kill any remaining processes
+            [[ -n "${pid_codex:-}" ]] && kill "$pid_codex" 2>/dev/null || true
+            [[ -n "${pid_gemini:-}" ]] && kill "$pid_gemini" 2>/dev/null || true
+            [[ -n "${pid_claude:-}" ]] && kill "$pid_claude" 2>/dev/null || true
+            break
+        fi
+
+        sleep 2
+    done
+
+    # Count successful drafts
+    local draft_count=0
+    local drafts=()
+
+    if [[ -f "$codex_done" && -f "$codex_draft" && -s "$codex_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$codex_draft")
+        echo "Codex: completed successfully" >&2
+    elif [[ -f "$codex_failed" ]]; then
+        echo "Codex: failed" >&2
+    else
+        echo "Codex: timed out" >&2
+    fi
+
+    if [[ -f "$gemini_done" && -f "$gemini_draft" && -s "$gemini_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$gemini_draft")
+        echo "Gemini: completed successfully" >&2
+    elif [[ -f "$gemini_failed" ]]; then
+        echo "Gemini: failed" >&2
+    else
+        echo "Gemini: timed out" >&2
+    fi
+
+    if [[ -f "$claude_done" && -f "$claude_draft" && -s "$claude_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$claude_draft")
+        echo "Claude: completed successfully" >&2
+    elif [[ -f "$claude_failed" ]]; then
+        echo "Claude: failed" >&2
+    else
+        echo "Claude: timed out" >&2
+    fi
+
+    echo "Completed: $draft_count drafts" >&2
+
+    if [[ $draft_count -eq 0 ]]; then
+        die "No drafts generated. Check generator availability."
+    elif [[ $draft_count -eq 1 ]]; then
+        echo "Warning: Only one generator succeeded. Proceeding with partial results." >&2
+    fi
+
+    # Output drafts for synthesis
+    echo ""
+    echo "# Generator Drafts for Synthesis"
+    echo ""
+    echo "The following drafts were generated by multiple models analyzing the codebase."
+    echo "Synthesize these into a single coherent artifact."
+    echo ""
+
+    local draft_num=1
+    for draft in "${drafts[@]}"; do
+        local model_name
+        model_name=$(basename "$draft" .md | sed 's/draft-//')
+        echo "---"
+        echo ""
+        echo "## Draft $draft_num"
+        echo ""
+        cat "$draft"
+        echo ""
+        ((draft_num++)) || true
+    done
+
+    echo "---"
+    echo ""
+    echo "# Synthesis Instructions"
+    echo ""
+    echo "Merge the above drafts into a single artifact:"
+    echo "1. Identify common findings across drafts"
+    echo "2. Resolve conflicts by using your judgment"
+    echo "3. Deduplicate similar issues"
+    echo "4. Produce a coherent final artifact"
+    echo ""
+
+    # Cleanup
+    rm -rf "$draft_dir"
+}
+
+review_gate_spawn_code_review() {
+    # --- Parse diff mode args ---
+    local diff_mode="--uncommitted"
+    local diff_target=""
+    local diff_args_str="--uncommitted"  # Default matches diff_mode default
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --uncommitted)
+                diff_mode="--uncommitted"
+                diff_args_str="--uncommitted"
+                shift
+                ;;
+            --base)
+                diff_mode="--base"
+                diff_target="${2:-main}"
+                diff_args_str="--base $diff_target"
+                shift 2
+                ;;
+            --commit)
+                diff_mode="--commit"
+                diff_target="${2:-HEAD}"
+                diff_args_str="--commit $diff_target"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate spawn-code-review [options]
+
+Options:
+  --uncommitted       Review uncommitted changes (default)
+  --base <branch>     Review changes from branch to HEAD
+  --commit <sha>      Review a specific commit
+  <range>             Review a commit range (e.g., main..feature)
+
+Spawns reviewers to evaluate code changes. Claude fixes code until all reviewers pass.
+USAGE
+                return 0
+                ;;
+            -*)
+                die "Unknown option '$1'"
+                ;;
+            *)
+                # Treat as range
+                diff_mode="range"
+                diff_target="$1"
+                diff_args_str="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # --- Gather the diff ---
+    local diff_content=""
+    case "$diff_mode" in
+        --uncommitted)
+            # Unstaged + staged changes
+            diff_content=$(git diff 2>/dev/null || true)
+            local cached_diff
+            cached_diff=$(git diff --cached 2>/dev/null || true)
+            if [[ -n "$cached_diff" ]]; then
+                if [[ -n "$diff_content" ]]; then
+                    diff_content+=$'\n'"$cached_diff"
+                else
+                    diff_content="$cached_diff"
+                fi
+            fi
+            ;;
+        --base)
+            diff_content=$(git diff "${diff_target}...HEAD" 2>/dev/null || true)
+            ;;
+        --commit)
+            diff_content=$(git show "$diff_target" 2>/dev/null || true)
+            ;;
+        range)
+            diff_content=$(git diff "$diff_target" 2>/dev/null || true)
+            ;;
+    esac
+
+    if [[ -z "$diff_content" ]]; then
+        die "No changes found for diff mode: $diff_mode ${diff_target:-}"
+    fi
+
+    # --- Session metadata ---
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    if [[ -z "$transcript_path" ]]; then
+        transcript_path="$(find_latest_transcript || true)"
+    fi
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+    fi
+
+    # --- Setup review directory ---
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    mkdir -p "$review_dir"
+
+    # --- Build prompt with diff ---
+    # Resolve template with project-local override support
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    local prompt_template_path=""
+    for path in "$project_root/prompts/reviewers/code.md" "$SCRIPT_DIR/../prompts/reviewers/code.md"; do
+        if [[ -f "$path" ]]; then
+            prompt_template_path="$path"
+            break
+        fi
+    done
+
+    local prompt_content
+    if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
+        # Load template and substitute ${DIFF_CONTENT} using temp file to avoid ARG_MAX limits
+        local diff_tmp="${review_dir}/diff_content.tmp"
+        printf '%s' "$diff_content" > "$diff_tmp"
+        prompt_content=$(awk -v diff_file="$diff_tmp" '
+            BEGIN { while ((getline line < diff_file) > 0) diff = diff (diff ? "\n" : "") line; close(diff_file) }
+            {
+                while (match($0, /\$\{DIFF_CONTENT\}/)) {
+                    printf "%s", substr($0, 1, RSTART-1)
+                    printf "%s", diff
+                    $0 = substr($0, RSTART+RLENGTH)
+                }
+                print
+            }
+        ' "$prompt_template_path")
+        rm -f "$diff_tmp"
+    else
+        die "Code review prompt template not found in project or built-in locations"
+    fi
+
+    # --- Write artifact for review gate ---
+    local artifact_path="$review_dir/latest.md"
+    {
+        echo "<!-- review-type: code-review-iterative -->"
+        echo "<!-- diff-args: $diff_args_str -->"
+        echo ""
+        echo "# Code Review (Iterative)"
+        echo ""
+        echo "## Diff Mode"
+        echo "$diff_mode ${diff_target:-}"
+        echo ""
+        echo "## Changes"
+        echo ""
+        echo '```diff'
+        printf '%s\n' "$diff_content"
+        echo '```'
+    } > "$artifact_path"
+
+    echo "Artifact written: $artifact_path" >&2
+
+    # --- Export diff args for re-spawn on iteration ---
+    export REVIEW_GATE_DIFF_ARGS="$diff_args_str"
+
+    # --- Write the prompt file directly (bypass build_prompt to use our template) ---
+    local reviews_dir="$review_dir/reviews"
+    mkdir -p "$reviews_dir"
+    local prompt_file="$reviews_dir/review.prompt"
+    echo "$prompt_content" > "$prompt_file"
+
+    # --- Spawn reviewers using existing infrastructure ---
+    REVIEW_GATE_SESSION_ID="$session_id" \
+    REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
+    REVIEW_TYPE="code-review-iterative" \
+    REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    "$0" spawn "$artifact_path"
+}
+
+review_gate_spawn_plan_review() {
+    local plan_path=""
+
+    # --- Session metadata ---
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session-id)
+                session_id="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate spawn-plan-review [options] [plan-path]
+
+Spawn reviewers for a plan file. If no plan path is provided, attempts to find
+the most recent session plan from ~/.claude/plans/.
+
+Options:
+  --session-id <id>        Session ID for scoping
+  --transcript-path <path> Path to transcript file
+
+The reviewers will evaluate the plan for:
+- Completeness and correctness
+- Order of operations and dependencies
+- Edge cases and error handling
+USAGE
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                die "Unknown option '$1'"
+                ;;
+            *)
+                plan_path="$1"
+                shift
+                break
+                ;;
+        esac
+    done
+
+    # Find session plan if not specified
+    if [[ -z "$plan_path" ]]; then
+        if [[ -d "$HOME/.claude/plans" ]]; then
+            plan_path=$(ls -t "$HOME/.claude/plans"/*.md 2>/dev/null | head -1 || true)
+        fi
+    fi
+
+    if [[ -z "$plan_path" ]]; then
+        die "No plan found. Provide a plan path or create a plan first."
+    fi
+
+    if [[ ! -f "$plan_path" ]]; then
+        die "Plan file not found: $plan_path"
+    fi
+
+    plan_path=$(realpath "$plan_path")
+
+    # Resolve transcript and session ID if not provided
+    if [[ -z "$transcript_path" ]]; then
+        transcript_path="$(find_latest_transcript || true)"
+    fi
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+    fi
+
+    # --- Setup review directory ---
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    mkdir -p "$review_dir"
+
+    # --- Read plan content ---
+    local plan_content
+    plan_content=$(cat "$plan_path")
+
+    # --- Write artifact for review gate ---
+    local artifact_path="$review_dir/latest.md"
+    {
+        echo "<!-- review-type: plan-review-iterative -->"
+        echo "<!-- plan-path: $plan_path -->"
+        echo ""
+        echo "# Plan Review (Iterative)"
+        echo ""
+        echo "## Plan Path"
+        echo "$plan_path"
+        echo ""
+        echo "## Plan Content"
+        echo ""
+        echo '```markdown'
+        cat "$plan_path"
+        echo '```'
+    } > "$artifact_path"
+
+    echo "Artifact written: $artifact_path" >&2
+
+    # --- Spawn reviewers using existing infrastructure ---
+    REVIEW_GATE_SESSION_ID="$session_id" \
+    REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
+    REVIEW_TYPE="plan-review-iterative" \
+    "$0" spawn --type="plan-review-iterative" "$artifact_path"
+
+    # Update state to include plan path in mode
+    local state_file="$review_dir/gate-state.json"
+    if [[ -f "$state_file" ]]; then
+        local temp_file="${state_file}.tmp.$$"
+        jq --arg plan_path "$plan_path" \
+           '.mode.plan_path = $plan_path | .mode.type = "plan"' \
+           "$state_file" > "$temp_file"
+        mv "$temp_file" "$state_file"
+    fi
+
+    echo "Plan review spawned for: $plan_path" >&2
+    echo "" >&2
+    echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
+}
+
+review_gate_spawn_spec_review() {
+    local spec_path=""
+
+    # --- Session metadata ---
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session-id)
+                session_id="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate spawn-spec-review [options] <spec-path>
+
+Spawn reviewers for a feature specification file.
+
+Options:
+  --session-id <id>        Session ID for scoping
+  --transcript-path <path> Path to transcript file
+
+The reviewers will evaluate the spec for:
+- Clarity of goals and scope definition
+- Technical feasibility and completeness
+- Edge case coverage and testability
+- Actionability for implementation
+USAGE
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                die "Unknown option '$1'"
+                ;;
+            *)
+                spec_path="$1"
+                shift
+                break
+                ;;
+        esac
+    done
+
+    if [[ -z "$spec_path" ]]; then
+        die "Spec path is required. Usage: review-gate spawn-spec-review <spec-path>"
+    fi
+
+    if [[ ! -f "$spec_path" ]]; then
+        die "Spec file not found: $spec_path"
+    fi
+
+    spec_path=$(realpath "$spec_path")
+
+    # Resolve transcript and session ID if not provided
+    if [[ -z "$transcript_path" ]]; then
+        transcript_path="$(find_latest_transcript || true)"
+    fi
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+    fi
+
+    # --- Setup review directory ---
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    mkdir -p "$review_dir"
+
+    # --- Read spec content ---
+    local spec_content
+    spec_content=$(cat "$spec_path")
+
+    # --- Write artifact for review gate ---
+    local artifact_path="$review_dir/latest.md"
+    {
+        echo "<!-- review-type: spec -->"
+        echo "<!-- spec-path: $spec_path -->"
+        echo ""
+        echo "# Spec Review (Iterative)"
+        echo ""
+        echo "## Spec Path"
+        echo "$spec_path"
+        echo ""
+        echo "## Spec Content"
+        echo ""
+        echo "<spec-content>"
+        cat "$spec_path"
+        echo "</spec-content>"
+    } > "$artifact_path"
+
+    echo "Artifact written: $artifact_path" >&2
+
+    # --- Spawn reviewers using existing infrastructure ---
+    REVIEW_GATE_SESSION_ID="$session_id" \
+    REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
+    REVIEW_TYPE="spec" \
+    "$0" spawn --type="spec" "$artifact_path"
+
+    # Update state to include spec path in mode
+    local state_file="$review_dir/gate-state.json"
+    if [[ -f "$state_file" ]]; then
+        local temp_file="${state_file}.tmp.$$"
+        jq --arg spec_path "$spec_path" \
+           '.mode.spec_path = $spec_path | .mode.type = "spec"' \
+           "$state_file" > "$temp_file"
+        mv "$temp_file" "$state_file"
+    fi
+
+    echo "Spec review spawned for: $spec_path" >&2
+    echo "" >&2
+    echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
+}
+
+review_gate_artifact_path() {
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session-id)
+                session_id="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate artifact-path [--session-id <id>] [--transcript-path <path>]
+USAGE
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID (via SessionStart hook) or pass --session-id."
+    fi
+
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    echo "$review_dir/latest.md"
+}
+
+review_gate_spawn() {
+    # --- Review type (for template selection) ---
+    REVIEW_TYPE="${REVIEW_TYPE:-}"
+
+    # --- Session metadata ---
+    OWNER_SESSION_KEY="${REVIEW_GATE_SESSION_KEY:-}"
+    OWNER_SOURCE="${REVIEW_GATE_SESSION_SOURCE:-}"
+    OWNER_SESSION_ID="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    OWNER_TRANSCRIPT_PATH="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    local artifact_arg=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type=*)
+                REVIEW_TYPE="${1#*=}"
+                shift
+                ;;
+            --type)
+                REVIEW_TYPE="${2:-}"
+                shift 2
+                ;;
+            --session-id)
+                OWNER_SESSION_ID="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                OWNER_TRANSCRIPT_PATH="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: review-gate spawn [--session-id <id>] [--transcript-path <path>] [artifact-path]
+USAGE
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                artifact_arg="$1"
+                shift
+                break
+                ;;
+        esac
+    done
+
+    if [[ -z "$OWNER_TRANSCRIPT_PATH" ]]; then
+        OWNER_TRANSCRIPT_PATH="$(find_latest_transcript || true)"
+    fi
+
+    if [[ -z "$OWNER_SESSION_ID" && -n "$OWNER_TRANSCRIPT_PATH" ]]; then
+        OWNER_SESSION_ID="$(basename "$OWNER_TRANSCRIPT_PATH" .jsonl)"
+    fi
+
+    if [[ -z "$OWNER_SESSION_ID" ]]; then
+        die "REVIEW_GATE_SESSION_ID is required (or pass --session-id)"
+    fi
+
+    # Session-scoped path resolution
+    REVIEW_DIR=$(resolve_review_dir "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH")
+    STATE_FILE="$REVIEW_DIR/gate-state.json"
+    REVIEWS_DIR="$REVIEW_DIR/reviews"
+    ITERATION_FILE="$REVIEW_DIR/iteration.txt"
+
+    # --- Preflight checks ---
+    preflight_check() {
+        local missing=()
+        # Required: jq
+        if ! command -v jq >/dev/null; then
+            missing+=("jq")
+        fi
+
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "Missing required commands: ${missing[*]}" >&2
+            exit 1
+        fi
+
+        # Optional: codex, gemini (warn if missing, but continue)
+        for cmd in codex gemini; do
+            if ! command -v "$cmd" >/dev/null; then
+                echo "Warning: $cmd not found, will skip this reviewer" >&2
+            fi
+        done
+    }
+
+    # --- Determine artifact path ---
+    resolve_artifact() {
+        local arg="${1:-}"
+
+        if [[ -n "$arg" && -f "$arg" ]]; then
+            realpath "$arg"
+        elif [[ -f "$REVIEW_DIR/latest.md" ]]; then
+            realpath "$REVIEW_DIR/latest.md"
+        else
+            echo "No artifact found. Provide path as argument." >&2
+            exit 1
+        fi
+    }
+
+    # --- Check for active gate ---
+    check_existing_gate() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local status
+            status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+
+            if [[ "$status" == "pending" || "$status" == "awaiting_decision" ]]; then
+                # Check if it's stale (>30 min old)
+                local created_at age_seconds
+                created_at=$(jq -r '.created_at // ""' "$STATE_FILE" 2>/dev/null || echo "")
+                if [[ -n "$created_at" ]]; then
+                    local created_epoch now_epoch
+                    created_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo 0)
+                    now_epoch=$(date +%s)
+                    age_seconds=$((now_epoch - created_epoch))
+
+                    if [[ $age_seconds -lt 1800 ]]; then
+                        echo "Review gate already active (status: $status, age: ${age_seconds}s)" >&2
+                        echo "Use review-gate resolve to complete the existing gate first." >&2
+                        exit 1
+                    fi
+                    # Stale, proceed to clean up
+                    echo "Cleaning up stale gate (age: ${age_seconds}s)" >&2
+                fi
+            fi
+        fi
+    }
+
+    # --- Archive previous reviews ---
+    archive_previous_reviews() {
+        # Get current iteration (or 0 if not set)
+        local iteration=0
+        if [[ -f "$ITERATION_FILE" ]]; then
+            iteration=$(cat "$ITERATION_FILE" 2>/dev/null || echo "0")
+        fi
+
+        # Use shared archive function
+        archive_reviews "$REVIEW_DIR" "$REVIEWS_DIR" "$iteration"
+    }
+
+    # --- Clean previous state ---
+    clean_state() {
+        archive_previous_reviews
+        rm -f "$STATE_FILE"
+        rm -rf "$REVIEWS_DIR"
+        mkdir -p "$REVIEWS_DIR"
+    }
+
+    # --- Resolve review template ---
+    resolve_template() {
+        local type="$1"
+
+        # Map iterative review types to their base template names
+        case "$type" in
+            code-review-iterative) type="code" ;;
+            plan-review-iterative) type="plan" ;;
+        esac
+
+        local project_root
+        project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+        # Search order: project-local, then bundled with script, then user-global fallback
+        local search_paths=(
+            "$project_root/prompts/reviewers/${type}.md"
+            "$SCRIPT_DIR/../prompts/reviewers/${type}.md"
+            "$HOME/.claude/review-prompts/${type}.md"
+        )
+
+        for path in "${search_paths[@]}"; do
+            if [[ -f "$path" ]]; then
+                cat "$path"
+                return 0
+            fi
+        done
+
+        # Fallback to generic criteria
+        cat <<'DEFAULT'
+## Evaluation Criteria
+1. Completeness - Are all necessary aspects covered?
+2. Accuracy - Are claims grounded in evidence?
+3. Actionability - Are next steps clear and concrete?
+4. Consistency - Any contradictions?
+5. Scope - Appropriately scoped?
+DEFAULT
+    }
+
+    # --- Get previous reviews if available ---
+    get_previous_reviews() {
+        # Find the most recent archived reviews directory
+        local latest_archive=""
+        local latest_iter=-1
+        local latest_dir_name=""
+
+        for archive_dir in "$REVIEW_DIR"/reviews-iter-*; do
+            if [[ -d "$archive_dir" ]]; then
+                # Extract iteration number from directory name
+                local dir_name
+                dir_name=$(basename "$archive_dir")
+                local iter
+                iter=$(echo "$dir_name" | sed 's/reviews-iter-\([0-9]*\).*/\1/')
+                if [[ "$iter" =~ ^[0-9]+$ ]]; then
+                    # Compare iteration numbers, break ties with lexicographic comparison
+                    # (timestamps like -20231225-123456 sort correctly)
+                    if [[ "$iter" -gt "$latest_iter" ]] || \
+                       [[ "$iter" -eq "$latest_iter" && "$dir_name" > "$latest_dir_name" ]]; then
+                        latest_iter="$iter"
+                        latest_archive="$archive_dir"
+                        latest_dir_name="$dir_name"
+                    fi
+                fi
+            fi
+        done
+
+        if [[ -z "$latest_archive" ]]; then
+            return 0
+        fi
+
+        echo "## Previous Reviews (Iteration $latest_iter)"
+        echo ""
+        echo "You have access to the reviews from your previous iteration. Use these to understand what issues were raised and ensure they have been addressed."
+        echo ""
+
+        for reviewer_file in "$latest_archive"/*.json; do
+            if [[ -f "$reviewer_file" ]]; then
+                local reviewer_name
+                reviewer_name=$(basename "$reviewer_file" .json)
+
+                # Skip non-review files
+                case "$reviewer_name" in
+                    review-schema|review) continue ;;
+                esac
+
+                echo "### Previous Review: $reviewer_name"
+                echo ""
+
+                # Try to extract and format the review using robust JSON extraction
+                local review_json=""
+                if review_json=$(extract_last_json_object "$reviewer_file" 2>/dev/null); then
+                    # Unwrap if needed (handle codex/gemini output formats)
+                    review_json=$(unwrap_review_json "$review_json" 2>/dev/null || echo "$review_json")
+
+                    local verdict summary findings
+                    verdict=$(echo "$review_json" | jq -r '.verdict // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
+                    summary=$(echo "$review_json" | jq -r '.summary // ""' 2>/dev/null || echo "")
+                    findings=$(echo "$review_json" | jq -r '.findings // [] | .[] | .title // "No title"' 2>/dev/null || echo "")
+
+                    echo "**Verdict:** $verdict"
+                    if [[ -n "$summary" && "$summary" != "null" ]]; then
+                        echo "**Summary:** $summary"
+                    fi
+                    if [[ -n "$findings" ]]; then
+                        echo "**Findings:**"
+                        while IFS= read -r finding; do
+                            echo "- $finding"
+                        done <<< "$findings"
+                    fi
+                else
+                    echo "(Could not parse review output)"
+                fi
+                echo ""
+            fi
+        done
+    }
+
+    # --- Build review prompt ---
+    build_prompt() {
+        local artifact_path="$1"
+        local review_type="${2:-}"
+        local content
+        content=$(cat "$artifact_path")
+
+        local criteria
+        criteria=$(resolve_template "$review_type")
+
+        local previous_reviews
+        previous_reviews=$(get_previous_reviews)
+
+        cat <<PROMPT
+You are reviewing an artifact for quality and correctness.
+
+## Artifact
+Path: $artifact_path
+
+\`\`\`
+$content
+\`\`\`
+
+$criteria
+PROMPT
+
+        # Include previous reviews if available
+        if [[ -n "$previous_reviews" ]]; then
+            echo ""
+            echo "$previous_reviews"
+        fi
+
+        cat <<PROMPT
+
+## Output Format
+JSON only, no markdown code fences:
+{
+  "findings": [
+    {"title": "[P1] Issue title", "body": "Why this is a problem", "priority": 1, "file_path": null, "line_start": null, "line_end": null}
+  ],
+  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
+  "summary": "1-2 sentences"
+}
+
+- PASS: No significant findings
+- FAIL: Blocking issues (P0/P1)
+- NEEDS_WORK: Non-blocking issues (P2/P3)
+- file_path, line_start, line_end are optional (use null if not applicable)
+PROMPT
+    }
+
+    # --- Spawn a reviewer ---
+    spawn_reviewer() {
+        local name="$1"
+        local cmd="$2"
+        local prompt_file="$3"
+        local schema_file="$4"
+
+        # Ensure reviews directory exists
+        mkdir -p "$REVIEWS_DIR"
+
+        local output_file="$REVIEWS_DIR/${name}.json"
+        local sentinel_file="$REVIEWS_DIR/${name}.done"
+        local failed_file="$REVIEWS_DIR/${name}.failed"
+
+        # Skip missing CLIs with warning
+        if ! command -v "$cmd" >/dev/null; then
+            echo "Skipping $name: $cmd not found" >&2
+            return 1
+        fi
+
+        case "$name" in
+            gemini)
+                REVIEW_OUT="$output_file" \
+                REVIEW_DONE="$sentinel_file" \
+                REVIEW_FAIL="$failed_file" \
+                REVIEW_PROMPT="$prompt_file" \
+                REVIEW_MODEL="$GEMINI_MODEL" \
+                nohup setsid bash -c '
+                    if gemini -m "$REVIEW_MODEL" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                        touch "$REVIEW_DONE"
+                    else
+                        touch "$REVIEW_FAIL"
+                    fi
+                ' >/dev/null 2>&1 &
+                ;;
+            codex)
+                REVIEW_OUT="$output_file" \
+                REVIEW_DONE="$sentinel_file" \
+                REVIEW_FAIL="$failed_file" \
+                REVIEW_PROMPT="$prompt_file" \
+                REVIEW_SCHEMA="$schema_file" \
+                REVIEW_MODEL="$CODEX_MODEL" \
+                nohup setsid bash -c '
+                    if codex exec -m "$REVIEW_MODEL" -c model_reasoning_effort=\"high\" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                        touch "$REVIEW_DONE"
+                    else
+                        touch "$REVIEW_FAIL"
+                    fi
+                ' >/dev/null 2>&1 &
+                ;;
+            claude)
+                REVIEW_OUT="$output_file" \
+                REVIEW_DONE="$sentinel_file" \
+                REVIEW_FAIL="$failed_file" \
+                REVIEW_PROMPT="$prompt_file" \
+                REVIEW_MODEL="$CLAUDE_MODEL" \
+                nohup setsid bash -c '
+                    if claude -p --model "$REVIEW_MODEL" --output-format json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                        touch "$REVIEW_DONE"
+                    else
+                        touch "$REVIEW_FAIL"
+                    fi
+                ' >/dev/null 2>&1 &
+                ;;
+            *)
+                echo "Unknown reviewer: $name" >&2
+                return 1
+                ;;
+        esac
+
+        return 0
+    }
+
+    # --- Determine trigger source ---
+    determine_source() {
+        local artifact_path="$1"
+        local basename
+        basename=$(basename "$artifact_path")
+
+        case "$basename" in
+            healthcheck*) echo "healthcheck" ;;
+            architecture*) echo "architecture-review" ;;
+            breakdown*) echo "bd-breakdown" ;;
+            latest.md) echo "auto" ;;
+            *) echo "manual" ;;
+        esac
+    }
+
+    preflight_check
+
+    local artifact_path
+    artifact_path=$(resolve_artifact "$artifact_arg")
+
+    check_existing_gate
+
+    # Read prebuilt prompt content BEFORE clean_state deletes it
+    local prebuilt_prompt_content=""
+    if [[ -n "${REVIEW_GATE_PROMPT_FILE:-}" && -f "$REVIEW_GATE_PROMPT_FILE" ]]; then
+        prebuilt_prompt_content=$(cat "$REVIEW_GATE_PROMPT_FILE")
+    fi
+
+    clean_state
+
+    local artifact_sha256
+    artifact_sha256=$(compute_sha256 "$artifact_path")
+
+    # Determine trigger source: prefer explicit REVIEW_TYPE, fallback to filename-based detection
+    local trigger_source
+    if [[ -n "$REVIEW_TYPE" ]]; then
+        trigger_source="$REVIEW_TYPE"
+    else
+        trigger_source=$(determine_source "$artifact_path")
+        REVIEW_TYPE="$trigger_source"
+    fi
+
+    local prompt_file="$REVIEWS_DIR/review.prompt"
+    if [[ -n "$prebuilt_prompt_content" ]]; then
+        # Use pre-built prompt content (read before clean_state)
+        echo "$prebuilt_prompt_content" > "$prompt_file"
+    else
+        build_prompt "$artifact_path" "$REVIEW_TYPE" > "$prompt_file"
+    fi
+
+    # Create JSON schema for structured output
+    local schema_file="$REVIEWS_DIR/review-schema.json"
+    cat > "$schema_file" <<'SCHEMA'
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "NEEDS_WORK"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "priority": {"type": "integer", "minimum": 0, "maximum": 3},
+          "file_path": {"type": ["string", "null"]},
+          "line_start": {"type": ["integer", "null"]},
+          "line_end": {"type": ["integer", "null"]}
+        },
+        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "summary", "findings"],
+  "additionalProperties": false
+}
+SCHEMA
+
+    # Initialize state
+    local now
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Mode configuration (for iterative review types)
+    local mode_type="artifact"
+    local mode_diff_args=""
+    local mode_plan_path=""
+
+    case "$trigger_source" in
+        code-review-iterative)
+            mode_type="code-diff"
+            mode_diff_args="${REVIEW_GATE_DIFF_ARGS:-}"
+            ;;
+        plan-review-iterative)
+            mode_type="plan"
+            mode_plan_path="$artifact_path"
+            ;;
+    esac
+
+    local state_json
+    state_json=$(jq -n \
+        --arg version "1" \
+        --arg status "pending" \
+        --arg source "$trigger_source" \
+        --arg path "$artifact_path" \
+        --arg sha256 "$artifact_sha256" \
+        --arg created "$now" \
+        --arg owner_key "$OWNER_SESSION_KEY" \
+        --arg owner_source "$OWNER_SOURCE" \
+        --arg owner_session_id "$OWNER_SESSION_ID" \
+        --arg owner_transcript "$OWNER_TRANSCRIPT_PATH" \
+        --arg mode_type "$mode_type" \
+        --arg mode_diff_args "$mode_diff_args" \
+        --arg mode_plan_path "$mode_plan_path" \
+        '{
+            version: ($version | tonumber),
+            status: $status,
+            trigger_source: $source,
+            artifact: {path: $path, sha256: $sha256},
+            mode: (
+                {type: $mode_type}
+                | (if $mode_diff_args != "" then .diff_args = $mode_diff_args else . end)
+                | (if $mode_plan_path != "" then .plan_path = $mode_plan_path else . end)
+            ),
+            owner: (
+                {}
+                | (if $owner_key != "" then .session_key = $owner_key else . end)
+                | (if $owner_source != "" then .source = $owner_source else . end)
+                | (if $owner_session_id != "" then .session_id = $owner_session_id else . end)
+                | (if $owner_transcript != "" then .transcript_path = $owner_transcript else . end)
+                | if length == 0 then null else . end
+            ),
+            reviewers: {},
+            consensus: null,
+            decision: null,
+            created_at: $created
+        }')
+
+    # Spawn reviewers and record in state
+    local reviewers_json='{}'
+    local spawned=0
+
+    for reviewer in gemini codex claude; do
+        if spawn_reviewer "$reviewer" "$reviewer" "$prompt_file" "$schema_file"; then
+            reviewers_json=$(echo "$reviewers_json" | jq \
+                --arg name "$reviewer" \
+                --arg output "$REVIEWS_DIR/${reviewer}.json" \
+                --arg sentinel "$REVIEWS_DIR/${reviewer}.done" \
+                '.[$name] = {output_file: $output, sentinel_file: $sentinel, completed_at: null, result: null}')
+            spawned=$((spawned + 1))
+            echo "Spawned $reviewer" >&2
+        fi
+    done
+
+    if [[ $spawned -eq 0 ]]; then
+        # No reviewers available; resolve gate to avoid blocking stop hooks
+        state_json=$(echo "$state_json" | jq \
+            --arg status "resolved" \
+            --arg verdict "no_reviewers" \
+            --arg action "proceed" \
+            --arg decided "$now" \
+            '.status = $status
+             | .consensus = {verdict: $verdict, iteration: 0}
+             | .decision = {action: $action, decided_at: $decided, reason: "no_reviewers"}
+             | .reviewers = {}')
+
+        echo "$state_json" > "$STATE_FILE"
+        echo "No reviewers available; gate resolved as proceed" >&2
+        echo "State file: $STATE_FILE" >&2
+        exit 0
+    fi
+
+    # Update state with reviewers
+    state_json=$(echo "$state_json" | jq --argjson reviewers "$reviewers_json" '.reviewers = $reviewers')
+
+    # Write gate-state.json file
+    echo "$state_json" > "$STATE_FILE"
+
+    echo "Review gate spawned: $spawned reviewers for $artifact_path" >&2
+    echo "State file: $STATE_FILE" >&2
+    echo "" >&2
+    echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
+}
+
+review_gate_resolve() {
+    if [[ $# -lt 1 ]]; then
+        die "Usage: review-gate resolve <proceed|revise|abort>"
+    fi
+
+    local decision="$1"
+
+    case "$decision" in
+        proceed|revise|abort)
+            ;;
+        *)
+            die "Invalid decision '$decision'. Must be: proceed, revise, or abort"
+            ;;
+    esac
+
+    local session_id="${REVIEW_GATE_SESSION_ID:-}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
+
+    local state_file=""
+
+    if [[ -n "$session_id" ]]; then
+        local review_dir
+        review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+        state_file="$review_dir/gate-state.json"
+    else
+        local active_session
+        active_session=$(find_active_gate "$transcript_path" 2>/dev/null || echo "")
+        if [[ -n "$active_session" ]]; then
+            local base_dir
+            base_dir=$(get_review_base_dir "$transcript_path")
+            state_file="$base_dir/$active_session/gate-state.json"
+        else
+            echo "No active review gate found" >&2
+            exit 0
+        fi
+    fi
+
+    if [[ ! -f "$state_file" ]]; then
+        echo "No active review gate" >&2
+        exit 0
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        die "jq is required but not installed"
+    fi
+
+    local timestamp
+    timestamp=$(date -Iseconds)
+
+    local temp_file="${state_file}.tmp.$$"
+    trap 'rm -f "${temp_file:-}"' EXIT
+
+    jq --arg decision "$decision" \
+       --arg timestamp "$timestamp" \
+       '.status = "resolved" | .decision.action = $decision | .decision.decided_at = $timestamp' \
+       "$state_file" > "$temp_file"
+
+    if ! jq -e . "$temp_file" >/dev/null 2>&1; then
+        die "Failed to create valid JSON output"
+    fi
+
+    mv "$temp_file" "$state_file"
+    echo "Review gate resolved: $decision"
+}
+
+review_gate_check() {
+    MAX_ITERATIONS=5
+    MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
+    POLL_INTERVAL_SECONDS="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+
+    INPUT=$(cat)
+    LOG_FILE=""
+
+    log() {
+        local msg="$1"
+        local ts
+        ts=$(date -Iseconds)
+        if [[ -n "$LOG_FILE" ]]; then
+            printf '%s %s\n' "$ts" "$msg" >> "$LOG_FILE"
+        else
+            printf '%s %s\n' "$ts" "$msg" >&2
+        fi
+    }
+
+    setup_log_file() {
+        if [[ -n "${REVIEW_GATE_LOG_FILE:-}" ]]; then
+            LOG_FILE="$REVIEW_GATE_LOG_FILE"
+        else
+            LOG_FILE="$REVIEW_DIR/review-gate.log"
+        fi
+        mkdir -p "$(dirname "$LOG_FILE")"
+    }
+
+    # --- Session identification ---
+    SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // empty' 2>/dev/null || echo "")
+    TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty' 2>/dev/null || echo "")
+
+    SESSION_KEY=""
+    SESSION_SOURCE=""
+
+    if [[ -n "${REVIEW_GATE_SESSION_KEY:-}" ]]; then
+        SESSION_KEY="$REVIEW_GATE_SESSION_KEY"
+        SESSION_SOURCE="env.REVIEW_GATE_SESSION_KEY"
+    elif [[ -n "$SESSION_ID" ]]; then
+        SESSION_KEY="$SESSION_ID"
+        SESSION_SOURCE="input.session_id"
+    elif [[ -n "$TRANSCRIPT_PATH" ]]; then
+        SESSION_KEY="$TRANSCRIPT_PATH"
+        SESSION_SOURCE="input.transcript_path"
+    fi
+
+    if [[ -z "$SESSION_ID" ]]; then
+        log "review-gate: missing session_id; allowing stop"
+    fi
+
+    # --- Helper: Output block JSON ---
+    output_block() {
+        local reason="$1"
+        log "review-gate: blocking stop: ${reason:0:200}"
+        jq -n --arg reason "$reason" '{"decision": "block", "reason": $reason}'
+        exit 0
+    }
+
+    # --- Helper: Output allow (exit 0 with no output) ---
+    output_allow() {
+        log "review-gate: allowing stop"
+        exit 0
+    }
+
+    # --- Session-scoped path resolution ---
+    # Exit early if no session_id - cannot enforce gate without session context
+    if [[ -z "$SESSION_ID" ]]; then
+        output_allow
+    fi
+
+    REVIEW_DIR=$(resolve_review_dir "$SESSION_ID" "$TRANSCRIPT_PATH")
+    STATE_FILE="$REVIEW_DIR/gate-state.json"
+    REVIEWS_DIR="$REVIEW_DIR/reviews"
+    ARTIFACT_FILE="$REVIEW_DIR/latest.md"
+    ITERATION_FILE="$REVIEW_DIR/iteration.txt"
+    setup_log_file
+    log "review-gate: session_id=$SESSION_ID"
+    log "review-gate: transcript_path=$TRANSCRIPT_PATH"
+    log "review-gate: review_dir=$REVIEW_DIR"
+    log "review-gate: state_file=$STATE_FILE"
+    log "review-gate: reviews_dir=$REVIEWS_DIR"
+    log "review-gate: artifact_file=$ARTIFACT_FILE"
+
+    # --- [AC1] Allowlist resolve command to prevent deadlock ---
+    PENDING_CMD=$(echo "$INPUT" | jq -r '.pending_tool_input.command // ""' 2>/dev/null || echo "")
+    if [[ -n "$PENDING_CMD" ]]; then
+        log "review-gate: pending_tool_input.command=$PENDING_CMD"
+    fi
+    if [[ "$PENDING_CMD" == *"review-gate resolve"* ]]; then
+        log "review-gate: allow resolve command"
+        output_allow
+    fi
+
+    # --- Helper: Detect review type from artifact frontmatter ---
+    detect_review_type() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            local type_from_frontmatter
+            type_from_frontmatter=$(sed -n 's/^<!-- *review-type: *\([^ ]*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1)
+            if [[ -n "$type_from_frontmatter" ]]; then
+                echo "$type_from_frontmatter"
+                return 0
+            fi
+        fi
+        echo ""
+    }
+
+    # --- Helper: Extract diff-args from artifact frontmatter ---
+    extract_diff_args() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *diff-args: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    # --- Helper: Extract plan-path from artifact frontmatter ---
+    extract_plan_path() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *plan-path: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    # --- Helper: Extract spec-path from artifact frontmatter ---
+    extract_spec_path() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *spec-path: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    # --- Helper: Spawn reviewers for current artifact ---
+    # Returns 0 on success (caller should proceed to polling), exits on error/resolved
+    spawn_reviewers() {
+        local detected_type
+        detected_type=$(detect_review_type)
+        log "review-gate: spawn reviewers (type=${detected_type:-none})"
+
+        local spawn_success=false
+
+        # For code-review-iterative, re-fetch the diff to capture fixes
+        if [[ "$detected_type" == "code-review-iterative" ]]; then
+            local diff_args
+            diff_args=$(extract_diff_args)
+            log "review-gate: code-review-iterative re-spawn with diff_args='$diff_args'"
+
+            # Parse diff_args into array safely (no eval to avoid command injection)
+            # Note: This splits on whitespace, so args with spaces won't round-trip.
+            # In practice, git diff args (--base, --commit, ranges) don't contain spaces.
+            local -a args_array
+            read -r -a args_array <<< "$diff_args"
+
+            if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+               REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+               REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+               REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+               "$0" spawn-code-review "${args_array[@]}" >/dev/null 2>&1; then
+                spawn_success=true
+            fi
+        # For plan-review-iterative, re-read the plan file to capture edits
+        elif [[ "$detected_type" == "plan-review-iterative" ]]; then
+            local plan_path
+            plan_path=$(extract_plan_path)
+            log "review-gate: plan-review-iterative re-spawn with plan_path='$plan_path'"
+
+            if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   "$0" spawn-plan-review "$plan_path" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            else
+                log "review-gate: plan-review-iterative missing plan_path, falling back to artifact"
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   REVIEW_TYPE="$detected_type" \
+                   "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            fi
+        # For spec review, re-read the spec file to capture edits
+        elif [[ "$detected_type" == "spec" ]]; then
+            local spec_path
+            spec_path=$(extract_spec_path)
+            log "review-gate: spec re-spawn with spec_path='$spec_path'"
+
+            if [[ -n "$spec_path" && -f "$spec_path" ]]; then
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   "$0" spawn-spec-review "$spec_path" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            else
+                log "review-gate: spec missing spec_path, falling back to artifact"
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   REVIEW_TYPE="$detected_type" \
+                   "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            fi
+        else
+            if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+               REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+               REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+               REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+               REVIEW_TYPE="$detected_type" \
+               "$0" spawn "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                spawn_success=true
+            fi
+        fi
+
+        if [[ "$spawn_success" == "true" ]]; then
+            if [[ -f "$STATE_FILE" ]]; then
+                local status
+                status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+                if [[ "$status" == "resolved" ]]; then
+                    log "review-gate: spawn auto-resolved (no reviewers available)"
+                    # No reviewers available - spawn auto-resolved
+                    output_allow
+                fi
+            fi
+            # Success: return to caller so it can proceed to polling loop
+            log "review-gate: spawn succeeded"
+            return 0
+        fi
+
+        if ! command -v codex >/dev/null 2>&1 && ! command -v gemini >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
+            log "review-gate: reviewers missing; allowing stop"
+            output_allow
+        fi
+
+        log "review-gate: spawn failed"
+        output_block "Review gate error: failed to spawn reviewers. Run review-gate spawn manually to inspect output."
+    }
+
+    # --- [AC6] Check for stale state (>30 min = 1800 seconds) ---
+    cleanup_stale_state() {
+        rm -f "$STATE_FILE"
+        rm -f "$ITERATION_FILE"
+        rm -rf "$REVIEWS_DIR"
+    }
+
+    # --- Ensure state has an owner to avoid cross-session blocking ---
+    ensure_state_owner() {
+        [[ -z "$SESSION_KEY" ]] && return 0
+        [[ ! -f "$STATE_FILE" ]] && return 0
+
+        local existing
+        existing=$(jq -r '.owner.session_key // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        if [[ -n "$existing" ]]; then
+            return 0
+        fi
+
+        local tmp="${STATE_FILE}.tmp.$$"
+        trap 'rm -f "$tmp"' RETURN
+
+        jq --arg key "$SESSION_KEY" \
+           --arg source "$SESSION_SOURCE" \
+           --arg session_id "$SESSION_ID" \
+           --arg transcript "$TRANSCRIPT_PATH" \
+           '.owner = (.owner // {}) |
+            (if $key != "" then .owner.session_key = $key else . end) |
+            (if $source != "" then .owner.source = $source else . end) |
+            (if $session_id != "" then .owner.session_id = $session_id else . end) |
+            (if $transcript != "" then .owner.transcript_path = $transcript else . end) |
+            (if (.owner | length) == 0 then .owner = null else . end)' \
+           "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+    }
+
+    # --- [AC2] Exit 0 if no artifact exists (when no active state) ---
+    if [[ ! -f "$STATE_FILE" ]] && [[ ! -f "$ARTIFACT_FILE" ]]; then
+        log "review-gate: no state or artifact; allowing stop"
+        output_allow
+    fi
+
+    # --- If state exists, process it first (supports manual review-gate paths) ---
+    if [[ -f "$STATE_FILE" ]]; then
+        log "review-gate: state file exists"
+        CREATED_AT=$(jq -r '.created_at // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        if [[ -n "$CREATED_AT" ]]; then
+            CREATED_EPOCH=$(date -d "$CREATED_AT" +%s 2>/dev/null || echo 0)
+            NOW_EPOCH=$(date +%s)
+            AGE_SECONDS=$((NOW_EPOCH - CREATED_EPOCH))
+            log "review-gate: state age ${AGE_SECONDS}s"
+
+            if [[ $AGE_SECONDS -gt 1800 ]]; then
+                log "review-gate: cleaning stale state"
+                cleanup_stale_state
+                output_allow
+            fi
+        fi
+        ensure_state_owner
+    else
+        log "review-gate: state file missing"
+    fi
+
+    # --- [AC8] Extract JSON from potential markdown code fences ---
+    extract_last_json_object() {
+        local file="$1"
+        local debug="${2:-false}"
+        python - "$file" "$debug" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+debug = sys.argv[2] == "true" if len(sys.argv) > 2 else False
+
+text = open(path, "r", errors="ignore").read()
+decoder = json.JSONDecoder()
+
+# Collect all valid JSON objects with their positions
+objects = []
+for i, ch in enumerate(text):
+    if ch not in "{[":
+        continue
+    try:
+        obj, end = decoder.raw_decode(text[i:])
+        # Only collect dict objects (not arrays)
+        if isinstance(obj, dict):
+            objects.append((i, i + end, obj))
+    except Exception:
+        pass
+
+if debug:
+    print(f"DEBUG: Found {len(objects)} JSON objects in file", file=sys.stderr)
+    for idx, (start, end, obj) in enumerate(objects):
+        keys = list(obj.keys())[:5]
+        preview = str(obj)[:100]
+        print(f"DEBUG:   [{idx}] pos={start}-{end} keys={keys} preview={preview}...", file=sys.stderr)
+
+if not objects:
+    if debug:
+        print("DEBUG: No JSON objects found", file=sys.stderr)
+    sys.exit(1)
+
+# Filter to only review-like objects (must have verdict OR be structured_output wrapper)
+review_candidates = []
+for start, end, obj in objects:
+    # Direct review result
+    if "verdict" in obj and obj.get("verdict") in ("PASS", "FAIL", "NEEDS_WORK"):
+        review_candidates.append((start, end, obj))
+    # Codex structured_output wrapper
+    elif "structured_output" in obj:
+        review_candidates.append((start, end, obj))
+    # Gemini response wrapper
+    elif "response" in obj and isinstance(obj.get("response"), str):
+        review_candidates.append((start, end, obj))
+
+if debug:
+    print(f"DEBUG: Found {len(review_candidates)} review candidates", file=sys.stderr)
+
+# Use the LAST review candidate, or fall back to last object
+if review_candidates:
+    result = review_candidates[-1][2]
+    if debug:
+        print(f"DEBUG: Using last review candidate at pos {review_candidates[-1][0]}", file=sys.stderr)
+else:
+    result = objects[-1][2]
+    if debug:
+        print(f"DEBUG: No review candidates, using last object at pos {objects[-1][0]}", file=sys.stderr)
+
+print(json.dumps(result))
+PY
+    }
+
+    unwrap_review_json_logged() {
+        local json="$1"
+        if [[ -z "$json" ]]; then
+            return 1
+        fi
+
+        log "review-gate: unwrap review json (len=${#json})"
+
+        # Use shared unwrap function from lib
+        local result
+        if ! result=$(unwrap_review_json "$json"); then
+            return 1
+        fi
+
+        echo "$result"
+    }
+
+    extract_json() {
+        local file="$1"
+        local reviewer="$2"
+        local json=""
+        local file_size=""
+
+        if [[ -f "$file" ]]; then
+            file_size=$(wc -c < "$file" 2>/dev/null || echo 0)
+            log "review-gate: extract_json START reviewer=$reviewer file=$file size=$file_size"
+        else
+            log "review-gate: extract_json reviewer=$reviewer MISSING file=$file"
+            return 1
+        fi
+
+        case "$reviewer" in
+            codex)
+                # Codex output is complex - use smart JSON extraction directly
+                # This finds the LAST review-like JSON object in the file
+                log "review-gate: extract_json codex using extract_last_json_object"
+
+                # Capture debug output to log file
+                local debug_output
+                debug_output=$(extract_last_json_object "$file" "true" 2>&1 >/dev/null || true)
+                while IFS= read -r line; do
+                    [[ -n "$line" ]] && log "review-gate: $line"
+                done <<< "$debug_output"
+
+                # Get actual result (without debug)
+                json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+
+                if [[ -n "$json" ]]; then
+                    log "review-gate: extract_json codex extracted len=${#json}"
+                    local preview="${json:0:200}"
+                    log "review-gate: extract_json codex preview: $preview"
+                else
+                    log "review-gate: extract_json codex extract_last_json_object FAILED (empty result)"
+                fi
+                ;;
+            gemini)
+                # Gemini: skip first line (status), parse JSON
+                log "review-gate: extract_json gemini trying tail+jq"
+                json=$(tail -n +2 "$file" | jq -c '.' 2>/dev/null || true)
+                if [[ -n "$json" ]]; then
+                    log "review-gate: extract_json gemini tail+jq succeeded len=${#json}"
+                else
+                    log "review-gate: extract_json gemini tail+jq failed, trying extract_last_json_object"
+                    json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+                    log "review-gate: extract_json gemini extract_last_json_object len=${#json}"
+                fi
+                if [[ -n "$json" ]]; then
+                    local preview="${json:0:200}"
+                    log "review-gate: extract_json gemini preview: $preview"
+                fi
+                ;;
+            claude)
+                # Claude: --output-format json wraps result in metadata object
+                # Extract .result field which contains the actual response (may have markdown fences)
+                log "review-gate: extract_json claude extracting from metadata wrapper"
+                local result_str
+                result_str=$(jq -r '.result // empty' "$file" 2>/dev/null || true)
+                if [[ -n "$result_str" ]]; then
+                    # Try direct parse first (no fences)
+                    json=$(echo "$result_str" | jq -c '.' 2>/dev/null || true)
+                    if [[ -z "$json" ]]; then
+                        # Result may be wrapped in ```json fences, strip them
+                        local stripped
+                        stripped=$(echo "$result_str" | sed '/^```json$/d; /^```$/d')
+                        json=$(echo "$stripped" | jq -c '.' 2>/dev/null || true)
+                    fi
+                    if [[ -z "$json" ]]; then
+                        # Fallback to extract_last_json_object using temp file
+                        log "review-gate: extract_json claude trying extract_last_json_object on result"
+                        local tmp_file
+                        tmp_file=$(mktemp)
+                        echo "$result_str" > "$tmp_file"
+                        json=$(extract_last_json_object "$tmp_file" "false" 2>/dev/null || true)
+                        rm -f "$tmp_file"
+                    fi
+                fi
+                if [[ -n "$json" ]]; then
+                    log "review-gate: extract_json claude extracted len=${#json}"
+                    local preview="${json:0:200}"
+                    log "review-gate: extract_json claude preview: $preview"
+                else
+                    log "review-gate: extract_json claude FAILED to extract JSON"
+                fi
+                ;;
+            *)
+                # Fallback: try raw JSON
+                log "review-gate: extract_json $reviewer trying raw jq"
+                json=$(jq -c '.' "$file" 2>/dev/null || true)
+                ;;
+        esac
+
+        if [[ -z "$json" ]]; then
+            log "review-gate: extract_json $reviewer NO JSON EXTRACTED"
+            return 1
+        fi
+
+        log "review-gate: extract_json $reviewer before unwrap len=${#json}"
+        if ! json=$(unwrap_review_json "$json" 2>/dev/null); then
+            log "review-gate: extract_json $reviewer unwrap FAILED"
+            return 1
+        fi
+
+        log "review-gate: extract_json $reviewer after unwrap len=${#json}"
+
+        if ! echo "$json" | jq -c '.' >/dev/null 2>&1; then
+            log "review-gate: extract_json $reviewer final jq validation FAILED"
+            return 1
+        fi
+
+        # Log final extracted verdict for debugging
+        local verdict
+        verdict=$(echo "$json" | jq -r '.verdict // "NO_VERDICT"' 2>/dev/null || echo "JQ_ERROR")
+        log "review-gate: extract_json $reviewer SUCCESS verdict=$verdict"
+
+        echo "$json" | jq -c '.'
+    }
+
+    # --- Get/increment iteration count ---
+    get_iteration() {
+        if [[ -f "$ITERATION_FILE" ]]; then
+            cat "$ITERATION_FILE"
+        else
+            echo "0"
+        fi
+    }
+
+    increment_iteration() {
+        local current
+        current=$(get_iteration)
+        echo $((current + 1)) > "$ITERATION_FILE"
+    }
+
+    reset_iteration() {
+        rm -f "$ITERATION_FILE"
+    }
+
+    # --- Archive previous reviews (in check context) ---
+    archive_previous_reviews_check() {
+        local iteration
+        iteration=$(get_iteration)
+        # Use shared archive function (outputs archive path to stderr for logging)
+        archive_reviews "$REVIEW_DIR" "$REVIEWS_DIR" "$iteration"
+    }
+
+    # --- Clean state for re-review ---
+    clean_for_rerun() {
+        archive_previous_reviews_check
+        rm -f "$STATE_FILE"
+        rm -rf "$REVIEWS_DIR"
+    }
+
+    # --- Check status (if state exists) ---
+    STATUS="unknown"
+    if [[ -f "$STATE_FILE" ]]; then
+        STATUS=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+    fi
+
+    # If resolved, allow stop unless a new artifact is present
+    if [[ "$STATUS" == "resolved" ]]; then
+        log "review-gate: status resolved"
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            STATE_SHA=$(jq -r '.artifact.sha256 // ""' "$STATE_FILE" 2>/dev/null || echo "")
+            CURRENT_SHA=$(compute_sha256 "$ARTIFACT_FILE" 2>/dev/null || echo "")
+
+            if [[ -n "$STATE_SHA" && -n "$CURRENT_SHA" && "$STATE_SHA" != "$CURRENT_SHA" ]]; then
+                log "review-gate: artifact changed; respawn reviewers"
+                cleanup_stale_state
+                reset_iteration
+                spawn_reviewers
+            fi
+        fi
+        output_allow
+    fi
+
+    # --- Artifact exists but no state file → spawn reviewers ---
+    if [[ ! -f "$STATE_FILE" ]]; then
+        log "review-gate: spawning reviewers (no state)"
+        spawn_reviewers
+    fi
+
+    # --- Check progress of reviewers ---
+    check_progress_raw() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local total=0
+        local completed=0
+        local running_list=()
+        local completed_list=()
+
+        for reviewer in $reviewers; do
+            ((total++)) || true
+
+            local sentinel_file="$REVIEWS_DIR/${reviewer}.done"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+
+            if [[ -f "$sentinel_file" ]] || [[ -f "$failed_file" ]]; then
+                ((completed++)) || true
+                completed_list+=("$reviewer")
+            else
+                running_list+=("$reviewer")
+            fi
+        done
+
+        log "review-gate: progress completed=$completed total=$total running=${running_list[*]}"
+        echo "$completed|$total|${running_list[*]}"
+    }
+
+    # --- Calculate consensus (AUTONOMOUS MODE - requires all reviewers to PASS) ---
+    calculate_consensus() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local pass_count=0
+        local fail_count=0
+        local other_count=0
+        local reviewer_count=0
+
+        for reviewer in $reviewers; do
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+
+            # Skip if reviewer failed
+            if [[ -f "$failed_file" ]]; then
+                ((other_count++)) || true
+                ((reviewer_count++)) || true
+                continue
+            fi
+
+            if [[ ! -f "$output_file" ]]; then
+                ((other_count++)) || true
+                ((reviewer_count++)) || true
+                continue
+            fi
+
+            local result
+            if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+                ((other_count++)) || true
+                ((reviewer_count++)) || true
+                continue
+            fi
+
+            local verdict
+            verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+            if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                verdict="UNCLEAR"
+            fi
+
+            case "$verdict" in
+                PASS)
+                    ((pass_count++)) || true
+                    ;;
+                FAIL)
+                    ((fail_count++)) || true
+                    ;;
+                NEEDS_WORK|*)
+                    ((other_count++)) || true
+                    ;;
+            esac
+
+            ((reviewer_count++)) || true
+        done
+
+        # Need at least 1 reviewer
+        if [[ $reviewer_count -lt 1 ]]; then
+            echo "requires_decision"
+            return
+        fi
+
+        # All reviewers PASS → auto-approve
+        if [[ $pass_count -eq $reviewer_count ]]; then
+            echo "auto_approve"
+            return
+        fi
+
+        # Anything else requires revision
+        echo "requires_decision"
+    }
+
+    # --- Format results table ---
+    format_results() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local table="## Review Results\n\n"
+        table+="| Reviewer | Verdict | Confidence | Summary |\n"
+        table+="|----------|---------|------------|--------|\n"
+
+        for reviewer in $reviewers; do
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+
+            local verdict="UNCLEAR"
+            local confidence="-"
+            local summary="No response"
+
+            if [[ -f "$failed_file" ]]; then
+                verdict="ERROR"
+                summary="Reviewer process failed"
+            elif [[ -f "$output_file" ]]; then
+                local result
+                if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+                    verdict="ERROR"
+                    summary="Invalid reviewer output"
+                else
+                    verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+                    confidence=$(echo "$result" | jq -r '.confidence // "-"' 2>/dev/null || echo "-")
+                    summary=$(echo "$result" | jq -r '.summary // "No summary"' 2>/dev/null || echo "No summary")
+
+                    if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                        verdict="UNCLEAR"
+                    fi
+                    if [[ -z "$confidence" || "$confidence" == "null" ]]; then
+                        confidence="-"
+                    fi
+                    if [[ -z "$summary" || "$summary" == "null" ]]; then
+                        summary="No summary"
+                    fi
+                fi
+
+                # Truncate long summaries
+                if [[ ${#summary} -gt 60 ]]; then
+                    summary="${summary:0:57}..."
+                fi
+            fi
+
+            table+="| $reviewer | $verdict | $confidence | $summary |\n"
+        done
+
+        echo -e "$table"
+    }
+
+    # --- Collect all issues from reviews ---
+    collect_issues() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local all_issues=""
+
+        for reviewer in $reviewers; do
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+
+            if [[ -f "$failed_file" ]]; then
+                continue
+            fi
+
+            if [[ -f "$output_file" ]]; then
+                local result
+                if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+                    all_issues+="### $reviewer (ERROR)\n"
+                    all_issues+="Summary: Invalid reviewer output\n\n"
+                    continue
+                fi
+
+                local verdict
+                verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+                if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                    verdict="UNCLEAR"
+                fi
+
+                # Only collect findings from non-PASS reviews
+                if [[ "$verdict" != "PASS" ]]; then
+                    local findings
+                    findings=$(echo "$result" | jq -r '.findings // [] | .[] | (.title // "No title") + ": " + (.body // "")' 2>/dev/null || echo "")
+                    local summary
+                    summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
+
+                    if [[ -n "$findings" || -n "$summary" ]]; then
+                        all_issues+="### $reviewer ($verdict)\n"
+                        if [[ -n "$summary" ]]; then
+                            all_issues+="Summary: $summary\n"
+                        fi
+                        if [[ -n "$findings" ]]; then
+                            all_issues+="Findings:\n"
+                            while IFS= read -r finding; do
+                                all_issues+="- $finding\n"
+                            done <<< "$findings"
+                        fi
+                        all_issues+="\n"
+                    fi
+                fi
+            fi
+        done
+
+        echo -e "$all_issues"
+    }
+
+    # --- Format revision instructions based on trigger type ---
+    format_revision_instructions() {
+        local trigger_source="$1"
+        local issues="$2"
+        local mode_plan_path="$3"
+        local mode_spec_path="${4:-}"
+
+        case "$trigger_source" in
+            code-review-iterative)
+                cat <<INSTRUCTIONS
+Please revise the **code** to address the following issues:
+
+$issues
+
+**Important:** Create a NEW commit with your fixes. Do NOT use \`git commit --amend\` as this changes the commit SHA and breaks the review tracking.
+
+**After fixing the code, STOP immediately.** The stop hook will automatically re-run the review.
+INSTRUCTIONS
+                ;;
+            plan-review-iterative)
+                local plan_display="$mode_plan_path"
+                [[ -z "$plan_display" ]] && plan_display="the plan"
+                cat <<INSTRUCTIONS
+Please revise **$plan_display** to address the following issues:
+
+$issues
+
+**After updating the plan, STOP immediately.** The stop hook will spawn the next review round.
+INSTRUCTIONS
+                ;;
+            spec)
+                local spec_display="$mode_spec_path"
+                [[ -z "$spec_display" ]] && spec_display="the spec"
+                cat <<INSTRUCTIONS
+Please revise **$spec_display** to address the following issues:
+
+$issues
+
+**After updating the spec, STOP immediately.** The stop hook will spawn the next review round.
+INSTRUCTIONS
+                ;;
+            *)
+                cat <<INSTRUCTIONS
+Please revise the artifact to address the following issues:
+
+$issues
+
+**After updating the artifact, STOP immediately.** The stop hook will spawn the next review round.
+INSTRUCTIONS
+                ;;
+        esac
+    }
+
+    # Check if all reviewers are complete (optionally wait/poll)
+    START_TIME=$(date +%s)
+    while true; do
+        PROGRESS=$(check_progress_raw)
+        IFS='|' read -r COMPLETED TOTAL RUNNING <<< "$PROGRESS"
+
+        if [[ "$COMPLETED" -ge "$TOTAL" ]]; then
+            log "review-gate: reviewers complete"
+            break
+        fi
+
+        if [[ "$MAX_WAIT_SECONDS" -gt 0 ]]; then
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+            if [[ "$ELAPSED" -ge "$MAX_WAIT_SECONDS" ]]; then
+                progress_msg="Review gate: ${COMPLETED}/${TOTAL} reviewers complete."
+                if [[ -n "$RUNNING" ]]; then
+                    progress_msg+=" Waiting for: $RUNNING"
+                fi
+                log "review-gate: timeout after ${ELAPSED}s"
+                output_block "$progress_msg"
+            fi
+            sleep "$POLL_INTERVAL_SECONDS"
+            continue
+        fi
+
+        progress_msg="Review gate: ${COMPLETED}/${TOTAL} reviewers complete."
+        if [[ -n "$RUNNING" ]]; then
+            progress_msg+=" Waiting for: $RUNNING"
+        fi
+        output_block "$progress_msg"
+    done
+
+    # Calculate consensus
+    CONSENSUS=$(calculate_consensus)
+
+    # Get current iteration
+    CURRENT_ITERATION=$(get_iteration)
+
+    # Get trigger source and mode info for revision messages
+    TRIGGER_SOURCE=$(jq -r '.trigger_source // "artifact"' "$STATE_FILE" 2>/dev/null || echo "artifact")
+    MODE_PLAN_PATH=$(jq -r '.mode.plan_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
+
+    # Update state to awaiting_decision
+    TEMP_FILE="${STATE_FILE}.tmp.$$"
+    trap 'rm -f "${TEMP_FILE:-}"' EXIT
+
+    jq --arg status "awaiting_decision" \
+       --arg consensus "$CONSENSUS" \
+       --argjson iteration "$CURRENT_ITERATION" \
+       '.status = $status | .consensus = {verdict: $consensus, iteration: $iteration}' \
+       "$STATE_FILE" > "$TEMP_FILE"
+    mv "$TEMP_FILE" "$STATE_FILE"
+
+    # Format output
+    RESULTS=$(format_results)
+
+    if [[ "$CONSENSUS" == "auto_approve" ]]; then
+        reset_iteration
+        "$0" resolve proceed >&2 || true
+        output_allow
+    else
+        # Check iteration limit
+        if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
+            log "review-gate: max iterations reached"
+            REASON="$RESULTS
+
+---
+
+**Max iterations ($MAX_ITERATIONS) reached without consensus.**
+
+Please manually review and decide:
+- Run \`review-gate resolve proceed\` to accept anyway
+- Run \`review-gate resolve abort\` to discard"
+
+            output_block "$REASON"
+            exit 0
+        fi
+
+        # Collect issues from non-PASS reviews
+        ISSUES=$(collect_issues)
+
+        # Extract mode paths BEFORE cleaning state (which deletes STATE_FILE)
+        MODE_SPEC_PATH=$(jq -r '.mode.spec_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
+
+        # Clean state so reviewers will be re-spawned after revision
+        # (Archive uses the current iteration number, so do this before incrementing.)
+        clean_for_rerun
+
+        # Increment iteration for next round
+        increment_iteration
+
+        log "review-gate: revision required; incremented iteration"
+
+        # Format type-specific revision instructions (using extracted paths)
+        REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH")
+
+        REASON="$RESULTS
+
+---
+
+## Revision Required (Iteration $((CURRENT_ITERATION + 1))/$MAX_ITERATIONS)
+
+**All reviewers must agree (PASS) before proceeding.**
+
+$REVISION_INSTRUCTIONS"
+
+        output_block "$REASON"
+    fi
+}
+
+main() {
+    local cmd="${1:-}"
+    case "$cmd" in
+        check)
+            shift
+            review_gate_check "$@"
+            ;;
+        spawn)
+            shift
+            review_gate_spawn "$@"
+            ;;
+        spawn-code-review)
+            shift
+            review_gate_spawn_code_review "$@"
+            ;;
+        spawn-plan-review)
+            shift
+            review_gate_spawn_plan_review "$@"
+            ;;
+        resolve)
+            shift
+            review_gate_resolve "$@"
+            ;;
+        artifact-path|artifact_path)
+            shift
+            review_gate_artifact_path "$@"
+            ;;
+        -h|--help|help|"")
+            usage
+            ;;
+        *)
+            echo "Unknown command: $cmd" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

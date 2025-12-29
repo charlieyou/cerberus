@@ -1,0 +1,12 @@
+{
+  "name": "cerberus",
+  "version": "1.0.0",
+  "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
+  "author": {
+    "name": "cyou"
+  },
+  "repository": "https://github.com/cyou/cerberus",
+  "license": "MIT",
+  "keywords": ["code-review", "plan-review", "multi-model", "quality-gate", "cerberus"],
+  "hooks": "./hooks/hooks.json"
+}
