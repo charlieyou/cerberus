@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# generate - Multi-model generator for healthcheck/architecture-review
+
+set -euo pipefail
+
+# Resolve helper scripts relative to this file (follows symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+# Model defaults (override with env vars)
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.2-codex}"
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
+CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
+
+usage() {
+    cat <<'USAGE'
+Usage: generate [options]
+
+Options:
+  --type <type>         Named preset: healthcheck, architecture-review (default: healthcheck)
+  --prompt-file <path>  Path to custom prompt file
+  --prompt <text>       Inline prompt text
+USAGE
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+review_gate_generate() {
+    local review_type="healthcheck"
+    local prompt_file=""
+    local prompt_inline=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type=*)
+                review_type="${1#*=}"
+                shift
+                ;;
+            --type)
+                review_type="${2:-healthcheck}"
+                shift 2
+                ;;
+            --prompt-file=*)
+                prompt_file="${1#*=}"
+                shift
+                ;;
+            --prompt-file)
+                prompt_file="${2:-}"
+                shift 2
+                ;;
+            --prompt=*)
+                prompt_inline="${1#*=}"
+                shift
+                ;;
+            --prompt)
+                prompt_inline="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    # Resolve prompt content
+    local prompt_content=""
+
+    if [[ -n "$prompt_inline" ]]; then
+        prompt_content="$prompt_inline"
+    elif [[ -n "$prompt_file" ]]; then
+        if [[ ! -f "$prompt_file" ]]; then
+            die "Prompt file not found: $prompt_file"
+        fi
+        prompt_content=$(cat "$prompt_file")
+    else
+        local prompt_path="$PLUGIN_ROOT/prompts/generators/${review_type}.md"
+
+        if [[ -f "$prompt_path" ]]; then
+            prompt_content=$(cat "$prompt_path")
+        else
+            die "No prompt found for type '$review_type' at $prompt_path"
+        fi
+    fi
+
+    # Create temp directory for drafts
+    local draft_dir
+    draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
+    # Ensure cleanup even if generation fails early
+    trap 'rm -rf "$draft_dir"' EXIT
+
+    local codex_draft="$draft_dir/draft-codex.md"
+    local gemini_draft="$draft_dir/draft-gemini.md"
+    local claude_draft="$draft_dir/draft-claude.md"
+    local codex_done="$draft_dir/codex.done"
+    local gemini_done="$draft_dir/gemini.done"
+    local claude_done="$draft_dir/claude.done"
+    local codex_failed="$draft_dir/codex.failed"
+    local gemini_failed="$draft_dir/gemini.failed"
+    local claude_failed="$draft_dir/claude.failed"
+
+    echo "Starting generators for type: $review_type" >&2
+    echo "Draft directory: $draft_dir" >&2
+
+    # Spawn Codex (with repo access via read-only sandbox)
+    local codex_model="$CODEX_MODEL"
+    if command -v codex >/dev/null 2>&1; then
+        echo "Spawning Codex generator (model: $codex_model)..." >&2
+        (
+            if codex exec -m "$codex_model" -c model_reasoning_effort=medium -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
+                touch "$codex_done"
+            else
+                touch "$codex_failed"
+            fi
+        ) &
+        local pid_codex=$!
+    else
+        echo "Warning: codex not found, skipping" >&2
+        touch "$codex_failed"
+        local pid_codex=""
+    fi
+
+    # Spawn Gemini (yolo for auto tool approval, prompt enforces read-only)
+    local gemini_model="$GEMINI_MODEL"
+    if command -v gemini >/dev/null 2>&1; then
+        echo "Spawning Gemini generator (model: $gemini_model)..." >&2
+        (
+            if gemini -m "$gemini_model" --yolo -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                touch "$gemini_done"
+            else
+                touch "$gemini_failed"
+            fi
+        ) &
+        local pid_gemini=$!
+    else
+        echo "Warning: gemini not found, skipping" >&2
+        touch "$gemini_failed"
+        local pid_gemini=""
+    fi
+
+    # Spawn Claude (print mode, no interaction, stdin for prompt)
+    local claude_model="$CLAUDE_MODEL"
+    if command -v claude >/dev/null 2>&1; then
+        echo "Spawning Claude generator (model: $claude_model)..." >&2
+        (
+            if echo "$prompt_content" | claude -p --model "$claude_model" > "$claude_draft" 2>&1; then
+                touch "$claude_done"
+            else
+                touch "$claude_failed"
+            fi
+        ) &
+        local pid_claude=$!
+    else
+        echo "Warning: claude not found, skipping" >&2
+        touch "$claude_failed"
+        local pid_claude=""
+    fi
+
+    # Wait for all generators
+    echo "Waiting for generators to complete..." >&2
+    local wait_start
+    wait_start=$(date +%s)
+    local timeout=900  # 15 minutes
+
+    while true; do
+        local codex_complete=false
+        local gemini_complete=false
+        local claude_complete=false
+
+        [[ -f "$codex_done" || -f "$codex_failed" ]] && codex_complete=true
+        [[ -f "$gemini_done" || -f "$gemini_failed" ]] && gemini_complete=true
+        [[ -f "$claude_done" || -f "$claude_failed" ]] && claude_complete=true
+
+        if $codex_complete && $gemini_complete && $claude_complete; then
+            break
+        fi
+
+        local elapsed=$(( $(date +%s) - wait_start ))
+        if [[ $elapsed -ge $timeout ]]; then
+            echo "Timeout waiting for generators after ${elapsed}s" >&2
+            # Kill any remaining processes
+            [[ -n "${pid_codex:-}" ]] && kill "$pid_codex" 2>/dev/null || true
+            [[ -n "${pid_gemini:-}" ]] && kill "$pid_gemini" 2>/dev/null || true
+            [[ -n "${pid_claude:-}" ]] && kill "$pid_claude" 2>/dev/null || true
+            break
+        fi
+
+        sleep 2
+    done
+
+    # Count successful drafts
+    local draft_count=0
+    local drafts=()
+
+    if [[ -f "$codex_done" && -f "$codex_draft" && -s "$codex_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$codex_draft")
+        echo "Codex: completed successfully" >&2
+    elif [[ -f "$codex_failed" ]]; then
+        echo "Codex: failed" >&2
+    else
+        echo "Codex: timed out" >&2
+    fi
+
+    if [[ -f "$gemini_done" && -f "$gemini_draft" && -s "$gemini_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$gemini_draft")
+        echo "Gemini: completed successfully" >&2
+    elif [[ -f "$gemini_failed" ]]; then
+        echo "Gemini: failed" >&2
+    else
+        echo "Gemini: timed out" >&2
+    fi
+
+    if [[ -f "$claude_done" && -f "$claude_draft" && -s "$claude_draft" ]]; then
+        ((draft_count++)) || true
+        drafts+=("$claude_draft")
+        echo "Claude: completed successfully" >&2
+    elif [[ -f "$claude_failed" ]]; then
+        echo "Claude: failed" >&2
+    else
+        echo "Claude: timed out" >&2
+    fi
+
+    echo "Completed: $draft_count drafts" >&2
+
+    if [[ $draft_count -eq 0 ]]; then
+        die "No drafts generated. Check generator availability."
+    elif [[ $draft_count -eq 1 ]]; then
+        echo "Warning: Only one generator succeeded. Proceeding with partial results." >&2
+    fi
+
+    # Output drafts for synthesis
+    echo ""
+    echo "# Generator Drafts for Synthesis"
+    echo ""
+    echo "The following drafts were generated by multiple models analyzing the codebase."
+    echo "Synthesize these into a single coherent artifact."
+    echo ""
+
+    local draft_num=1
+    for draft in "${drafts[@]}"; do
+        local model_name
+        model_name=$(basename "$draft" .md | sed 's/draft-//')
+        echo "---"
+        echo ""
+        echo "## Draft $draft_num"
+        echo ""
+        cat "$draft"
+        echo ""
+        ((draft_num++)) || true
+    done
+
+    echo "---"
+    echo ""
+    echo "# Synthesis Instructions"
+    echo ""
+    echo "Merge the above drafts into a single artifact:"
+    echo "1. Identify common findings across drafts"
+    echo "2. Resolve conflicts by using your judgment"
+    echo "3. Deduplicate similar issues"
+    echo "4. Produce a coherent final artifact"
+    echo ""
+
+    # Cleanup
+    rm -rf "$draft_dir"
+}
+
+review_gate_generate "$@"
