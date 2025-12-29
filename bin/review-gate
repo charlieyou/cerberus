@@ -6,6 +6,7 @@
 #   spawn          Spawn reviewers for an artifact
 #   resolve        Resolve gate with proceed|revise|abort
 #   artifact-path  Print session-scoped artifact path
+#   author-context Set or clear author context injected into prompts
 
 set -euo pipefail
 
@@ -63,6 +64,9 @@ Commands:
 
   artifact-path [--session-id <id>] [--transcript-path <path>]
     Print the session-scoped review artifact path.
+
+  author-context [--session-id <id>] [--transcript-path <path>] [--clear] [text]
+    Set or clear author context injected into reviewer prompts.
 
 Agents list:
   --agents <list>
@@ -186,6 +190,92 @@ USAGE
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
 
+    # --- Previous reviews (for iterative context) ---
+    code_review_previous_reviews() {
+        local review_dir="$1"
+        local latest_archive=""
+        local latest_iter=-1
+        local latest_dir_name=""
+
+        for archive_dir in "$review_dir"/reviews-iter-*; do
+            if [[ -d "$archive_dir" ]]; then
+                local dir_name
+                dir_name=$(basename "$archive_dir")
+                local iter
+                iter=$(echo "$dir_name" | sed 's/reviews-iter-\([0-9]*\).*/\1/')
+                if [[ "$iter" =~ ^[0-9]+$ ]]; then
+                    if [[ "$iter" -gt "$latest_iter" ]] || \
+                       [[ "$iter" -eq "$latest_iter" && "$dir_name" > "$latest_dir_name" ]]; then
+                        latest_iter="$iter"
+                        latest_archive="$archive_dir"
+                        latest_dir_name="$dir_name"
+                    fi
+                fi
+            fi
+        done
+
+        if [[ -z "$latest_archive" ]]; then
+            return 0
+        fi
+
+        echo "## Previous Reviews (Iteration $latest_iter)"
+        echo ""
+        echo "You have access to the reviews from your previous iteration. Use these to understand what issues were raised and ensure they have been addressed."
+        echo ""
+
+        for reviewer_file in "$latest_archive"/*.json; do
+            if [[ -f "$reviewer_file" ]]; then
+                local reviewer_name
+                reviewer_name=$(basename "$reviewer_file" .json)
+
+                case "$reviewer_name" in
+                    review-schema|review) continue ;;
+                esac
+
+                echo "### Previous Review: $reviewer_name"
+                echo ""
+
+                local review_json=""
+                if review_json=$(extract_last_json_object "$reviewer_file" 2>/dev/null); then
+                    review_json=$(unwrap_review_json "$review_json" 2>/dev/null || echo "$review_json")
+
+                    local verdict summary findings
+                    verdict=$(echo "$review_json" | jq -r '.verdict // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
+                    summary=$(echo "$review_json" | jq -r '.summary // ""' 2>/dev/null || echo "")
+                    findings=$(echo "$review_json" | jq -r '.findings // [] | .[] | .title // "No title"' 2>/dev/null || echo "")
+
+                    echo "**Verdict:** $verdict"
+                    if [[ -n "$summary" && "$summary" != "null" ]]; then
+                        echo "**Summary:** $summary"
+                    fi
+                    if [[ -n "$findings" ]]; then
+                        echo "**Findings:**"
+                        while IFS= read -r finding; do
+                            echo "- $finding"
+                        done <<< "$findings"
+                    fi
+                else
+                    echo "(Could not parse review output)"
+                fi
+                echo ""
+            fi
+        done
+    }
+
+    local author_context=""
+    local state_file="$review_dir/gate-state.json"
+    if [[ -n "${REVIEW_GATE_AUTHOR_CONTEXT+x}" ]]; then
+        author_context="$REVIEW_GATE_AUTHOR_CONTEXT"
+    elif [[ -f "$state_file" ]]; then
+        author_context=$(jq -r '.author_context // ""' "$state_file" 2>/dev/null || echo "")
+        if [[ "$author_context" == "null" ]]; then
+            author_context=""
+        fi
+    fi
+
+    local previous_reviews=""
+    previous_reviews=$(code_review_previous_reviews "$review_dir")
+
     # --- Build prompt with diff ---
     # Resolve template with project-local override support
     local project_root
@@ -217,6 +307,34 @@ USAGE
         rm -f "$diff_tmp"
     else
         die "Code review prompt template not found in project or built-in locations"
+    fi
+
+    # --- Inject previous reviews / author context before output format ---
+    local review_context=""
+    if [[ -n "$previous_reviews" ]]; then
+        review_context+="$previous_reviews"
+    fi
+    if [[ -n "$author_context" ]]; then
+        if [[ -n "$review_context" ]]; then
+            review_context+=$'\n'
+        fi
+        review_context+=$'## Author Context\nUse these clarifications when evaluating the changes and prior feedback.\n\n'"$author_context"
+    fi
+
+    if [[ -n "$review_context" ]]; then
+        local context_tmp="${review_dir}/review_context.tmp"
+        printf '%s' "$review_context" > "$context_tmp"
+        prompt_content=$(awk -v ctx_file="$context_tmp" '
+            BEGIN { while ((getline line < ctx_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(ctx_file); inserted=0 }
+            /^## Output Format/ && inserted==0 {
+                print ctx
+                print ""
+                inserted=1
+            }
+            { print }
+            END { if (inserted==0) { print ""; print ctx } }
+        ' <<< "$prompt_content")
+        rm -f "$context_tmp"
     fi
 
     # --- Write artifact for review gate ---
@@ -577,6 +695,99 @@ USAGE
     echo "$review_dir/latest.md"
 }
 
+review_gate_author_context() {
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local clear="false"
+    local context=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session-id)
+                session_id="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            --clear)
+                clear="true"
+                shift
+                ;;
+            -h|--help)
+                cat <<USAGE
+Usage: ${CLI_CMD} author-context [options] [text]
+
+Set or clear author context injected into reviewer prompts.
+
+Options:
+  --session-id <id>        Session ID for scoping
+  --transcript-path <path> Path to transcript file
+  --clear                 Remove any stored author context
+USAGE
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                context="$1"
+                shift
+                if [[ $# -gt 0 ]]; then
+                    context="$context $*"
+                    break
+                fi
+                ;;
+        esac
+    done
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+    fi
+
+    if [[ "$clear" == "false" && -z "$context" ]]; then
+        if [[ ! -t 0 ]]; then
+            context=$(cat)
+        fi
+    fi
+
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    local state_file="$review_dir/gate-state.json"
+
+    if [[ ! -f "$state_file" ]]; then
+        die "No active gate state found for session: $session_id"
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        die "jq is required but not installed"
+    fi
+
+    local temp_file="${state_file}.tmp.$$"
+    trap 'rm -f "${temp_file:-}"' EXIT
+
+    if [[ "$clear" == "true" ]]; then
+        jq 'del(.author_context)' "$state_file" > "$temp_file"
+        mv "$temp_file" "$state_file"
+        echo "Author context cleared"
+        return 0
+    fi
+
+    if [[ -z "$context" ]]; then
+        die "No author context provided"
+    fi
+
+    jq --arg context "$context" '.author_context = $context' "$state_file" > "$temp_file"
+    mv "$temp_file" "$state_file"
+    echo "Author context updated"
+}
+
 review_gate_spawn() {
     # --- Review type (for template selection) ---
     REVIEW_TYPE="${REVIEW_TYPE:-}"
@@ -879,6 +1090,16 @@ PROMPT
             echo "$previous_reviews"
         fi
 
+        # Include author context if available
+        if [[ -n "$author_context" ]]; then
+            echo ""
+            echo "## Author Context"
+            echo ""
+            echo "Use these clarifications when evaluating the artifact and prior feedback."
+            echo ""
+            echo "$author_context"
+        fi
+
         cat <<PROMPT
 
 ## Output Format
@@ -951,6 +1172,22 @@ PROMPT
     agents_list=("${agents_final[@]}")
 
     preflight_check
+
+    # --- Resolve author context (from env override or previous state) ---
+    local previous_author_context=""
+    if [[ -f "$STATE_FILE" ]]; then
+        previous_author_context=$(jq -r '.author_context // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        if [[ "$previous_author_context" == "null" ]]; then
+            previous_author_context=""
+        fi
+    fi
+
+    local author_context=""
+    if [[ -n "${REVIEW_GATE_AUTHOR_CONTEXT+x}" ]]; then
+        author_context="$REVIEW_GATE_AUTHOR_CONTEXT"
+    else
+        author_context="$previous_author_context"
+    fi
 
     local artifact_path
     artifact_path=$(resolve_artifact "$artifact_arg")
@@ -1048,6 +1285,7 @@ SCHEMA
         --arg path "$artifact_path" \
         --arg sha256 "$artifact_sha256" \
         --arg created "$now" \
+        --arg author_context "$author_context" \
         --arg owner_key "$OWNER_SESSION_KEY" \
         --arg owner_source "$OWNER_SOURCE" \
         --arg owner_session_id "$OWNER_SESSION_ID" \
@@ -1073,6 +1311,7 @@ SCHEMA
                 | (if $owner_transcript != "" then .transcript_path = $owner_transcript else . end)
                 | if length == 0 then null else . end
             ),
+            author_context: (if $author_context != "" then $author_context else null end),
             reviewers: {},
             consensus: null,
             decision: null,
@@ -1216,6 +1455,10 @@ main() {
         artifact-path|artifact_path)
             shift
             review_gate_artifact_path "$@"
+            ;;
+        author-context|author_context)
+            shift
+            review_gate_author_context "$@"
             ;;
         -h|--help|help|"")
             usage
