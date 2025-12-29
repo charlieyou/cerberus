@@ -130,12 +130,7 @@ review_gate_check() {
     # --- Helper: Extract agents list from artifact frontmatter ---
     extract_agents() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
-            local agents
-            agents=$(sed -n 's/^<!-- *agents: *\(.*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1)
-            if [[ -z "$agents" ]]; then
-                agents=$(sed -n 's/^<!-- *reviewers: *\(.*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1)
-            fi
-            echo "$agents" | tr -d '[:space:]'
+            sed -n 's/^<!-- *agents: *\(.*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1 | tr -d '[:space:]'
         fi
     }
 

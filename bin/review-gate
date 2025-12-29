@@ -93,14 +93,6 @@ review_gate_spawn_code_review() {
                 agents_csv="${2:-}"
                 shift 2
                 ;;
-            --reviewers=*)
-                agents_csv="${1#*=}"
-                shift
-                ;;
-            --reviewers)
-                agents_csv="${2:-}"
-                shift 2
-                ;;
             --uncommitted)
                 diff_mode="--uncommitted"
                 diff_args_str="--uncommitted"
@@ -289,14 +281,6 @@ review_gate_spawn_plan_review() {
                 agents_csv="${2:-}"
                 shift 2
                 ;;
-            --reviewers=*)
-                agents_csv="${1#*=}"
-                shift
-                ;;
-            --reviewers)
-                agents_csv="${2:-}"
-                shift 2
-                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -437,14 +421,6 @@ review_gate_spawn_spec_review() {
                 shift
                 ;;
             --agents)
-                agents_csv="${2:-}"
-                shift 2
-                ;;
-            --reviewers=*)
-                agents_csv="${1#*=}"
-                shift
-                ;;
-            --reviewers)
                 agents_csv="${2:-}"
                 shift 2
                 ;;
@@ -621,14 +597,6 @@ review_gate_spawn() {
                 shift
                 ;;
             --agents)
-                agents_csv="${2:-}"
-                shift 2
-                ;;
-            --reviewers=*)
-                agents_csv="${1#*=}"
-                shift
-                ;;
-            --reviewers)
                 agents_csv="${2:-}"
                 shift 2
                 ;;
