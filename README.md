@@ -135,6 +135,13 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort
 
 ## Configuration
 
+### Hooks
+
+Cerberus ships both hooks in `hooks/hooks.json`:
+
+- **SessionStart**: captures `session_id` and `transcript_path` into `CLAUDE_ENV_FILE` for `CLAUDE_SESSION_ID`/`CLAUDE_TRANSCRIPT_PATH`
+- **Stop**: runs the review gate check to enforce consensus before stopping
+
 ### Environment Variables
 
 | Variable | Default | Description |

@@ -17,6 +17,8 @@ while [ -L "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
 # =============================================================================
 # Shared Library Functions (inlined)
@@ -157,8 +159,8 @@ GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
 
 usage() {
-    cat <<'USAGE'
-Usage: review-gate <command> [args]
+    cat <<USAGE
+Usage: ${CLI_CMD} <command> [args]
 
 Cerberus - Three-headed guardian of code quality.
 Multi-model consensus review with Codex, Gemini, and Claude.
@@ -191,46 +193,6 @@ USAGE
 die() {
     echo "Error: $*" >&2
     exit 1
-}
-
-find_latest_transcript() {
-    local project_hash base_dir
-    project_hash=$(get_project_hash "")
-    base_dir="$HOME/.claude/projects/$project_hash"
-
-    [[ -d "$base_dir" ]] || return 1
-
-    # Get transcripts sorted by modification time (newest first)
-    local transcripts
-    transcripts=$(ls -t "$base_dir"/*.jsonl 2>/dev/null | grep -v '/agent-' || true)
-    if [[ -z "$transcripts" ]]; then
-        transcripts=$(ls -t "$base_dir"/agent-*.jsonl 2>/dev/null || true)
-    fi
-
-    [[ -n "$transcripts" ]] || return 1
-
-    # Find the first transcript that doesn't have an active review gate
-    local transcript session_id state_file status
-    while IFS= read -r transcript; do
-        [[ -z "$transcript" ]] && continue
-        session_id=$(basename "$transcript" .jsonl)
-        state_file="$base_dir/review-gate/$session_id/gate-state.json"
-
-        if [[ -f "$state_file" ]]; then
-            status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
-            # Skip sessions with active review gates
-            if [[ "$status" == "pending" || "$status" == "awaiting_decision" ]]; then
-                continue
-            fi
-        fi
-
-        # Found a transcript without active gate
-        echo "$transcript"
-        return 0
-    done <<< "$transcripts"
-
-    # Fallback: return newest if all have active gates (shouldn't happen)
-    echo "$transcripts" | head -n 1
 }
 
 # --- Helper: Compute sha256 (portable-ish) ---
@@ -276,8 +238,8 @@ review_gate_spawn_code_review() {
                 shift 2
                 ;;
             -h|--help)
-                cat <<'USAGE'
-Usage: review-gate spawn-code-review [options]
+                cat <<USAGE
+Usage: ${CLI_CMD} spawn-code-review [options]
 
 Options:
   --uncommitted       Review uncommitted changes (default)
@@ -336,10 +298,6 @@ USAGE
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
-
-    if [[ -z "$transcript_path" ]]; then
-        transcript_path="$(find_latest_transcript || true)"
-    fi
 
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
         session_id="$(basename "$transcript_path" .jsonl)"
@@ -442,8 +400,8 @@ review_gate_spawn_plan_review() {
                 shift 2
                 ;;
             -h|--help)
-                cat <<'USAGE'
-Usage: review-gate spawn-plan-review [options] [plan-path]
+                cat <<USAGE
+Usage: ${CLI_CMD} spawn-plan-review [options] [plan-path]
 
 Spawn reviewers for a plan file. If no plan path is provided, attempts to find
 the most recent session plan from ~/.claude/plans/.
@@ -492,10 +450,6 @@ USAGE
     plan_path=$(realpath "$plan_path")
 
     # Resolve transcript and session ID if not provided
-    if [[ -z "$transcript_path" ]]; then
-        transcript_path="$(find_latest_transcript || true)"
-    fi
-
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
         session_id="$(basename "$transcript_path" .jsonl)"
     fi
@@ -572,8 +526,8 @@ review_gate_spawn_spec_review() {
                 shift 2
                 ;;
             -h|--help)
-                cat <<'USAGE'
-Usage: review-gate spawn-spec-review [options] <spec-path>
+                cat <<USAGE
+Usage: ${CLI_CMD} spawn-spec-review [options] <spec-path>
 
 Spawn reviewers for a feature specification file.
 
@@ -605,7 +559,7 @@ USAGE
     done
 
     if [[ -z "$spec_path" ]]; then
-        die "Spec path is required. Usage: review-gate spawn-spec-review <spec-path>"
+        die "Spec path is required. Usage: ${CLI_CMD} spawn-spec-review <spec-path>"
     fi
 
     if [[ ! -f "$spec_path" ]]; then
@@ -615,10 +569,6 @@ USAGE
     spec_path=$(realpath "$spec_path")
 
     # Resolve transcript and session ID if not provided
-    if [[ -z "$transcript_path" ]]; then
-        transcript_path="$(find_latest_transcript || true)"
-    fi
-
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
         session_id="$(basename "$transcript_path" .jsonl)"
     fi
@@ -692,8 +642,8 @@ review_gate_artifact_path() {
                 shift 2
                 ;;
             -h|--help)
-                cat <<'USAGE'
-Usage: review-gate artifact-path [--session-id <id>] [--transcript-path <path>]
+                cat <<USAGE
+Usage: ${CLI_CMD} artifact-path [--session-id <id>] [--transcript-path <path>]
 USAGE
                 return 0
                 ;;
@@ -743,8 +693,8 @@ review_gate_spawn() {
                 shift 2
                 ;;
             -h|--help)
-                cat <<'USAGE'
-Usage: review-gate spawn [--session-id <id>] [--transcript-path <path>] [artifact-path]
+                cat <<USAGE
+Usage: ${CLI_CMD} spawn [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
                 return 0
                 ;;
@@ -759,10 +709,6 @@ USAGE
                 ;;
         esac
     done
-
-    if [[ -z "$OWNER_TRANSCRIPT_PATH" ]]; then
-        OWNER_TRANSCRIPT_PATH="$(find_latest_transcript || true)"
-    fi
 
     if [[ -z "$OWNER_SESSION_ID" && -n "$OWNER_TRANSCRIPT_PATH" ]]; then
         OWNER_SESSION_ID="$(basename "$OWNER_TRANSCRIPT_PATH" .jsonl)"
@@ -831,7 +777,7 @@ USAGE
 
                     if [[ $age_seconds -lt 1800 ]]; then
                         echo "Review gate already active (status: $status, age: ${age_seconds}s)" >&2
-                        echo "Use review-gate resolve to complete the existing gate first." >&2
+                        echo "Use ${CLI_CMD} resolve to complete the existing gate first." >&2
                         exit 1
                     fi
                     # Stale, proceed to clean up
@@ -1293,7 +1239,7 @@ SCHEMA
 
 review_gate_resolve() {
     if [[ $# -lt 1 ]]; then
-        die "Usage: review-gate resolve <proceed|revise|abort>"
+        die "Usage: ${CLI_CMD} resolve <proceed|revise|abort>"
     fi
 
     local decision="$1"
@@ -1593,7 +1539,7 @@ review_gate_check() {
         fi
 
         log "review-gate: spawn failed"
-        output_block "Review gate error: failed to spawn reviewers. Run review-gate spawn manually to inspect output."
+        output_block "Review gate error: failed to spawn reviewers. Run ${CLI_CMD} spawn manually to inspect output."
     }
 
     # --- [AC6] Check for stale state (>30 min = 1800 seconds) ---
@@ -2333,8 +2279,8 @@ INSTRUCTIONS
 **Max iterations ($MAX_ITERATIONS) reached without consensus.**
 
 Please manually review and decide:
-- Run \`review-gate resolve proceed\` to accept anyway
-- Run \`review-gate resolve abort\` to discard"
+- Run \`${CLI_CMD} resolve proceed\` to accept anyway
+- Run \`${CLI_CMD} resolve abort\` to discard"
 
             output_block "$REASON"
             exit 0

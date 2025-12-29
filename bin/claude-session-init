@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# claude-session-init - SessionStart hook to capture session ID
+#
+# Reads session_id from hook JSON input and exports it via CLAUDE_ENV_FILE
+# so all subsequent bash commands have access to CLAUDE_SESSION_ID.
+
+set -euo pipefail
+
+# Read JSON input from stdin
+INPUT=$(cat)
+
+# Extract session_id and transcript_path
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+
+# CLAUDE_ENV_FILE is only available in SessionStart hooks
+if [[ -z "${CLAUDE_ENV_FILE:-}" ]]; then
+    exit 0
+fi
+
+# Write environment variables for this session
+{
+    echo "export CLAUDE_SESSION_ID=\"$SESSION_ID\""
+    echo "export CLAUDE_TRANSCRIPT_PATH=\"$TRANSCRIPT_PATH\""
+} >> "$CLAUDE_ENV_FILE"
