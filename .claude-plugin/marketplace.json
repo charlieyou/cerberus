@@ -1,14 +1,19 @@
 {
-  "name": "cerberus-marketplace",
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cerberus",
+  "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "owner": {
     "name": "charlieyou"
   },
   "plugins": [
     {
       "name": "cerberus",
-      "source": ".",
       "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
       "version": "1.0.0",
+      "author": {
+        "name": "charlieyou"
+      },
+      "source": ".",
       "license": "MIT",
       "repository": "https://github.com/charlieyou/cerberus"
     }
