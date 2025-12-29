@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/review-gate check",
-            "timeout": 60
+            "timeout": 600
           }
         ]
       }
