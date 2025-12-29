@@ -190,6 +190,15 @@ USAGE
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
 
+    # --- Archive existing reviews so previous iteration is visible in prompt ---
+    local reviews_dir="$review_dir/reviews"
+    local iteration_file="$review_dir/iteration.txt"
+    local iter=0
+    if [[ -f "$iteration_file" ]]; then
+        iter=$(cat "$iteration_file" 2>/dev/null || echo "0")
+    fi
+    archive_reviews "$review_dir" "$reviews_dir" "$iter" >/dev/null 2>&1 || true
+
     # --- Previous reviews (for iterative context) ---
     code_review_previous_reviews() {
         local review_dir="$1"
