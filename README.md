@@ -69,6 +69,10 @@ Review a feature specification:
 /cerberus:review-spec --agents codex,gemini path/to/spec.md
 ```
 
+### Agent Selection
+
+All review commands accept `--agents <list>` to run a subset of the available reviewers. Provide a comma-separated list such as `codex,gemini` or `claude`.
+
 ## How It Works
 
 ```
