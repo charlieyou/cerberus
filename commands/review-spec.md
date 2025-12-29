@@ -1,6 +1,6 @@
 ---
 description: Iterative spec review with external reviewers
-argument-hint: [--agents <list>] <path/to/spec.md>
+argument-hint: [--agents <list>] [--max-rounds <n>] <path/to/spec.md>
 ---
 
 # Spec Review (Iterative)
@@ -19,6 +19,12 @@ Example to run a subset of reviewers:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --agents codex,gemini path/to/spec.md
+```
+
+Limit the number of iterations:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --max-rounds 3 path/to/spec.md
 ```
 
 ## How It Works
@@ -51,5 +57,5 @@ Reviewers evaluate the spec for:
 
 The iterative review continues until:
 - All reviewers agree the spec passes (unanimous PASS)
-- Maximum iterations (5) are reached
+- Maximum iterations (default 5, configurable via --max-rounds) are reached
 - You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed` or `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort`

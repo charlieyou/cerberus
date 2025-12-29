@@ -1,6 +1,6 @@
 ---
 description: Iterative plan review with external reviewers
-argument-hint: [--agents <list>] [path/to/plan.md]
+argument-hint: [--agents <list>] [--max-rounds <n>] [path/to/plan.md]
 ---
 
 # Plan Review (Iterative)
@@ -21,6 +21,12 @@ Example to run a subset of reviewers:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --agents codex,gemini path/to/plan.md
+```
+
+Limit the number of iterations:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
 ```
 
 ## How It Works
@@ -52,5 +58,5 @@ Reviewers evaluate the plan for:
 
 The iterative review continues until:
 - All reviewers agree the plan passes (unanimous PASS)
-- Maximum iterations (5) are reached
+- Maximum iterations (default 5, configurable via --max-rounds) are reached
 - You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed` or `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort`

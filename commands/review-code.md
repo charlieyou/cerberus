@@ -1,6 +1,6 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--agents <list>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
+argument-hint: [--agents <list>] [--max-rounds <n>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
 ---
 
 # Code Review (Iterative)
@@ -16,6 +16,7 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code --commit abc123    # Review a specific commit
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
+/cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
 ```
 
 ## How It Works
@@ -50,7 +51,7 @@ When reviewers don't all agree:
 
 1. The stop hook presents issues from each reviewer
 2. Fix the code to address the feedback
-3. The review automatically re-runs (up to 5 iterations)
+3. The review automatically re-runs (default 5, configurable via --max-rounds)
 
 ## Completion
 

@@ -7,7 +7,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
-- **Automatic iteration**: Reviews loop until unanimous approval (up to 5 rounds)
+- **Automatic iteration**: Reviews loop until unanimous approval (default 5 rounds, configurable via `--max-rounds`)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan review**: Review implementation plans before execution
 - **Spec review**: Review feature specifications before implementation
@@ -69,6 +69,22 @@ Review a feature specification:
 /cerberus:review-spec --agents codex,gemini path/to/spec.md
 ```
 
+### Healthcheck & Architecture Review
+
+Generate multi-model drafts (Codex/Gemini/Claude), then synthesize into a single artifact:
+
+```
+/cerberus:healthcheck
+/cerberus:architecture-review
+```
+
+You can also run the generator directly:
+
+```
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=architecture-review
+```
+
 ### Agent Selection
 
 All review commands accept `--agents <list>` to run a subset of the available reviewers. Provide a comma-separated list such as `codex,gemini` or `claude`.
@@ -91,7 +107,7 @@ All review commands accept `--agents <list>` to run a subset of the available re
                                         ▼                    ▼
                         ┌───────────────────┐    ┌────────────────────┐
                         │   Auto-approve    │    │ Request revision   │
-                        │   Session stops   │    │ (loop up to 5x)    │
+                        │   Session stops   │    │ (loop default 5x)  │
                         └───────────────────┘    └────────────────────┘
 ```
 
@@ -100,7 +116,7 @@ All review commands accept `--agents <list>` to run a subset of the available re
 3. **Consensus**: Stop hook checks for unanimous PASS
 4. **Iterate**: If not all PASS, presents issues and blocks for revision
 5. **Repeat**: After changes, review automatically re-runs
-6. **Complete**: All PASS = session can stop; 5 iterations = manual decision
+6. **Complete**: All PASS = session can stop; default 5 iterations = manual decision (configurable via `--max-rounds`)
 
 ## Review Criteria
 
@@ -130,7 +146,7 @@ All review commands accept `--agents <list>` to run a subset of the available re
 
 ## Manual Override
 
-After max iterations (5), use manual resolution:
+After max iterations (default 5), use manual resolution:
 
 ```bash
 # Accept the current state and proceed

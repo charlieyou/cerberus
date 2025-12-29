@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Hook-specific logic for review-gate.
 review_gate_check() {
-    MAX_ITERATIONS=5
+    MAX_ITERATIONS_DEFAULT=5
+    MAX_ITERATIONS="${REVIEW_GATE_MAX_ROUNDS:-$MAX_ITERATIONS_DEFAULT}"
     MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     POLL_INTERVAL_SECONDS="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
 
@@ -134,6 +135,39 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract max-rounds from artifact frontmatter ---
+    extract_max_rounds() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *max-rounds: *\([0-9][0-9]*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    local state_max_rounds
+    state_max_rounds=""
+    if [[ -f "$STATE_FILE" ]]; then
+        state_max_rounds=$(jq -r '.config.max_rounds // empty' "$STATE_FILE" 2>/dev/null || echo "")
+        if [[ "$state_max_rounds" == "null" ]]; then
+            state_max_rounds=""
+        fi
+    fi
+    if [[ -n "$state_max_rounds" ]]; then
+        if [[ "$state_max_rounds" =~ ^[0-9]+$ ]] && [[ "$state_max_rounds" -ge 1 ]]; then
+            MAX_ITERATIONS="$state_max_rounds"
+        else
+            log "review-gate: invalid state max_rounds '$state_max_rounds' (using $MAX_ITERATIONS)"
+        fi
+    fi
+    local max_rounds
+    max_rounds=$(extract_max_rounds)
+    if [[ -n "$max_rounds" ]]; then
+        if [[ "$max_rounds" =~ ^[0-9]+$ ]] && [[ "$max_rounds" -ge 1 ]]; then
+            MAX_ITERATIONS="$max_rounds"
+        else
+            log "review-gate: invalid max-rounds '$max_rounds' (using $MAX_ITERATIONS)"
+        fi
+    fi
+    log "review-gate: max_iterations=$MAX_ITERATIONS"
+
     # --- Helper: Spawn reviewers for current artifact ---
     # Returns 0 on success (caller should proceed to polling), exits on error/resolved
     spawn_reviewers() {
@@ -148,6 +182,17 @@ review_gate_check() {
         if [[ -n "$agents_csv" ]]; then
             agents_arg=(--agents "$agents_csv")
             log "review-gate: using agents filter '$agents_csv'"
+        fi
+        local max_rounds
+        max_rounds=$(extract_max_rounds)
+        local -a max_rounds_arg=()
+        if [[ -n "$max_rounds" ]]; then
+            if [[ "$max_rounds" =~ ^[0-9]+$ ]] && [[ "$max_rounds" -ge 1 ]]; then
+                max_rounds_arg=(--max-rounds "$max_rounds")
+                log "review-gate: using max-rounds '$max_rounds'"
+            else
+                log "review-gate: invalid max-rounds '$max_rounds' (ignoring)"
+            fi
         fi
 
         # For code-review-iterative, re-fetch the diff to capture fixes
@@ -166,7 +211,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-               "$0" spawn-code-review "${agents_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
+               "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         # For plan-review-iterative, re-read the plan file to capture edits
@@ -180,7 +225,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-plan-review "${agents_arg[@]}" "$plan_path" >/dev/null 2>&1; then
+                   "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "$plan_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -190,7 +235,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -205,7 +250,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-spec-review "${agents_arg[@]}" "$spec_path" >/dev/null 2>&1; then
+                   "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "$spec_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -215,7 +260,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -225,7 +270,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
-               "$0" spawn "${agents_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+               "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         fi
