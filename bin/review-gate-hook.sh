@@ -760,7 +760,21 @@ INSTRUCTIONS
     if [[ "$CONSENSUS" == "auto_approve" ]]; then
         reset_iteration
         "$0" resolve proceed >&2 || true
-        output_allow
+        # Prompt Claude for summary before allowing stop
+        SUMMARY_PROMPT="$RESULTS
+
+---
+
+## Review Complete
+
+**All reviewers agree (PASS).**"
+        if [[ $CURRENT_ITERATION -gt 1 ]]; then
+            SUMMARY_PROMPT+=" (after $CURRENT_ITERATION iterations)"
+        fi
+        SUMMARY_PROMPT+="
+
+Please provide a brief summary of the review outcome, then you may stop."
+        output_block "$SUMMARY_PROMPT"
     else
         # Check iteration limit
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
@@ -769,11 +783,15 @@ INSTRUCTIONS
 
 ---
 
+## Max Iterations Reached
+
 **Max iterations ($MAX_ITERATIONS) reached without consensus.**
 
 Please manually review and decide:
 - Run \`${CLI_CMD} resolve proceed\` to accept anyway
-- Run \`${CLI_CMD} resolve abort\` to discard"
+- Run \`${CLI_CMD} resolve abort\` to discard
+
+After resolving, provide a brief summary of the review outcome."
 
             output_block "$REASON"
             exit 0
