@@ -301,26 +301,6 @@ review_gate_check() {
         log "review-gate: state file missing"
     fi
 
-    # --- [AC8] Unwrap review JSON (wrapper for lib function) ---
-
-    unwrap_review_json_logged() {
-        local json="$1"
-        if [[ -z "$json" ]]; then
-            return 1
-        fi
-
-        log "review-gate: unwrap review json (len=${#json})"
-
-        # Use shared unwrap function from lib
-        local result
-        if ! result=$(unwrap_review_json "$json"); then
-            return 1
-        fi
-
-        echo "$result"
-    }
-
-
     # --- Get/increment iteration count ---
     get_iteration() {
         if [[ -f "$ITERATION_FILE" ]]; then
