@@ -165,6 +165,7 @@ USAGE
         esac
     done
 
+    # Default to 3 rounds for code review
     if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
         max_rounds="3"
     fi
@@ -657,6 +658,11 @@ USAGE
                 ;;
         esac
     done
+
+    # Default to 3 rounds for spec review
+    if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
+        max_rounds="3"
+    fi
 
     validate_max_rounds "$max_rounds"
 

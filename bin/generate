@@ -256,7 +256,7 @@ review_gate_generate() {
         model_name=$(basename "$draft" .md | sed 's/draft-//')
         echo "---"
         echo ""
-        echo "## Draft $draft_num"
+        echo "## Draft $draft_num ($model_name)"
         echo ""
         cat "$draft"
         echo ""
