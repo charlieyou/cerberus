@@ -65,4 +65,27 @@ ${SPEC_CONTENT}
 - **NEEDS_WORK**: Use sparingly; only if issues block implementation but do not rise to FAIL.
 - **FAIL**: Any P0/P1 issues or spec is too vague, contradictory, or incomplete.
 
-If any guidance here conflicts with the generic output-format rules, follow these spec-review guidelines.
+## Output Format
+
+JSON only, no markdown code fences:
+{
+  "findings": [
+    {
+      "title": "[P1] <= 80 chars, imperative",
+      "body": "Markdown explaining why this is a problem",
+      "priority": 1,
+      "file_path": null,
+      "line_start": null,
+      "line_end": null
+    }
+  ],
+  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
+  "summary": "1-3 sentence explanation"
+}
+
+- PASS: No significant findings
+- FAIL: Blocking issues (P0/P1)
+- NEEDS_WORK: Non-blocking issues (P2/P3)
+- file_path, line_start, line_end: use null for spec reviews (not applicable)
+
+If any guidance here conflicts with these output format rules, follow the spec-review guidelines above.

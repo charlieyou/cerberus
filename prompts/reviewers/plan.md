@@ -57,3 +57,26 @@ ${PLAN_CONTENT}
 - **PASS**: Plan is complete, ordered correctly, and executable.
 - **NEEDS_WORK**: Plan has gaps but core approach is sound.
 - **FAIL**: Plan has blocking issues or is too incomplete to execute.
+
+## Output Format
+
+JSON only, no markdown code fences:
+{
+  "findings": [
+    {
+      "title": "[P1] <= 80 chars, imperative",
+      "body": "Markdown explaining why this is a problem",
+      "priority": 1,
+      "file_path": null,
+      "line_start": null,
+      "line_end": null
+    }
+  ],
+  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
+  "summary": "1-3 sentence explanation"
+}
+
+- PASS: No significant findings
+- FAIL: Blocking issues (P0/P1)
+- NEEDS_WORK: Non-blocking issues (P2/P3)
+- file_path, line_start, line_end: use null for plan reviews (not applicable)
