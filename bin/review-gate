@@ -63,7 +63,7 @@ Commands:
   spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until all reviewers pass.
 
-  wait --json [--timeout <sec>] [--session-key <key>]
+  wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
   resolve [--reason <text>] <proceed|revise|abort>
@@ -284,8 +284,8 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for code review
-    if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
+    # Default to 3 rounds for code review (CLI flag only)
+    if [[ -z "$max_rounds" ]]; then
         max_rounds="3"
     fi
 
@@ -668,8 +668,8 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for plan review
-    if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
+    # Default to 3 rounds for plan review (CLI flag only)
+    if [[ -z "$max_rounds" ]]; then
         max_rounds="3"
     fi
 
@@ -945,8 +945,8 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for spec review
-    if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
+    # Default to 3 rounds for spec review (CLI flag only)
+    if [[ -z "$max_rounds" ]]; then
         max_rounds="3"
     fi
 
@@ -1337,6 +1337,11 @@ USAGE
     fi
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
+
+    # Default to 3 rounds for generic spawn (CLI flag only)
+    if [[ -z "$max_rounds" ]]; then
+        max_rounds="3"
+    fi
 
     validate_max_rounds "$max_rounds"
 
@@ -1968,11 +1973,11 @@ review_gate_resolve() {
 
 review_gate_wait() {
     local json_mode="false"
-    local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
+    local timeout="600"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
-    local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+    local poll_interval="3"
     local session_key_from_arg="false"
     local session_id_from_arg="false"
 
@@ -1988,6 +1993,14 @@ review_gate_wait() {
                 ;;
             --timeout)
                 timeout="${2:-}"
+                shift 2
+                ;;
+            --poll-interval=*)
+                poll_interval="${1#*=}"
+                shift
+                ;;
+            --poll-interval)
+                poll_interval="${2:-}"
                 shift 2
                 ;;
             --session-key=*)
@@ -2011,7 +2024,7 @@ review_gate_wait() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} wait --json [--timeout <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
+Usage: ${CLI_CMD} wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
 USAGE
                 return 0
                 ;;
@@ -2047,11 +2060,8 @@ USAGE
         wait_error "Invalid --timeout '$timeout' (must be >= 0)"
     fi
 
-    if [[ -z "$poll_interval" || ! "$poll_interval" =~ ^[0-9]+$ ]]; then
-        poll_interval=3
-    fi
-    if [[ "$poll_interval" -lt 1 ]]; then
-        poll_interval=1
+    if [[ -z "$poll_interval" || ! "$poll_interval" =~ ^[0-9]+$ || "$poll_interval" -lt 1 ]]; then
+        wait_error "Invalid --poll-interval '$poll_interval' (must be >= 1)"
     fi
 
     if [[ "$session_id_from_arg" != "true" && -z "$session_id" && -n "$transcript_path" ]]; then

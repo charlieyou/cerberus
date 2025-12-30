@@ -179,7 +179,7 @@ Examples:
 
 **Convergence policy for specs:** reviewers are instructed to PASS when there are no P0/P1 issues, even if they list P2/P3 suggestions. This keeps spec reviews focused on blocking gaps rather than endless detail expansion. If you want stricter behavior, increase reviewer count or lower `--max-rounds` and use manual override.
 
-**Default max rounds:** 3 for all review types (unless overridden by `--max-rounds` or `REVIEW_GATE_MAX_ROUNDS`).
+**Default max rounds:** 3 for all review types (unless overridden by `--max-rounds`).
 
 **Author context example (recommended for spec reviews):**
 
@@ -219,7 +219,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort
 Machine-readable wait for external callers:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate wait --json --session-key <key> [--timeout 600]
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate wait --json --session-key <key> [--timeout 600] [--poll-interval 3]
 ```
 
 Exit codes: `0=PASS`, `2=FAIL/NEEDS_WORK or parse error`, `3=timeout`, `4=no_reviewers`, `5=internal error`.
@@ -235,11 +235,18 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 
 ### Environment Variables
 
+Stop hook defaults (used by `review-gate check` when the artifact/state does not specify a value; CLI commands use flags instead):
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REVIEW_GATE_MAX_ROUNDS` | `3` | Max review iterations before auto-resolve |
 | `REVIEW_GATE_MAX_WAIT_SECONDS` | `600` | Max time to wait for reviewers |
 | `REVIEW_GATE_POLL_INTERVAL_SECONDS` | `3` | Polling interval |
+
+Other environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `REVIEW_GATE_AUTHOR_CONTEXT` | `` | Inject author context into prompts |
 | `REVIEW_REPAIR_ENABLED` | `true` | Attempt JSON repair on reviewer parse failures |
 | `REVIEW_REPAIR_PROVIDER` | auto | Repair model provider (`claude`, `codex`, or `gemini`). `auto`/unset picks the first available (prefers Claude). |
