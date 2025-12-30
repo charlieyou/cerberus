@@ -1,5 +1,6 @@
 ---
 description: Architecture-focused review for high-leverage design improvements and refactors
+argument-hint: [--mode <fast|smart|max>]
 ---
 
 # Architecture Review (Multi-Agent Generator)
@@ -14,15 +15,18 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 
 ### 1. Spawn Generators
 
-Use the Bash tool to spawn architecture review generators:
+Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout based on mode:
+- `--mode fast`: 300000ms (5 minutes)
+- `--mode smart`: 600000ms (10 minutes)
+- `--mode max`: 900000ms (15 minutes)
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review $ARGUMENTS
 ```
 
-This spawns all available generators to independently analyze the codebase. Wait for the command to complete and capture the output containing all drafts.
+Defaults to `--mode smart` if not specified.
 
-Use `--mode fast|smart|max` to trade off speed vs depth.
+This spawns all available generators to independently analyze the codebase. Wait for the command to complete and capture the output containing all drafts.
 
 ### 2. Synthesize Drafts
 

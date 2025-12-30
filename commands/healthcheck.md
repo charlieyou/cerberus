@@ -1,5 +1,6 @@
 ---
 description: Code health check via multi-model generator and Cerberus gate
+argument-hint: [--mode <fast|smart|max>]
 ---
 
 # Code Health Check (AI-Generated Codebases)
@@ -8,15 +9,18 @@ This command runs a multi-model healthcheck where Codex, Gemini, and Claude (if 
 
 ## Step 1: Run Generators
 
-Use the Bash tool to run the generator command. This spawns all available generators in parallel:
+Use the Bash tool to run the generator command. This spawns all available generators in parallel. **IMPORTANT**: Set the Bash timeout based on mode:
+- `--mode fast`: 300000ms (5 minutes)
+- `--mode smart`: 600000ms (10 minutes)
+- `--mode max`: 900000ms (15 minutes)
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck $ARGUMENTS
 ```
 
-This will output drafts from each available model. Wait for it to complete (may take several minutes).
+Defaults to `--mode smart` if not specified.
 
-Use `--mode fast|smart|max` to trade off speed vs depth.
+This will output drafts from each available model. Wait for it to complete (may take several minutes).
 
 ## Step 2: Synthesize the Drafts
 

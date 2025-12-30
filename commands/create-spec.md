@@ -1,6 +1,6 @@
 ---
 description: Interview the user to produce a feature spec, then run multi-model generator and spec review gate
-argument-hint: <feature description>
+argument-hint: [--mode <fast|smart|max>] <feature description>
 ---
 
 # Create Spec (Interview + Multi-Model Generator)
@@ -96,15 +96,18 @@ cat >> "$PROMPT_TMP" <<'EOF'
 EOF
 ```
 
-Then spawn generators:
+Then spawn generators. **IMPORTANT**: Set the Bash timeout based on mode:
+- `--mode fast`: 300000ms (5 minutes)
+- `--mode smart`: 600000ms (10 minutes)
+- `--mode max`: 900000ms (15 minutes)
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-spec --mode smart --prompt-file "$PROMPT_TMP"
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-spec --prompt-file "$PROMPT_TMP" $ARGUMENTS
 ```
 
-Wait for the generator output containing all drafts.
+Defaults to `--mode smart` if not specified.
 
-Use `--mode fast|smart|max` to trade off speed vs depth.
+Wait for the generator output containing all drafts.
 
 ### Phase 5: Synthesize Drafts
 
