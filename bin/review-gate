@@ -195,6 +195,8 @@ review_gate_spawn_code_review() {
     local mode=""
     local context_file=""
     local focus_area=""
+    local -a positionals=()
+    local force_focus="false"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -269,23 +271,54 @@ Options:
   --base <branch>     Review changes from branch to HEAD
   --commit <sha>      Review a specific commit
   <range>             Review a commit range (e.g., main..feature)
+  [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
 Spawns reviewers to evaluate code changes. Claude fixes code until all reviewers pass.
 USAGE
                 return 0
                 ;;
+            --)
+                shift
+                force_focus="true"
+                if [[ $# -gt 0 ]]; then
+                    positionals+=("$@")
+                fi
+                break
+                ;;
             -*)
                 die "Unknown option '$1'"
                 ;;
             *)
-                # Treat as range
-                diff_mode="range"
-                diff_target="$1"
-                diff_args_str="$1"
+                positionals+=("$1")
                 shift
                 ;;
         esac
     done
+
+    if [[ ${#positionals[@]} -gt 0 ]]; then
+        if [[ "$force_focus" != "true" && "$diff_mode" == "--uncommitted" ]]; then
+            if [[ "${positionals[0]}" == *..* ]]; then
+                # Commit range like main..feature
+                diff_mode="range"
+                diff_target="${positionals[0]}"
+                diff_args_str="${positionals[0]}"
+                positionals=("${positionals[@]:1}")
+            elif git rev-parse --verify "${positionals[0]}^{commit}" >/dev/null 2>&1; then
+                # Valid git reference (branch, tag, or SHA)
+                diff_mode="--base"
+                diff_target="${positionals[0]}"
+                diff_args_str="--base ${positionals[0]}"
+                positionals=("${positionals[@]:1}")
+            fi
+        fi
+
+        if [[ ${#positionals[@]} -gt 0 ]]; then
+            if [[ -n "$focus_area" ]]; then
+                die "Focus provided both via --focus and positional arguments"
+            fi
+            focus_area="${positionals[*]}"
+        fi
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -594,6 +627,8 @@ review_gate_spawn_plan_review() {
     local mode=""
     local context_file=""
     local focus_area=""
+    local -a positionals=()
+    local force_focus="false"
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -664,6 +699,7 @@ Options:
   --focus <text>            Focus area to emphasize in the review
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
+  [--] <focus>             Optional focus text (or trailing text; -- forces focus)
 
 The reviewers will evaluate the plan for:
 - Completeness and correctness
@@ -674,18 +710,37 @@ USAGE
                 ;;
             --)
                 shift
+                force_focus="true"
+                if [[ $# -gt 0 ]]; then
+                    positionals+=("$@")
+                fi
                 break
                 ;;
             -*)
                 die "Unknown option '$1'"
                 ;;
             *)
-                plan_path="$1"
+                positionals+=("$1")
                 shift
-                break
                 ;;
         esac
     done
+
+    if [[ ${#positionals[@]} -gt 0 ]]; then
+        local first_arg="${positionals[0]}"
+        # Only treat as plan path if not forcing focus mode
+        if [[ "$force_focus" != "true" ]] && [[ -f "$first_arg" || "$first_arg" == /* || "$first_arg" == ./* || "$first_arg" == ../* || "$first_arg" == *"/"* || "$first_arg" == *.md ]]; then
+            plan_path="$first_arg"
+            positionals=("${positionals[@]:1}")
+        fi
+
+        if [[ ${#positionals[@]} -gt 0 ]]; then
+            if [[ -n "$focus_area" ]]; then
+                die "Focus provided both via --focus and positional arguments"
+            fi
+            focus_area="${positionals[*]}"
+        fi
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then

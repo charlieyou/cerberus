@@ -9,9 +9,11 @@ Spawn external reviewers (Codex, Gemini, Claude) to evaluate a plan file directl
 
 ## Usage
 
-**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
-- Flag arguments (pass through directly): `--agents`, `--max-rounds`, `--mode`, plan path
-- Quoted focus area (convert to `--focus` flag)
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, an optional plan path, plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review $ARGUMENTS
+```
 
 Examples:
 ```bash
@@ -29,9 +31,10 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --agents codex,gemini pa
 
 # User: /review-plan --max-rounds 3 path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
-```
 
-**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
+# User: /review-plan plan.md focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review plan.md focus on error handling
+```
 
 If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
 

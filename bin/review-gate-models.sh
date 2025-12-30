@@ -84,6 +84,24 @@ resolve_intelligence_mode() {
     CODEX_MODEL_EFFECTIVE="${CODEX_MODEL:-gpt-5.2-codex}"
 }
 
+# Read-only tool policy for external CLIs.
+GEMINI_READONLY_SETTINGS_PATH="${GEMINI_READONLY_SETTINGS_PATH:-$PLUGIN_ROOT/config/gemini-readonly-settings.json}"
+CLAUDE_READONLY_ALLOWED_TOOLS="${CLAUDE_READONLY_ALLOWED_TOOLS:-Read Glob Grep LS}"
+CLAUDE_READONLY_DISALLOWED_TOOLS="${CLAUDE_READONLY_DISALLOWED_TOOLS:-Bash Edit Write WebFetch WebSearch}"
+
+gemini_readonly_settings_path() {
+    local settings_path="${GEMINI_READONLY_SETTINGS_PATH:-}"
+    if [[ -z "$settings_path" ]]; then
+        rg_log "review-gate: GEMINI_READONLY_SETTINGS_PATH not set"
+        return 1
+    fi
+    if [[ ! -f "$settings_path" ]]; then
+        rg_log "review-gate: gemini read-only settings missing at $settings_path"
+        return 1
+    fi
+    echo "$settings_path"
+}
+
 default_review_schema() {
     cat <<'SCHEMA'
 {
@@ -214,7 +232,14 @@ repair_review_output() {
     local repaired=""
     case "$provider" in
         claude)
-            if claude -p --model "$model" --output-format json < "$prompt_file" > "$out_file" 2>&1; then
+            local -a claude_allowed_tools
+            local -a claude_disallowed_tools
+            read -r -a claude_allowed_tools <<< "$CLAUDE_READONLY_ALLOWED_TOOLS"
+            read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
+            if claude -p --model "$model" --output-format json \
+                --allowedTools "${claude_allowed_tools[@]}" \
+                --disallowedTools "${claude_disallowed_tools[@]}" \
+                < "$prompt_file" > "$out_file" 2>&1; then
                 local result_str
                 result_str=$(jq -r '.result // empty' "$out_file" 2>/dev/null || true)
                 if [[ -n "$result_str" ]]; then
@@ -255,16 +280,22 @@ repair_review_output() {
             [[ -n "$temp_schema" ]] && rm -f "$temp_schema"
             ;;
         gemini)
-            if gemini -m "$model" -o json < "$prompt_file" > "$out_file" 2>&1; then
-                repaired=$(tail -n +2 "$out_file" | jq -c '.' 2>/dev/null || true)
-                if [[ -z "$repaired" ]]; then
-                    repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
-                fi
-                if [[ -n "$repaired" ]]; then
-                    repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
-                fi
+            local gemini_settings=""
+            if ! gemini_settings=$(gemini_readonly_settings_path); then
+                rg_log "review-gate: repair_json gemini missing read-only settings"
             else
-                rg_log "review-gate: repair_json gemini failed (model=$model)"
+                if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
+                    gemini -m "$model" -o json < "$prompt_file" > "$out_file" 2>&1; then
+                    repaired=$(tail -n +2 "$out_file" | jq -c '.' 2>/dev/null || true)
+                    if [[ -z "$repaired" ]]; then
+                        repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
+                    fi
+                    if [[ -n "$repaired" ]]; then
+                        repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
+                    fi
+                else
+                    rg_log "review-gate: repair_json gemini failed (model=$model)"
+                fi
             fi
             ;;
     esac
@@ -527,6 +558,12 @@ spawn_reviewer() {
 
     case "$name" in
         gemini)
+            local gemini_settings=""
+            if ! gemini_settings=$(gemini_readonly_settings_path); then
+                echo "Skipping gemini: read-only settings missing" >&2
+                return 1
+            fi
+            GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
             REVIEW_OUT="$output_file" \
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
@@ -556,13 +593,20 @@ spawn_reviewer() {
             ' >/dev/null 2>&1 &
             ;;
         claude)
+            CLAUDE_ALLOWED_TOOLS="$CLAUDE_READONLY_ALLOWED_TOOLS" \
+            CLAUDE_DISALLOWED_TOOLS="$CLAUDE_READONLY_DISALLOWED_TOOLS" \
             REVIEW_OUT="$output_file" \
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_MODEL="$claude_model" \
             nohup setsid bash -c '
-                if claude -p --model "$REVIEW_MODEL" --output-format json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                read -r -a claude_allowed_tools <<< "$CLAUDE_ALLOWED_TOOLS"
+                read -r -a claude_disallowed_tools <<< "$CLAUDE_DISALLOWED_TOOLS"
+                if claude -p --model "$REVIEW_MODEL" --output-format json \
+                    --allowedTools "${claude_allowed_tools[@]}" \
+                    --disallowedTools "${claude_disallowed_tools[@]}" \
+                    < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"

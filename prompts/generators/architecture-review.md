@@ -54,65 +54,11 @@ Include the hotspot inventory in the **Method** block (as a single bullet).
 8. If you include code, quote 3 lines or fewer.
 9. Call out the concrete scenario that makes the issue matter.
 
-## Available Analysis Tools
-
-Use these tools to **rank** hotspots and trace dependencies before deeper analysis.
-
-### Complexity & Size (lizard)
-
-Run `lizard` via `uvx` (or directly if installed) as a first-pass complexity tool. Pick your first 3-5 deep dives from its output.
-
-```bash
-uvx lizard -C 15 -L 80 -w src | head -n 20
-```
-
-Thresholds (tune to language):
-- Cyclomatic complexity >= **15**
-- Function length >= **80** lines
-- File length >= **500** lines
-
-If lizard is unavailable, at least capture the largest files by LOC:
-
-```bash
-rg --files -g '*.{ts,js,py,go,java,kt,rb,cs}' | xargs wc -l | sort -nr | head -n 20
-```
-
-### Dependency Exploration (Python - grimp)
-
-For Python repos, use the `/grimp-architecture` skill to explore import graphs. Scripts are at `~/.claude/skills/grimp-architecture/scripts/` with a pre-configured venv.
-
-1. **Structure + fan-in/out**: identify modules that import too much or are imported by too many
-   ```bash
-   ~/.claude/skills/grimp-architecture/.venv/bin/python \
-     ~/.claude/skills/grimp-architecture/scripts/explore.py mypackage
-   ```
-
-2. **Shortest-chain queries**: confirm how a boundary is being crossed
-   ```bash
-   ~/.claude/skills/grimp-architecture/.venv/bin/python \
-     ~/.claude/skills/grimp-architecture/scripts/path.py mypackage.validation mypackage.orchestrator
-   ```
-
-3. **Layer check** (if the repo defines layers or you can state a tentative layering):
-   ```bash
-   ~/.claude/skills/grimp-architecture/.venv/bin/python \
-     ~/.claude/skills/grimp-architecture/scripts/layers.py \
-     --layer mypackage.api --layer mypackage.domain --layer mypackage.infra
-   ```
-
-Replace `mypackage` with the importable top-level package name. For `src/` layouts, use `PYTHONPATH=src` or ensure the project is editable-installed.
-
-### Duplicate Code (optional)
-
-```bash
-npx jscpd --min-lines 30 --min-tokens 200 .
-```
-
 ## Traversal Strategy
 
 1. **Map boundaries** (quick pass): entry points, public APIs, services, and core domains
-2. **Trace dependency flow**: use grimp `explore.py` to understand import structure, then `path.py` to trace specific dependency chains
-3. **Run hotspot analysis**: use `lizard` to rank candidates before deep-diving
+2. **Trace dependency flow**: understand import structure and boundary crossings before deep dives
+3. **Run hotspot analysis**: use complexity/size signals to rank candidates before deep-diving
    - Target: cyclomatic complexity >= 15, function length >= 80 lines, file length >= 500 lines
 4. **Validate reachability**: ensure hotspots are on real execution paths; skip dead code
 

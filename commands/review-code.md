@@ -33,9 +33,11 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 
 Use the Bash tool to spawn the code review.
 
-**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
-- Flag arguments (pass through directly): `--agents`, `--max-rounds`, `--mode`, `--uncommitted`, `--base`, `--commit`, range
-- Quoted focus area (convert to `--focus` flag)
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, diff selectors (`--uncommitted`, `--base`, `--commit`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
+```
 
 Examples:
 ```bash
@@ -47,9 +49,10 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --focus "focus on securi
 
 # User: /review-code --base main "check error handling"
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --base main --focus "check error handling"
-```
 
-**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
+# User: /review-code main..feature focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review main..feature focus on error handling
+```
 
 ## Review Criteria
 

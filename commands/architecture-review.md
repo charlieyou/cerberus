@@ -13,36 +13,70 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 
 ## Workflow
 
-### 1. Spawn Generators
+### 1. Run Analysis Tools (Outside the Model)
+
+Run any analysis tooling directly in Bash, then pass the outputs into the generator via `--analysis-file`. This keeps the model read-only while still benefiting from tool data.
+
+Example (adjust paths/package names as needed):
+
+```bash
+ANALYSIS_TMP=$(mktemp)
+
+{
+  echo "## lizard"
+  if command -v lizard >/dev/null 2>&1; then
+    lizard -C 15 -L 80 -w src | head -n 50
+  else
+    echo "lizard not available"
+  fi
+  echo ""
+  echo "## grimp"
+  if [[ -x "$HOME/.claude/skills/grimp-architecture/.venv/bin/python" ]]; then
+    PKG="mypackage"
+    $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
+      $HOME/.claude/skills/grimp-architecture/scripts/explore.py "$PKG" || true
+  else
+    echo "grimp not available"
+  fi
+} > "$ANALYSIS_TMP"
+```
+
+You can add more tools (e.g., jscpd) by appending sections to the same file.
+
+### 2. Spawn Generators
 
 Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout based on mode:
 - `--mode fast`: 300000ms (5 minutes)
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
-- `--mode <level>` flag (pass through directly)
-- Quoted focus area (convert to `--focus` flag)
+Pass `$ARGUMENTS` directly. The generator accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+If you skip the analysis step, omit `--analysis-file`.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
+```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --focus "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode max --focus "review the API layer"
-```
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode max --focus "review the API layer"
 
-**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
+# User: /architecture-review --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast focus on error handling
+```
 
 Defaults to `--mode smart` if not specified.
 
 This spawns all available generators to independently analyze the codebase. Wait for the command to complete and capture the output containing all drafts.
 
-### 2. Synthesize Drafts
+### 3. Synthesize Drafts
 
 The generator output contains drafts from multiple models. Synthesize them into a single coherent architecture review by:
 
@@ -51,7 +85,7 @@ The generator output contains drafts from multiple models. Synthesize them into 
 3. **Deduplicate similar issues** - merge overlapping findings into single well-documented issues
 4. **Calibrate severity** - adjust severity levels based on aggregate evidence
 
-### 3. Produce Final Review
+### 4. Produce Final Review
 
 Create a unified architecture review artifact following the output format below.
 

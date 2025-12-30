@@ -26,6 +26,8 @@ Options:
   --prompt-file <path>  Path to custom prompt file
   --prompt <text>       Inline prompt text (replaces base prompt)
   --focus <text>        Focus area to append to base prompt
+  --analysis-file <path>  Append analysis output from a file (repeatable)
+  [--] <focus>          Optional focus text (or trailing text; -- forces focus)
 USAGE
 }
 
@@ -42,6 +44,8 @@ review_gate_generate() {
     local prompt_inline=""
     local focus_area=""
     local mode=""
+    local -a extra_args=()
+    local -a analysis_files=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -85,15 +89,41 @@ review_gate_generate() {
                 focus_area="${2:-}"
                 shift 2
                 ;;
+            --analysis-file=*)
+                analysis_files+=("${1#*=}")
+                shift
+                ;;
+            --analysis-file)
+                analysis_files+=("${2:-}")
+                shift 2
+                ;;
             -h|--help)
                 usage
                 return 0
                 ;;
-            *)
+            --)
+                shift
+                if [[ $# -gt 0 ]]; then
+                    extra_args+=("$@")
+                fi
+                break
+                ;;
+            -*)
                 die "Unknown option '$1'"
+                ;;
+            *)
+                extra_args+=("$1")
+                shift
                 ;;
         esac
     done
+
+    if [[ ${#extra_args[@]} -gt 0 ]]; then
+        if [[ -n "$focus_area" ]]; then
+            die "Focus provided both via --focus and positional arguments"
+        fi
+        focus_area="${extra_args[*]}"
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -120,6 +150,21 @@ review_gate_generate() {
         else
             die "No prompt found for type '$review_type' at $prompt_path"
         fi
+    fi
+
+    if [[ ${#analysis_files[@]} -gt 0 ]]; then
+        local analysis_block=$'## Pre-run Analysis Outputs\n'
+        for analysis_file in "${analysis_files[@]}"; do
+            if [[ -z "$analysis_file" ]]; then
+                die "Analysis file path cannot be empty"
+            fi
+            if [[ ! -f "$analysis_file" ]]; then
+                die "Analysis file not found: $analysis_file"
+            fi
+            analysis_block+=$'\n'"### $(basename "$analysis_file")"$'\n'
+            analysis_block+="$(cat "$analysis_file")"$'\n'
+        done
+        prompt_content+=$'\n\n'"$analysis_block"
     fi
 
     # Inject focus area after ## Input section if provided
@@ -186,18 +231,26 @@ review_gate_generate() {
         local pid_codex=""
     fi
 
-    # Spawn Gemini (yolo for auto tool approval, prompt enforces read-only)
+    # Spawn Gemini (read-only tools via settings file)
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     if command -v gemini >/dev/null 2>&1; then
-        echo "Spawning Gemini generator (model: $gemini_model)..." >&2
-        (
-            if gemini -m "$gemini_model" --yolo -o text "$prompt_content" > "$gemini_draft" 2>&1; then
-                touch "$gemini_done"
-            else
-                touch "$gemini_failed"
-            fi
-        ) &
-        local pid_gemini=$!
+        local gemini_settings=""
+        if gemini_settings=$(gemini_readonly_settings_path); then
+            echo "Spawning Gemini generator (model: $gemini_model)..." >&2
+            (
+                if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
+                    gemini -m "$gemini_model" -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                    touch "$gemini_done"
+                else
+                    touch "$gemini_failed"
+                fi
+            ) &
+            local pid_gemini=$!
+        else
+            echo "Warning: gemini read-only settings missing, skipping" >&2
+            touch "$gemini_failed"
+            local pid_gemini=""
+        fi
     else
         echo "Warning: gemini not found, skipping" >&2
         touch "$gemini_failed"
@@ -207,9 +260,16 @@ review_gate_generate() {
     # Spawn Claude (print mode, no interaction, stdin for prompt)
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
     if command -v claude >/dev/null 2>&1; then
+        local -a claude_allowed_tools
+        local -a claude_disallowed_tools
+        read -r -a claude_allowed_tools <<< "$CLAUDE_READONLY_ALLOWED_TOOLS"
+        read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
         echo "Spawning Claude generator (model: $claude_model)..." >&2
         (
-            if echo "$prompt_content" | claude -p --model "$claude_model" > "$claude_draft" 2>&1; then
+            if echo "$prompt_content" | claude -p --model "$claude_model" \
+                --allowedTools "${claude_allowed_tools[@]}" \
+                --disallowedTools "${claude_disallowed_tools[@]}" \
+                > "$claude_draft" 2>&1; then
                 touch "$claude_done"
             else
                 touch "$claude_failed"

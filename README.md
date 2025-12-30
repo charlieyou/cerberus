@@ -25,6 +25,14 @@ You need the following CLI tools installed:
 | `gemini` | Google Gemini reviewer | [Gemini CLI](https://ai.google.dev/gemini-api/docs/get-started/cli) |
 | `jq` | JSON processing | `apt install jq` / `brew install jq` |
 
+Verified CLI versions (December 30, 2025):
+
+| Tool | Version |
+|------|---------|
+| `codex` | `codex-cli 0.77.0` |
+| `gemini` | `0.22.4` |
+| `claude` | `2.0.76 (Claude Code)` |
+
 Missing reviewers are skipped with a warning—you can run with just one or two.
 
 ### Install Plugin

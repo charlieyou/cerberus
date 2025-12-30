@@ -1,0 +1,29 @@
+{
+  "tools": {
+    "allowed": [
+      "LSTool",
+      "ReadFileTool",
+      "ReadManyFilesTool",
+      "GrepTool",
+      "GlobTool"
+    ],
+    "core": [
+      "LSTool",
+      "ReadFileTool",
+      "ReadManyFilesTool",
+      "GrepTool",
+      "GlobTool"
+    ],
+    "exclude": [
+      "ShellTool",
+      "WriteFileTool",
+      "EditTool",
+      "WebFetchTool",
+      "WebSearchTool",
+      "MemoryTool"
+    ]
+  },
+  "mcp": {
+    "allowed": []
+  }
+}

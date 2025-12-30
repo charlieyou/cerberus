@@ -14,9 +14,11 @@ Use the Bash tool to run the generator command. This spawns all available genera
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
-- `--mode <level>` flag (pass through directly)
-- Quoted focus area (convert to `--focus` flag)
+Pass `$ARGUMENTS` directly. The generator accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck $ARGUMENTS
+```
 
 Examples:
 ```bash
@@ -28,9 +30,10 @@ ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --focus "focus on the API 
 
 # User: /healthcheck --mode max "review error handling"
 ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode max --focus "review error handling"
-```
 
-**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
+# User: /healthcheck --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode fast focus on error handling
+```
 
 Defaults to `--mode smart` if not specified.
 
