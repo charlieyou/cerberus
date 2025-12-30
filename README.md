@@ -179,7 +179,7 @@ Examples:
 
 **Convergence policy for specs:** reviewers are instructed to PASS when there are no P0/P1 issues, even if they list P2/P3 suggestions. This keeps spec reviews focused on blocking gaps rather than endless detail expansion. If you want stricter behavior, increase reviewer count or lower `--max-rounds` and use manual override.
 
-**Default max rounds:** 3 for all review types (unless overridden by `--max-rounds`).
+**Default max rounds:** 3 for all review types (overridable via `--max-rounds` or `REVIEW_GATE_MAX_ROUNDS`).
 
 **Author context example (recommended for spec reviews):**
 
@@ -235,7 +235,7 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 
 ### Environment Variables
 
-Stop hook defaults (used by `review-gate check` when the artifact/state does not specify a value; CLI commands use flags instead):
+Review defaults (precedence: CLI flag > env var > hardcoded default):
 
 | Variable | Default | Description |
 |----------|---------|-------------|

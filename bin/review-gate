@@ -284,9 +284,9 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for code review (CLI flag only)
+    # Default max_rounds: CLI flag > env var > hardcoded 3
     if [[ -z "$max_rounds" ]]; then
-        max_rounds="3"
+        max_rounds="${REVIEW_GATE_MAX_ROUNDS:-3}"
     fi
 
     validate_max_rounds "$max_rounds"
@@ -668,9 +668,9 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for plan review (CLI flag only)
+    # Default max_rounds: CLI flag > env var > hardcoded 3
     if [[ -z "$max_rounds" ]]; then
-        max_rounds="3"
+        max_rounds="${REVIEW_GATE_MAX_ROUNDS:-3}"
     fi
 
     validate_max_rounds "$max_rounds"
@@ -945,9 +945,9 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for spec review (CLI flag only)
+    # Default max_rounds: CLI flag > env var > hardcoded 3
     if [[ -z "$max_rounds" ]]; then
-        max_rounds="3"
+        max_rounds="${REVIEW_GATE_MAX_ROUNDS:-3}"
     fi
 
     validate_max_rounds "$max_rounds"
@@ -1338,9 +1338,9 @@ USAGE
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Default to 3 rounds for generic spawn (CLI flag only)
+    # Default max_rounds: CLI flag > env var > hardcoded 3
     if [[ -z "$max_rounds" ]]; then
-        max_rounds="3"
+        max_rounds="${REVIEW_GATE_MAX_ROUNDS:-3}"
     fi
 
     validate_max_rounds "$max_rounds"
@@ -1973,11 +1973,11 @@ review_gate_resolve() {
 
 review_gate_wait() {
     local json_mode="false"
-    local timeout="600"
+    local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
-    local poll_interval="3"
+    local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
     local session_key_from_arg="false"
     local session_id_from_arg="false"
 
