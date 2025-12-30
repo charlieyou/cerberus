@@ -11,6 +11,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan review**: Review implementation plans before execution
 - **Spec review**: Review feature specifications before implementation
+- **Spec creation**: Interview + generator flow to draft specs before review
 
 ## Installation
 
@@ -67,6 +68,20 @@ Review a feature specification:
 ```
 /cerberus:review-spec path/to/spec.md             # Review a feature spec
 /cerberus:review-spec --agents codex,gemini path/to/spec.md
+```
+
+### Create Spec (Generator)
+
+Interview the user, run multi-model generators, synthesize a spec, then run the spec review gate:
+
+```
+/cerberus:create-spec
+```
+
+You can also run the generator directly with a custom prompt file that includes your context:
+
+```
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-spec --prompt-file path/to/prompt.md
 ```
 
 ### Healthcheck & Architecture Review
@@ -180,7 +195,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context --clear
 
 ## Manual Override
 
-After max iterations (default 5), use manual resolution:
+When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution only if you want to override that outcome (e.g. abort instead of proceed):
 
 ```bash
 # Accept the current state and proceed
