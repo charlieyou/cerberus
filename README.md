@@ -144,6 +144,20 @@ All review commands accept `--agents <list>` to run a subset of the available re
 - **Actionability** - Could a developer implement without clarification?
 - **Edge Cases** - Are error paths addressed?
 
+**Convergence policy for specs:** reviewers are instructed to PASS when there are no P0/P1 issues, even if they list P2/P3 suggestions. This keeps spec reviews focused on blocking gaps rather than endless detail expansion. If you want stricter behavior, increase reviewer count or lower `--max-rounds` and use manual override.
+
+**Author context example (recommended for spec reviews):**
+
+```
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context "Resolved: output format, CLI arg limits. Scope: MVP only. Only flag new/unresolved P0/P1 issues; list P2/P3 as suggestions."
+```
+
+Clear it when you're done:
+
+```
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context --clear
+```
+
 ## Manual Override
 
 After max iterations (default 5), use manual resolution:
