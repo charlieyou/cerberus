@@ -12,3 +12,7 @@
    - Distinguish "reviewer failed" from "reviewer returned unparseable output"
 
 * plan generation mode
+
+* spawns should not exit immediately
+
+* code review flag to not fix the code, iterate on the review
