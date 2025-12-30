@@ -729,7 +729,9 @@ USAGE
     if [[ ${#positionals[@]} -gt 0 ]]; then
         local first_arg="${positionals[0]}"
         # Only treat as plan path if not forcing focus mode
-        if [[ "$force_focus" != "true" ]] && [[ -f "$first_arg" || "$first_arg" == /* || "$first_arg" == ./* || "$first_arg" == ../* || "$first_arg" == *"/"* || "$first_arg" == *.md ]]; then
+        # Only treat as plan path if it exists as a file, or looks like an explicit path prefix
+        # Note: *"/"* was removed because focus text like "check API/endpoint" would be misinterpreted
+        if [[ "$force_focus" != "true" ]] && [[ -f "$first_arg" || "$first_arg" == /* || "$first_arg" == ./* || "$first_arg" == ../* || "$first_arg" == *.md ]]; then
             plan_path="$first_arg"
             positionals=("${positionals[@]:1}")
         fi
