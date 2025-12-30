@@ -1,6 +1,6 @@
 ---
 description: Iterative plan review with external reviewers
-argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [path/to/plan.md]
+argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [path/to/plan.md] ["<focus area>"]
 ---
 
 # Plan Review (Iterative)
@@ -9,31 +9,31 @@ Spawn external reviewers (Codex, Gemini, Claude) to evaluate a plan file directl
 
 ## Usage
 
-Run the spawn command with the plan path (or use session plan if none provided):
+**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
+- Flag arguments (pass through directly): `--agents`, `--max-rounds`, `--mode`, plan path
+- Quoted focus area (convert to `--focus` flag)
 
+Examples:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review $ARGUMENTS
-```
+# User: /review-plan path/to/plan.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review path/to/plan.md
 
-If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
+# User: /review-plan "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --focus "focus on error handling"
 
-Example to run a subset of reviewers:
+# User: /review-plan --mode max plan.md "check dependencies"
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --mode max --focus "check dependencies" plan.md
 
-```bash
+# User: /review-plan --agents codex,gemini path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --agents codex,gemini path/to/plan.md
-```
 
-Limit the number of iterations:
-
-```bash
+# User: /review-plan --max-rounds 3 path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
 ```
 
-Choose an intelligence mode:
+**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
 
-```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --mode max path/to/plan.md
-```
+If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
 
 ## How It Works
 

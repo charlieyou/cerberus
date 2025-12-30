@@ -1,6 +1,6 @@
 ---
 description: Architecture-focused review for high-leverage design improvements and refactors
-argument-hint: [--mode <fast|smart|max>]
+argument-hint: [--mode <fast|smart|max>] ["<focus area>"]
 ---
 
 # Architecture Review (Multi-Agent Generator)
@@ -20,9 +20,23 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
+**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
+- `--mode <level>` flag (pass through directly)
+- Quoted focus area (convert to `--focus` flag)
+
+Examples:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review $ARGUMENTS
+# User: /architecture-review --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode fast
+
+# User: /architecture-review "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --focus "focus on error handling"
+
+# User: /architecture-review --mode max "review the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode max --focus "review the API layer"
 ```
+
+**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
 
 Defaults to `--mode smart` if not specified.
 

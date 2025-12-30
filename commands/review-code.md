@@ -1,6 +1,6 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
+argument-hint: [--uncommitted | --base <branch> | --commit <sha> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] ["<focus area>"]
 ---
 
 # Code Review (Iterative)
@@ -18,6 +18,7 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
 /cerberus:review-code --mode max         # Use max intelligence mode
+/cerberus:review-code "focus on error handling"  # Focus review on specific area
 ```
 
 ## How It Works
@@ -30,11 +31,25 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 
 ## Run the Review
 
-Use the Bash tool to spawn the code review:
+Use the Bash tool to spawn the code review.
 
+**Parsing arguments**: The `$ARGUMENTS` variable contains the raw user input. You must parse it to extract:
+- Flag arguments (pass through directly): `--agents`, `--max-rounds`, `--mode`, `--uncommitted`, `--base`, `--commit`, range
+- Quoted focus area (convert to `--focus` flag)
+
+Examples:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
+# User: /review-code --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --mode fast
+
+# User: /review-code "focus on security"
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --focus "focus on security"
+
+# User: /review-code --base main "check error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --base main --focus "check error handling"
 ```
+
+**Do not** pass `$ARGUMENTS` directly—extract the components and construct the command as shown above.
 
 ## Review Criteria
 

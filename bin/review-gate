@@ -51,11 +51,11 @@ Commands:
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, <range>
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     all reviewers pass.
@@ -194,6 +194,7 @@ review_gate_spawn_code_review() {
     local max_rounds=""
     local mode=""
     local context_file=""
+    local focus_area=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -229,6 +230,14 @@ review_gate_spawn_code_review() {
                 context_file="${2:-}"
                 shift 2
                 ;;
+            --focus=*)
+                focus_area="${1#*=}"
+                shift
+                ;;
+            --focus)
+                focus_area="${2:-}"
+                shift 2
+                ;;
             --uncommitted)
                 diff_mode="--uncommitted"
                 diff_args_str="--uncommitted"
@@ -255,6 +264,7 @@ Options:
   --max-rounds <n>     Maximum review iterations before manual resolution
   --mode <level>       Intelligence mode: fast, smart, max
   --context-file <path> Inject author context from file into the prompt
+  --focus <text>       Focus area to emphasize in the review
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha>      Review a specific commit
@@ -487,6 +497,12 @@ USAGE
         fi
         review_context+=$'## Author Context\nUse these clarifications when evaluating the changes and prior feedback.\n\n'"$author_context"
     fi
+    if [[ -n "$focus_area" ]]; then
+        if [[ -n "$review_context" ]]; then
+            review_context+=$'\n'
+        fi
+        review_context+=$'## Focus Area\nPay special attention to the following when reviewing:\n\n'"$focus_area"
+    fi
 
     if [[ -n "$review_context" ]]; then
         local context_tmp="${review_dir}/review_context.tmp"
@@ -577,6 +593,7 @@ review_gate_spawn_plan_review() {
     local max_rounds=""
     local mode=""
     local context_file=""
+    local focus_area=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -616,6 +633,14 @@ review_gate_spawn_plan_review() {
                 context_file="${2:-}"
                 shift 2
                 ;;
+            --focus=*)
+                focus_area="${1#*=}"
+                shift
+                ;;
+            --focus)
+                focus_area="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -636,6 +661,7 @@ Options:
   --max-rounds <n>          Maximum review iterations before manual resolution
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
+  --focus <text>            Focus area to emphasize in the review
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -798,6 +824,11 @@ JSON only, no markdown code fences:
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)"
+    fi
+
+    # --- Inject focus area if provided ---
+    if [[ -n "$focus_area" ]]; then
+        prompt_content+=$'\n\n## Focus Area\nPay special attention to the following when reviewing:\n\n'"$focus_area"
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
