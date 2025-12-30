@@ -35,6 +35,7 @@ Perform a thorough code health analysis of this codebase. Focus on finding real 
 2. **Follow the dependency graph** from entry points to understand what's actually used
 3. **Find hotspots**: large files (>400 lines), utils/helpers directories, files with TODO/FIXME comments
 4. **Trace reachability**: code not reachable from entry points = dead code candidate
+5. **Trace value flow**: For config/options, follow them from parsing to where they affect behavior. If a value is captured but never influences a branch or output, it's semantic dead code.
 
 ## Categories to Analyze
 
@@ -63,6 +64,22 @@ Perform a thorough code health analysis of this codebase. Focus on finding real 
 - Stale TODOs
 - Build artifacts in source control
 
+### Behavioral Inconsistencies
+- Same operation implemented differently across functions (e.g., different fallback chains)
+- Similar commands with inconsistent parameter handling
+- Environment variable usage that differs between related code paths
+
+### Semantic Redundancy
+- Values that are set but never branched on
+- Parameters/options that have no functional difference
+- Switch cases that all do the same thing
+- Enums/constants that aren't distinguished in behavior
+
+### API Symmetry
+- Related commands should have consistent behavior
+- If function A falls back to X, similar function B should too
+- Trace a value from input to where it affects output - if it doesn't, flag it
+
 ## Priority Levels
 
 - [P0] - Critical. Broken functionality or security issue.
@@ -77,6 +94,14 @@ Perform a thorough code health analysis of this codebase. Focus on finding real 
 - "Could be better" without concrete improvement
 - Issues requiring significant refactoring effort
 - Pre-existing issues not worth prioritizing now
+
+## Breaking Changes
+
+Breaking changes to external APIs should only be flagged as P0/P1 if:
+- There is a caller in the same codebase that would break
+- The change is clearly unintentional (e.g., typo, copy-paste error)
+
+Otherwise, treat intentional API simplification as informational (P2/P3). The author may be deliberately removing unused options or consolidating behavior.
 
 ## Output
 

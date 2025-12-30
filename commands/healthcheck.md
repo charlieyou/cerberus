@@ -48,6 +48,11 @@ After receiving the generator output, synthesize the drafts into a single cohere
 3. **Deduplicate** - Merge similar issues into single entries
 4. **Structure the output** - Follow the format below
 
+**You may ignore reviewer feedback that:**
+- Flags intentional breaking changes as bugs (API simplification is often deliberate)
+- Complains about removed options/parameters that had no functional difference
+- Treats consolidation of redundant code paths as a problem
+
 ## Step 3: Write the Artifact
 
 Get the artifact path:
