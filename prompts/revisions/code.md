@@ -19,6 +19,7 @@ After all sub-agents complete their fixes:
 3. Check for any obvious regressions or new issues introduced
 4. Only then finalize and STOP
 
-**Important:** If the review is running in uncommitted mode, keep your fixes uncommitted (do NOT create a commit). If the review is against a commit or range, create a NEW commit with your fixes and do NOT use `git commit --amend` (amending changes the commit SHA and breaks review tracking).
+**Commit Policy (${DIFF_ARGS}):**
+${COMMIT_INSTRUCTIONS}
 
 **After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run the external review.

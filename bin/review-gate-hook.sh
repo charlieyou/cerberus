@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hook-specific logic for review-gate.
 review_gate_check() {
-    MAX_ITERATIONS_DEFAULT=5
+    MAX_ITERATIONS_DEFAULT=3
     MAX_ITERATIONS="${REVIEW_GATE_MAX_ROUNDS:-$MAX_ITERATIONS_DEFAULT}"
     MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     POLL_INTERVAL_SECONDS="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
@@ -883,18 +883,44 @@ INFO
         ' <<< "$template"
     }
 
+    # --- Generate commit instructions based on diff mode ---
+    generate_commit_instructions() {
+        local diff_args="$1"
+
+        # Parse the diff mode from diff_args
+        case "$diff_args" in
+            --uncommitted|"")
+                echo "Keep your fixes **uncommitted** (do NOT create a commit). The review is tracking uncommitted changes."
+                ;;
+            --base*)
+                echo "You **MUST create a NEW commit** with your fixes. The review is tracking changes from the base branch to HEAD, so uncommitted changes will NOT be visible to reviewers. Do NOT use \`git commit --amend\`."
+                ;;
+            --commit*)
+                echo "You **MUST create a NEW commit** with your fixes. Do NOT use \`git commit --amend\` (amending changes the commit SHA and breaks review tracking)."
+                ;;
+            *)
+                # Assume it's a range like main..feature
+                echo "You **MUST create a NEW commit** with your fixes. The review is tracking a commit range, so uncommitted changes will NOT be visible. Do NOT use \`git commit --amend\`."
+                ;;
+        esac
+    }
+
     # --- Format revision instructions based on trigger type ---
     format_revision_instructions() {
         local trigger_source="$1"
         local issues="$2"
         local mode_plan_path="$3"
         local mode_spec_path="${4:-}"
+        local mode_diff_args="${5:-}"
 
         case "$trigger_source" in
             code-review-iterative)
-                local template result
+                local template result commit_instructions
+                commit_instructions=$(generate_commit_instructions "$mode_diff_args")
                 if template=$(resolve_revision_template "code"); then
                     result=$(substitute_template "$template" '${ISSUES}' "$issues")
+                    result=$(substitute_template "$result" '${DIFF_ARGS}' "$mode_diff_args")
+                    result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
                     echo "$result"
                 else
                     # Fallback if template not found
@@ -903,7 +929,8 @@ Please revise the **code** to address the following issues:
 
 $issues
 
-**Important:** If the review is running in uncommitted mode, keep your fixes uncommitted (do NOT create a commit). If the review is against a commit or range, create a NEW commit with your fixes and do NOT use \`git commit --amend\` (amending changes the commit SHA and breaks review tracking).
+**Commit Policy ($mode_diff_args):**
+$commit_instructions
 
 **After fixing the code, STOP immediately.** The stop hook will automatically re-run the review.
 INSTRUCTIONS
@@ -1078,8 +1105,9 @@ Please summarize the review outcome, noting that max iterations was reached and 
         # Collect issues from non-PASS reviews
         ISSUES=$(collect_issues)
 
-        # Extract mode paths BEFORE cleaning state (which deletes STATE_FILE)
+        # Extract mode paths/args BEFORE cleaning state (which deletes STATE_FILE)
         MODE_SPEC_PATH=$(jq -r '.mode.spec_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        MODE_DIFF_ARGS=$(jq -r '.mode.diff_args // ""' "$STATE_FILE" 2>/dev/null || echo "")
 
         # Clean state so reviewers will be re-spawned after revision
         # (Archive uses the current iteration number, so do this before incrementing.)
@@ -1090,8 +1118,8 @@ Please summarize the review outcome, noting that max iterations was reached and 
 
         log "review-gate: revision required; incremented iteration"
 
-        # Format type-specific revision instructions (using extracted paths)
-        REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH")
+        # Format type-specific revision instructions (using extracted paths/args)
+        REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH" "$MODE_DIFF_ARGS")
 
         REASON="$RESULTS
 
