@@ -203,19 +203,25 @@ USAGE
     local diff_content=""
     case "$diff_mode" in
         --uncommitted)
-            # Unstaged + staged changes
-            diff_content=$(git diff 2>/dev/null || true)
-            local cached_diff
-            cached_diff=$(git diff --cached 2>/dev/null || true)
-            if [[ -n "$cached_diff" ]]; then
-                if [[ -n "$diff_content" ]]; then
-                    diff_content+=$'\n'"$cached_diff"
-                else
-                    diff_content="$cached_diff"
-                fi
-            fi
-            if [[ -z "$diff_content" && -n "$base_sha" ]]; then
+            # For iterative reviews, always use base_sha to capture all changes
+            # since the original review started. This ensures fixes applied by the
+            # agent are visible even if they were staged or the index changed.
+            if [[ -n "$base_sha" ]]; then
                 diff_content=$(git diff "${base_sha}" 2>/dev/null || true)
+            fi
+            # Fallback to unstaged + staged changes only when base_sha is not set
+            # (i.e., first-time review or non-iterative scenario)
+            if [[ -z "$diff_content" ]]; then
+                diff_content=$(git diff 2>/dev/null || true)
+                local cached_diff
+                cached_diff=$(git diff --cached 2>/dev/null || true)
+                if [[ -n "$cached_diff" ]]; then
+                    if [[ -n "$diff_content" ]]; then
+                        diff_content+=$'\n'"$cached_diff"
+                    else
+                        diff_content="$cached_diff"
+                    fi
+                fi
             fi
             ;;
         --base)

@@ -53,28 +53,28 @@ resolve_intelligence_mode() {
 
     case "$mode" in
         fast)
-            CODEX_REVIEW_REASONING_EFFORT="medium"
-            CODEX_GENERATE_REASONING_EFFORT="medium"
-            GEMINI_MODEL_EFFECTIVE="gemini-3-flash-preview"
-            CLAUDE_MODEL_EFFECTIVE="sonnet"
+            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-medium}"
+            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-medium}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-flash-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-sonnet}"
             ;;
         smart)
-            CODEX_REVIEW_REASONING_EFFORT="high"
-            CODEX_GENERATE_REASONING_EFFORT="high"
-            GEMINI_MODEL_EFFECTIVE="gemini-3-pro-preview"
-            CLAUDE_MODEL_EFFECTIVE="opus"
+            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-high}"
+            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-high}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-pro-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-opus}"
             ;;
         max)
-            CODEX_REVIEW_REASONING_EFFORT="xhigh"
-            CODEX_GENERATE_REASONING_EFFORT="xhigh"
-            GEMINI_MODEL_EFFECTIVE="gemini-3-pro-preview"
-            CLAUDE_MODEL_EFFECTIVE="opus"
+            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-xhigh}"
+            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-xhigh}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-pro-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-opus}"
             PROMPT_ULTRATHINK="true"
             ;;
     esac
 
     # Codex model does not vary by mode.
-    CODEX_MODEL_EFFECTIVE="gpt-5.2-codex"
+    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL:-gpt-5.2-codex}"
 }
 
 # Extract the last JSON object from a file.
