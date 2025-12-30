@@ -31,9 +31,9 @@ source "$SCRIPT_DIR/review-gate-hook.sh"
 # =============================================================================
 
 # Model defaults
-CODEX_MODEL="gpt-5.2-codex"
-GEMINI_MODEL="gemini-3-flash-preview"
-CLAUDE_MODEL="opus"
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.2-codex}"
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
+CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
 
 usage() {
     cat <<USAGE
@@ -92,32 +92,14 @@ validate_max_rounds() {
     fi
 }
 
-normalize_mode() {
-    local value="${1:-}"
-    if [[ -z "$value" ]]; then
-        echo ""
-        return 0
-    fi
-    printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
-}
-
-validate_mode() {
-    local value="${1:-}"
-    if [[ -z "$value" ]]; then
-        return 0
-    fi
-    case "$value" in
-        fast|smart|max) return 0 ;;
-        *) die "Invalid --mode '$value' (must be fast|smart|max)" ;;
-    esac
-}
-
+# normalize_mode and validate_mode are provided by review-gate-models.sh
 
 review_gate_spawn_code_review() {
     # --- Parse diff mode args ---
     local diff_mode="--uncommitted"
     local diff_target=""
     local diff_args_str="--uncommitted"  # Default matches diff_mode default
+    local base_sha=""
     local agents_csv=""
     local max_rounds=""
     local mode=""
@@ -209,6 +191,14 @@ USAGE
 
     validate_max_rounds "$max_rounds"
 
+    if [[ "$diff_mode" == "--uncommitted" ]]; then
+        if [[ -n "${REVIEW_GATE_BASE_SHA:-}" ]]; then
+            base_sha="$REVIEW_GATE_BASE_SHA"
+        else
+            base_sha=$(git rev-parse HEAD 2>/dev/null || true)
+        fi
+    fi
+
     # --- Gather the diff ---
     local diff_content=""
     case "$diff_mode" in
@@ -223,6 +213,9 @@ USAGE
                 else
                     diff_content="$cached_diff"
                 fi
+            fi
+            if [[ -z "$diff_content" && -n "$base_sha" ]]; then
+                diff_content=$(git diff "${base_sha}..HEAD" 2>/dev/null || true)
             fi
             ;;
         --base)
@@ -422,6 +415,9 @@ USAGE
     {
         echo "<!-- review-type: code-review-iterative -->"
         echo "<!-- diff-args: $diff_args_str -->"
+        if [[ -n "$base_sha" && "$diff_mode" == "--uncommitted" ]]; then
+            echo "<!-- base-sha: $base_sha -->"
+        fi
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -559,6 +555,11 @@ USAGE
     fi
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
+
+    # Default to 3 rounds for plan review
+    if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
+        max_rounds="3"
+    fi
 
     validate_max_rounds "$max_rounds"
 

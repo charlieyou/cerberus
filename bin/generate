@@ -38,25 +38,7 @@ die() {
     exit 1
 }
 
-normalize_mode() {
-    local value="${1:-}"
-    if [[ -z "$value" ]]; then
-        echo ""
-        return 0
-    fi
-    printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
-}
-
-validate_mode() {
-    local value="${1:-}"
-    if [[ -z "$value" ]]; then
-        return 0
-    fi
-    case "$value" in
-        fast|smart|max) return 0 ;;
-        *) die "Invalid --mode '$value' (must be fast|smart|max)" ;;
-    esac
-}
+# normalize_mode and validate_mode are provided by review-gate-models.sh
 
 review_gate_generate() {
     local review_type="healthcheck"

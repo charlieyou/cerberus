@@ -1,6 +1,29 @@
 #!/usr/bin/env bash
 # Model invocation and output parsing helpers for review-gate.
 
+# Normalize mode value to lowercase, empty input returns empty.
+normalize_mode() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        echo ""
+        return 0
+    fi
+    printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
+}
+
+# Validate mode value (fast|smart|max), empty is allowed.
+# Requires a die() function to be defined by the caller.
+validate_mode() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    case "$value" in
+        fast|smart|max) return 0 ;;
+        *) die "Invalid --mode '$value' (must be fast|smart|max)" ;;
+    esac
+}
+
 rg_log() {
     if declare -F log >/dev/null 2>&1; then
         log "$1"

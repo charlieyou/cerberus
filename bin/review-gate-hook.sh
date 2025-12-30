@@ -114,6 +114,13 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract base-sha from artifact frontmatter ---
+    extract_base_sha() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *base-sha: *\([^ ]*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
     # --- Helper: Extract plan-path from artifact frontmatter ---
     extract_plan_path() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -237,6 +244,11 @@ review_gate_check() {
             local diff_args
             diff_args=$(extract_diff_args)
             log "review-gate: code-review-iterative re-spawn with diff_args='$diff_args'"
+            local base_sha
+            base_sha=$(extract_base_sha)
+            if [[ -n "$base_sha" ]]; then
+                log "review-gate: code-review-iterative using base_sha=$base_sha"
+            fi
 
             # Parse diff_args into array safely (no eval to avoid command injection)
             # Note: This splits on whitespace, so args with spaces won't round-trip.
@@ -248,6 +260,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+               REVIEW_GATE_BASE_SHA="$base_sha" \
                "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
@@ -740,7 +753,7 @@ Please revise the **code** to address the following issues:
 
 $issues
 
-**Important:** Create a NEW commit with your fixes. Do NOT use \`git commit --amend\` as this changes the commit SHA and breaks the review tracking.
+**Important:** If the review is running in uncommitted mode, keep your fixes uncommitted (do NOT create a commit). If the review is against a commit or range, create a NEW commit with your fixes and do NOT use \`git commit --amend\` (amending changes the commit SHA and breaks review tracking).
 
 **After fixing the code, STOP immediately.** The stop hook will automatically re-run the review.
 INSTRUCTIONS
