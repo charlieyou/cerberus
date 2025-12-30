@@ -142,6 +142,35 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract mode from artifact frontmatter ---
+    extract_mode_from_artifact() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *mode: *\([^ ]*\) *-->$/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    # --- Helper: Extract mode from state config ---
+    extract_mode_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local mode
+            mode=$(jq -r '.config.intelligence_mode // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ "$mode" == "null" ]]; then
+                mode=""
+            fi
+            printf '%s' "$mode"
+        fi
+    }
+
+    # --- Helper: Resolve intelligence mode (state > artifact) ---
+    extract_intelligence_mode() {
+        local mode=""
+        mode=$(extract_mode_from_state)
+        if [[ -z "$mode" ]]; then
+            mode=$(extract_mode_from_artifact)
+        fi
+        printf '%s' "$mode"
+    }
+
     local state_max_rounds
     state_max_rounds=""
     if [[ -f "$STATE_FILE" ]]; then
@@ -195,6 +224,14 @@ review_gate_check() {
             fi
         fi
 
+        local mode
+        mode=$(extract_intelligence_mode)
+        local -a mode_arg=()
+        if [[ -n "$mode" ]]; then
+            mode_arg=(--mode "$mode")
+            log "review-gate: using mode '$mode'"
+        fi
+
         # For code-review-iterative, re-fetch the diff to capture fixes
         if [[ "$detected_type" == "code-review-iterative" ]]; then
             local diff_args
@@ -211,7 +248,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-               "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
+               "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         # For plan-review-iterative, re-read the plan file to capture edits
@@ -225,7 +262,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "$plan_path" >/dev/null 2>&1; then
+                   "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$plan_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -235,7 +272,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -250,7 +287,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "$spec_path" >/dev/null 2>&1; then
+                   "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$spec_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -260,7 +297,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -270,7 +307,7 @@ review_gate_check() {
                REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
-               "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+               "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         fi

@@ -9,6 +9,51 @@ rg_log() {
     fi
 }
 
+# Resolve intelligence mode to model/effort settings.
+resolve_intelligence_mode() {
+    local mode="${1:-}"
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    mode=$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')
+
+    case "$mode" in
+        fast|smart|max) ;;
+        *)
+            rg_log "review-gate: invalid mode '$mode' (defaulting to smart)"
+            mode="smart"
+            ;;
+    esac
+
+    INTELLIGENCE_MODE="$mode"
+    PROMPT_ULTRATHINK="false"
+
+    case "$mode" in
+        fast)
+            CODEX_REVIEW_REASONING_EFFORT="medium"
+            CODEX_GENERATE_REASONING_EFFORT="medium"
+            GEMINI_MODEL_EFFECTIVE="gemini-3-flash-preview"
+            CLAUDE_MODEL_EFFECTIVE="sonnet"
+            ;;
+        smart)
+            CODEX_REVIEW_REASONING_EFFORT="high"
+            CODEX_GENERATE_REASONING_EFFORT="high"
+            GEMINI_MODEL_EFFECTIVE="gemini-3-pro-preview"
+            CLAUDE_MODEL_EFFECTIVE="opus"
+            ;;
+        max)
+            CODEX_REVIEW_REASONING_EFFORT="xhigh"
+            CODEX_GENERATE_REASONING_EFFORT="xhigh"
+            GEMINI_MODEL_EFFECTIVE="gemini-3-pro-preview"
+            CLAUDE_MODEL_EFFECTIVE="opus"
+            PROMPT_ULTRATHINK="true"
+            ;;
+    esac
+
+    # Codex model does not vary by mode.
+    CODEX_MODEL_EFFECTIVE="gpt-5.2-codex"
+}
+
 # Extract the last JSON object from a file.
 extract_last_json_object() {
     local file="$1"
@@ -208,6 +253,11 @@ spawn_reviewer() {
     # Ensure reviews directory exists
     mkdir -p "$REVIEWS_DIR"
 
+    local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
+    local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
+    local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
+    local codex_reasoning="${CODEX_REVIEW_REASONING_EFFORT:-high}"
+
     local output_file="$REVIEWS_DIR/${name}.json"
     local sentinel_file="$REVIEWS_DIR/${name}.done"
     local failed_file="$REVIEWS_DIR/${name}.failed"
@@ -224,7 +274,7 @@ spawn_reviewer() {
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
-            REVIEW_MODEL="$GEMINI_MODEL" \
+            REVIEW_MODEL="$gemini_model" \
             nohup setsid bash -c '
                 if gemini -m "$REVIEW_MODEL" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
@@ -239,9 +289,9 @@ spawn_reviewer() {
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_SCHEMA="$schema_file" \
-            REVIEW_MODEL="$CODEX_MODEL" \
+            REVIEW_MODEL="$codex_model" \
             nohup setsid bash -c '
-                if codex exec -m "$REVIEW_MODEL" -c model_reasoning_effort=\"high\" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                if codex exec -m "$REVIEW_MODEL" -c model_reasoning_effort=\"'"$codex_reasoning"'\" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
@@ -253,7 +303,7 @@ spawn_reviewer() {
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
-            REVIEW_MODEL="$CLAUDE_MODEL" \
+            REVIEW_MODEL="$claude_model" \
             nohup setsid bash -c '
                 if claude -p --model "$REVIEW_MODEL" --output-format json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"

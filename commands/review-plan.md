@@ -1,6 +1,6 @@
 ---
 description: Iterative plan review with external reviewers
-argument-hint: [--agents <list>] [--max-rounds <n>] [path/to/plan.md]
+argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [path/to/plan.md]
 ---
 
 # Plan Review (Iterative)
@@ -27,6 +27,12 @@ Limit the number of iterations:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
+```
+
+Choose an intelligence mode:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --mode max path/to/plan.md
 ```
 
 ## How It Works

@@ -17,10 +17,12 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 Use the Bash tool to spawn architecture review generators:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --mode smart
 ```
 
 This spawns all available generators to independently analyze the codebase. Wait for the command to complete and capture the output containing all drafts.
+
+Use `--mode fast|smart|max` to trade off speed vs depth.
 
 ### 2. Synthesize Drafts
 

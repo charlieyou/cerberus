@@ -89,6 +89,24 @@ ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=architecture-review
 
 All review commands accept `--agents <list>` to run a subset of the available reviewers. Provide a comma-separated list such as `codex,gemini` or `claude`.
 
+### Intelligence Modes
+
+All review commands accept `--mode <fast|smart|max>` to trade off speed vs depth. Default is `smart`.
+
+| Mode | Codex reasoning | Gemini model | Claude model | Prompt |
+|------|-----------------|--------------|--------------|--------|
+| fast | medium | `gemini-3-flash-preview` | `sonnet` | — |
+| smart | high | `gemini-3-pro-preview` | `opus` | — |
+| max | xhigh | `gemini-3-pro-preview` | `opus` | `ultrathink` |
+
+Examples:
+
+```
+/cerberus:review-code --mode fast
+/cerberus:review-plan --mode smart path/to/plan.md
+/cerberus:review-spec --mode max path/to/spec.md
+```
+
 ## How It Works
 
 ```
@@ -185,9 +203,6 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CODEX_MODEL` | `gpt-5.2-codex` | Model for Codex reviewer |
-| `GEMINI_MODEL` | `gemini-3-flash-preview` | Model for Gemini reviewer |
-| `CLAUDE_MODEL` | `opus` | Model for Claude reviewer |
 | `REVIEW_GATE_MAX_WAIT_SECONDS` | `600` | Max time to wait for reviewers |
 | `REVIEW_GATE_POLL_INTERVAL_SECONDS` | `3` | Polling interval |
 

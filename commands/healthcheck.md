@@ -11,10 +11,12 @@ This command runs a multi-model healthcheck where Codex, Gemini, and Claude (if 
 Use the Bash tool to run the generator command. This spawns all available generators in parallel:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode smart
 ```
 
 This will output drafts from each available model. Wait for it to complete (may take several minutes).
+
+Use `--mode fast|smart|max` to trade off speed vs depth.
 
 ## Step 2: Synthesize the Drafts
 

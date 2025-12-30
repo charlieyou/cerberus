@@ -30,10 +30,10 @@ source "$SCRIPT_DIR/review-gate-hook.sh"
 # Main Script
 # =============================================================================
 
-# Model defaults (override with env vars)
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.2-codex}"
-GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
-CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
+# Model defaults
+CODEX_MODEL="gpt-5.2-codex"
+GEMINI_MODEL="gemini-3-flash-preview"
+CLAUDE_MODEL="opus"
 
 usage() {
     cat <<USAGE
@@ -46,20 +46,20 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn [--agents <list>] [--max-rounds <n>] <artifact-path>
+  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, <range>
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     all reviewers pass.
 
-  spawn-spec-review [--agents <list>] [--max-rounds <n>] <spec-path>
+  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until all reviewers pass.
 
   resolve <proceed|revise|abort>
@@ -92,6 +92,26 @@ validate_max_rounds() {
     fi
 }
 
+normalize_mode() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        echo ""
+        return 0
+    fi
+    printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
+}
+
+validate_mode() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    case "$value" in
+        fast|smart|max) return 0 ;;
+        *) die "Invalid --mode '$value' (must be fast|smart|max)" ;;
+    esac
+}
+
 
 review_gate_spawn_code_review() {
     # --- Parse diff mode args ---
@@ -100,6 +120,7 @@ review_gate_spawn_code_review() {
     local diff_args_str="--uncommitted"  # Default matches diff_mode default
     local agents_csv=""
     local max_rounds=""
+    local mode=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -117,6 +138,14 @@ review_gate_spawn_code_review() {
                 ;;
             --max-rounds)
                 max_rounds="${2:-}"
+                shift 2
+                ;;
+            --mode=*)
+                mode="${1#*=}"
+                shift
+                ;;
+            --mode)
+                mode="${2:-}"
                 shift 2
                 ;;
             --uncommitted)
@@ -143,6 +172,7 @@ Usage: ${CLI_CMD} spawn-code-review [options]
 Options:
   --agents <list>      Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>     Maximum review iterations before manual resolution
+  --mode <level>       Intelligence mode: fast, smart, max
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha>      Review a specific commit
@@ -164,6 +194,13 @@ USAGE
                 ;;
         esac
     done
+
+    mode=$(normalize_mode "$mode")
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    validate_mode "$mode"
+    resolve_intelligence_mode "$mode"
 
     # Default to 3 rounds for code review
     if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
@@ -376,6 +413,10 @@ USAGE
         rm -f "$context_tmp"
     fi
 
+    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
+        prompt_content=$'ultrathink\n\n'"$prompt_content"
+    fi
+
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
@@ -387,6 +428,7 @@ USAGE
         if [[ -n "$agents_csv" ]]; then
             echo "<!-- agents: $agents_csv -->"
         fi
+        echo "<!-- mode: $mode -->"
         echo ""
         echo "# Code Review (Iterative)"
         echo ""
@@ -420,17 +462,22 @@ USAGE
     if [[ -n "$max_rounds" ]]; then
         max_rounds_arg=(--max-rounds "$max_rounds")
     fi
+    local -a mode_arg=()
+    if [[ -n "$mode" ]]; then
+        mode_arg=(--mode "$mode")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "$artifact_path"
+    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 }
 
 review_gate_spawn_plan_review() {
     local plan_path=""
     local agents_csv=""
     local max_rounds=""
+    local mode=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -454,6 +501,14 @@ review_gate_spawn_plan_review() {
                 max_rounds="${2:-}"
                 shift 2
                 ;;
+            --mode=*)
+                mode="${1#*=}"
+                shift
+                ;;
+            --mode)
+                mode="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -472,6 +527,7 @@ the most recent session plan from ~/.claude/plans/.
 Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>          Maximum review iterations before manual resolution
+  --mode <level>           Intelligence mode: fast, smart, max
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -496,6 +552,13 @@ USAGE
                 ;;
         esac
     done
+
+    mode=$(normalize_mode "$mode")
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    validate_mode "$mode"
+    resolve_intelligence_mode "$mode"
 
     validate_max_rounds "$max_rounds"
 
@@ -545,6 +608,7 @@ USAGE
         if [[ -n "$agents_csv" ]]; then
             echo "<!-- agents: $agents_csv -->"
         fi
+        echo "<!-- mode: $mode -->"
         echo ""
         echo "# Plan Review (Iterative)"
         echo ""
@@ -560,6 +624,79 @@ USAGE
 
     echo "Artifact written: $artifact_path" >&2
 
+    # --- Build prompt with plan content ---
+    # Resolve template with project-local override support
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    local prompt_template_path=""
+    for path in "$project_root/prompts/reviewers/plan.md" "$SCRIPT_DIR/../prompts/reviewers/plan.md"; do
+        if [[ -f "$path" ]]; then
+            prompt_template_path="$path"
+            break
+        fi
+    done
+
+    local prompt_content
+    if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
+        # Load template and substitute ${PLAN_CONTENT} using temp file to avoid ARG_MAX limits
+        local plan_tmp="${review_dir}/plan_content.tmp"
+        printf '%s' "$plan_content" > "$plan_tmp"
+        prompt_content=$(awk -v plan_file="$plan_tmp" '
+            BEGIN { while ((getline line < plan_file) > 0) plan = plan (plan ? "\n" : "") line; close(plan_file) }
+            {
+                while (match($0, /\$\{PLAN_CONTENT\}/)) {
+                    printf "%s", substr($0, 1, RSTART-1)
+                    printf "%s", plan
+                    $0 = substr($0, RSTART+RLENGTH)
+                }
+                print
+            }
+        ' "$prompt_template_path")
+        rm -f "$plan_tmp"
+    else
+        # Fallback: use plan content directly with basic prompt structure
+        prompt_content="You are reviewing a plan for quality and correctness.
+
+## Plan
+Path: $plan_path
+
+\`\`\`
+$plan_content
+\`\`\`
+
+## Evaluation Criteria
+1. Completeness - Are all necessary steps covered?
+2. Order of Operations - Are steps in the correct sequence?
+3. Dependencies - Are dependencies properly identified?
+4. Edge Cases - Are edge cases and error handling addressed?
+5. Actionability - Are next steps clear and concrete?
+
+## Output Format
+JSON only, no markdown code fences:
+{
+  \"findings\": [
+    {\"title\": \"[P1] Issue title\", \"body\": \"Why this is a problem\", \"priority\": 1, \"file_path\": null, \"line_start\": null, \"line_end\": null}
+  ],
+  \"verdict\": \"PASS\" | \"FAIL\" | \"NEEDS_WORK\",
+  \"summary\": \"1-2 sentences\"
+}
+
+- PASS: No significant findings
+- FAIL: Blocking issues (P0/P1)
+- NEEDS_WORK: Non-blocking issues (P2/P3)
+- file_path, line_start, line_end are optional (use null if not applicable)"
+    fi
+
+    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
+        prompt_content=$'ultrathink\n\n'"$prompt_content"
+    fi
+
+    # --- Write the prompt file directly (bypass build_prompt to use our template) ---
+    local reviews_dir="$review_dir/reviews"
+    mkdir -p "$reviews_dir"
+    local prompt_file="$reviews_dir/review.prompt"
+    echo "$prompt_content" > "$prompt_file"
+
     # --- Spawn reviewers using existing infrastructure ---
     local -a agents_arg=()
     if [[ -n "$agents_csv" ]]; then
@@ -569,10 +706,15 @@ USAGE
     if [[ -n "$max_rounds" ]]; then
         max_rounds_arg=(--max-rounds "$max_rounds")
     fi
+    local -a mode_arg=()
+    if [[ -n "$mode" ]]; then
+        mode_arg=(--mode "$mode")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan-review-iterative" \
-    "$0" spawn --type="plan-review-iterative" "${agents_arg[@]}" "${max_rounds_arg[@]}" "$artifact_path"
+    REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    "$0" spawn --type="plan-review-iterative" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -593,6 +735,7 @@ review_gate_spawn_spec_review() {
     local spec_path=""
     local agents_csv=""
     local max_rounds=""
+    local mode=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -616,6 +759,14 @@ review_gate_spawn_spec_review() {
                 max_rounds="${2:-}"
                 shift 2
                 ;;
+            --mode=*)
+                mode="${1#*=}"
+                shift
+                ;;
+            --mode)
+                mode="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -633,6 +784,7 @@ Spawn reviewers for a feature specification file.
 Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>          Maximum review iterations before manual resolution
+  --mode <level>           Intelligence mode: fast, smart, max
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -658,6 +810,13 @@ USAGE
                 ;;
         esac
     done
+
+    mode=$(normalize_mode "$mode")
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    validate_mode "$mode"
+    resolve_intelligence_mode "$mode"
 
     # Default to 3 rounds for spec review
     if [[ -z "$max_rounds" && -z "${REVIEW_GATE_MAX_ROUNDS:-}" ]]; then
@@ -705,6 +864,7 @@ USAGE
         if [[ -n "$agents_csv" ]]; then
             echo "<!-- agents: $agents_csv -->"
         fi
+        echo "<!-- mode: $mode -->"
         echo ""
         echo "# Spec Review (Iterative)"
         echo ""
@@ -720,6 +880,80 @@ USAGE
 
     echo "Artifact written: $artifact_path" >&2
 
+    # --- Build prompt with spec content ---
+    # Resolve template with project-local override support
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    local prompt_template_path=""
+    for path in "$project_root/prompts/reviewers/spec.md" "$SCRIPT_DIR/../prompts/reviewers/spec.md"; do
+        if [[ -f "$path" ]]; then
+            prompt_template_path="$path"
+            break
+        fi
+    done
+
+    local prompt_content
+    if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
+        # Load template and substitute ${SPEC_CONTENT} using temp file to avoid ARG_MAX limits
+        local spec_tmp="${review_dir}/spec_content.tmp"
+        printf '%s' "$spec_content" > "$spec_tmp"
+        prompt_content=$(awk -v spec_file="$spec_tmp" '
+            BEGIN { while ((getline line < spec_file) > 0) spec = spec (spec ? "\n" : "") line; close(spec_file) }
+            {
+                while (match($0, /\$\{SPEC_CONTENT\}/)) {
+                    printf "%s", substr($0, 1, RSTART-1)
+                    printf "%s", spec
+                    $0 = substr($0, RSTART+RLENGTH)
+                }
+                print
+            }
+        ' "$prompt_template_path")
+        rm -f "$spec_tmp"
+    else
+        # Fallback: use spec content directly with basic prompt structure
+        prompt_content="You are reviewing a feature specification for quality and correctness.
+
+## Spec
+Path: $spec_path
+
+\`\`\`
+$spec_content
+\`\`\`
+
+## Evaluation Criteria
+1. Clarity - Are goals and scope clearly defined?
+2. Completeness - Are all necessary requirements covered?
+3. Technical Feasibility - Is the spec technically sound?
+4. Edge Cases - Are edge cases and error handling addressed?
+5. Testability - Can the requirements be verified?
+6. Actionability - Is it clear how to implement this?
+
+## Output Format
+JSON only, no markdown code fences:
+{
+  \"findings\": [
+    {\"title\": \"[P1] Issue title\", \"body\": \"Why this is a problem\", \"priority\": 1, \"file_path\": null, \"line_start\": null, \"line_end\": null}
+  ],
+  \"verdict\": \"PASS\" | \"FAIL\" | \"NEEDS_WORK\",
+  \"summary\": \"1-2 sentences\"
+}
+
+- PASS: No significant findings
+- FAIL: Blocking issues (P0/P1)
+- NEEDS_WORK: Non-blocking issues (P2/P3)
+- file_path, line_start, line_end are optional (use null if not applicable)"
+    fi
+
+    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
+        prompt_content=$'ultrathink\n\n'"$prompt_content"
+    fi
+
+    # --- Write the prompt file directly (bypass build_prompt to use our template) ---
+    local reviews_dir="$review_dir/reviews"
+    mkdir -p "$reviews_dir"
+    local prompt_file="$reviews_dir/review.prompt"
+    echo "$prompt_content" > "$prompt_file"
+
     # --- Spawn reviewers using existing infrastructure ---
     local -a agents_arg=()
     if [[ -n "$agents_csv" ]]; then
@@ -729,10 +963,15 @@ USAGE
     if [[ -n "$max_rounds" ]]; then
         max_rounds_arg=(--max-rounds "$max_rounds")
     fi
+    local -a mode_arg=()
+    if [[ -n "$mode" ]]; then
+        mode_arg=(--mode "$mode")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
-    "$0" spawn --type="spec" "${agents_arg[@]}" "${max_rounds_arg[@]}" "$artifact_path"
+    REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    "$0" spawn --type="spec" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 
     # Update state to include spec path in mode
     local state_file="$review_dir/gate-state.json"
@@ -890,6 +1129,7 @@ review_gate_spawn() {
     local artifact_arg=""
     local agents_csv=""
     local max_rounds=""
+    local mode=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -907,6 +1147,14 @@ review_gate_spawn() {
                 ;;
             --max-rounds)
                 max_rounds="${2:-}"
+                shift 2
+                ;;
+            --mode=*)
+                mode="${1#*=}"
+                shift
+                ;;
+            --mode)
+                mode="${2:-}"
                 shift 2
                 ;;
             --type=*)
@@ -927,7 +1175,7 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
                 return 0
                 ;;
@@ -942,6 +1190,13 @@ USAGE
                 ;;
         esac
     done
+
+    mode=$(normalize_mode "$mode")
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    validate_mode "$mode"
+    resolve_intelligence_mode "$mode"
 
     validate_max_rounds "$max_rounds"
 
@@ -1171,6 +1426,11 @@ DEFAULT
         local previous_reviews
         previous_reviews=$(get_previous_reviews)
 
+        if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
+            echo "ultrathink"
+            echo ""
+        fi
+
         cat <<PROMPT
 You are reviewing an artifact for quality and correctness.
 
@@ -1393,6 +1653,7 @@ SCHEMA
         --arg mode_type "$mode_type" \
         --arg mode_diff_args "$mode_diff_args" \
         --arg mode_plan_path "$mode_plan_path" \
+        --arg mode "$mode" \
         --arg max_rounds "$max_rounds" \
         '{
             version: ($version | tonumber),
@@ -1404,7 +1665,12 @@ SCHEMA
                 | (if $mode_diff_args != "" then .diff_args = $mode_diff_args else . end)
                 | (if $mode_plan_path != "" then .plan_path = $mode_plan_path else . end)
             ),
-            config: (if $max_rounds != "" then {max_rounds: ($max_rounds | tonumber)} else null end),
+            config: (
+                {}
+                | (if $max_rounds != "" then .max_rounds = ($max_rounds | tonumber) else . end)
+                | (if $mode != "" then .intelligence_mode = $mode else . end)
+                | if length == 0 then null else . end
+            ),
             owner: (
                 {}
                 | (if $owner_key != "" then .session_key = $owner_key else . end)

@@ -1,6 +1,6 @@
 ---
 description: Iterative spec review with external reviewers
-argument-hint: [--agents <list>] [--max-rounds <n>] <path/to/spec.md>
+argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <path/to/spec.md>
 ---
 
 # Spec Review (Iterative)
@@ -25,6 +25,12 @@ Limit the number of iterations:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --max-rounds 3 path/to/spec.md
+```
+
+Choose an intelligence mode:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --mode max path/to/spec.md
 ```
 
 ## How It Works
