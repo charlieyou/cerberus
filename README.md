@@ -241,6 +241,9 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 | `REVIEW_GATE_MAX_WAIT_SECONDS` | `600` | Max time to wait for reviewers |
 | `REVIEW_GATE_POLL_INTERVAL_SECONDS` | `3` | Polling interval |
 | `REVIEW_GATE_AUTHOR_CONTEXT` | `` | Inject author context into prompts |
+| `REVIEW_REPAIR_ENABLED` | `true` | Attempt JSON repair on reviewer parse failures |
+| `REVIEW_REPAIR_PROVIDER` | auto | Repair model provider (`claude`, `codex`, or `gemini`). `auto`/unset picks the first available (prefers Claude). |
+| `REVIEW_REPAIR_MODEL` | `haiku` | Repair model name (provider-specific). Defaults are low-cost and do not vary with `--mode`. |
 
 ## License
 

@@ -32,6 +32,13 @@ rg_log() {
     fi
 }
 
+is_truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Resolve intelligence mode to model/effort settings.
 resolve_intelligence_mode() {
     local mode="${1:-}"
@@ -75,6 +82,207 @@ resolve_intelligence_mode() {
 
     # Codex model does not vary by mode.
     CODEX_MODEL_EFFECTIVE="${CODEX_MODEL:-gpt-5.2-codex}"
+}
+
+default_review_schema() {
+    cat <<'SCHEMA'
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "NEEDS_WORK"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "priority": {"type": "integer", "minimum": 0, "maximum": 3},
+          "file_path": {"type": ["string", "null"]},
+          "line_start": {"type": ["integer", "null"]},
+          "line_end": {"type": ["integer", "null"]}
+        },
+        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "summary", "findings"],
+  "additionalProperties": false
+}
+SCHEMA
+}
+
+repair_review_output() {
+    local raw_output="$1"
+    local schema_file="$2"
+    local reviewer="$3"
+    local reason="${4:-parse_failure}"
+
+    if ! is_truthy "${REVIEW_REPAIR_ENABLED:-true}"; then
+        rg_log "review-gate: repair_json disabled (reviewer=$reviewer reason=$reason)"
+        return 1
+    fi
+
+    if [[ -z "$raw_output" ]]; then
+        rg_log "review-gate: repair_json empty raw output (reviewer=$reviewer reason=$reason)"
+        return 1
+    fi
+
+    local provider="${REVIEW_REPAIR_PROVIDER:-}"
+    if [[ -n "$provider" ]]; then
+        # Normalize provider to lowercase for command lookup and case matching
+        provider=$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')
+        if [[ "$provider" == "auto" ]]; then
+            provider=""
+        fi
+    fi
+    if [[ -z "$provider" ]]; then
+        if command -v claude >/dev/null 2>&1; then
+            provider="claude"
+        elif command -v codex >/dev/null 2>&1; then
+            provider="codex"
+        elif command -v gemini >/dev/null 2>&1; then
+            provider="gemini"
+        else
+            rg_log "review-gate: repair_json no provider available"
+            return 1
+        fi
+    fi
+
+    local model="${REVIEW_REPAIR_MODEL:-}"
+    if ! command -v "$provider" >/dev/null 2>&1; then
+        rg_log "review-gate: repair_json provider '$provider' not found"
+        return 1
+    fi
+    case "$provider" in
+        claude)
+            [[ -z "$model" ]] && model="haiku"
+            ;;
+        codex)
+            [[ -z "$model" ]] && model="${CODEX_MODEL:-gpt-5.2-codex}"
+            ;;
+        gemini)
+            [[ -z "$model" ]] && model="${GEMINI_MODEL:-gemini-3-flash-preview}"
+            ;;
+        *)
+            rg_log "review-gate: repair_json unknown provider '$provider'"
+            return 1
+            ;;
+    esac
+
+    local schema_text=""
+    if [[ -n "$schema_file" && -f "$schema_file" ]]; then
+        schema_text=$(cat "$schema_file")
+    else
+        schema_text=$(default_review_schema)
+    fi
+
+    local prompt_file out_file
+    prompt_file=$(mktemp)
+    out_file=$(mktemp)
+
+    {
+        echo "You are a JSON repair tool."
+        echo "Convert the following reviewer output into JSON that matches this schema:"
+        echo ""
+        printf '%s\n' "$schema_text"
+        echo ""
+        echo "Rules:"
+        echo "- Output JSON only. No code fences or extra text."
+        echo "- Required top-level keys: verdict, summary, findings."
+        echo "- verdict must be PASS, FAIL, or NEEDS_WORK (choose best match)."
+        echo "- summary: 1-2 sentences."
+        echo "- findings: array of objects with title, body, priority (0-3), file_path, line_start, line_end."
+        echo "- Map P0->0, P1->1, P2->2, P3->3 if mentioned."
+        echo "- If details are unknown, use null for file_path/line_start/line_end."
+        echo "- If no issues are described, output verdict PASS and empty findings."
+        echo ""
+        echo "Reviewer output:"
+        echo ""
+        printf '%s\n' "$raw_output"
+    } > "$prompt_file"
+
+    rg_log "review-gate: repair_json start reviewer=$reviewer provider=$provider model=$model reason=$reason"
+
+    local repaired=""
+    case "$provider" in
+        claude)
+            if claude -p --model "$model" --output-format json < "$prompt_file" > "$out_file" 2>&1; then
+                local result_str
+                result_str=$(jq -r '.result // empty' "$out_file" 2>/dev/null || true)
+                if [[ -n "$result_str" ]]; then
+                    repaired=$(echo "$result_str" | jq -c '.' 2>/dev/null || true)
+                    if [[ -z "$repaired" ]]; then
+                        local stripped
+                        stripped=$(echo "$result_str" | sed '/^```json$/d; /^```$/d')
+                        repaired=$(echo "$stripped" | jq -c '.' 2>/dev/null || true)
+                    fi
+                    if [[ -z "$repaired" ]]; then
+                        local tmp_file
+                        tmp_file=$(mktemp)
+                        printf '%s' "$result_str" > "$tmp_file"
+                        repaired=$(extract_last_json_object "$tmp_file" "false" 2>/dev/null || true)
+                        rm -f "$tmp_file"
+                    fi
+                fi
+            else
+                rg_log "review-gate: repair_json claude failed (model=$model)"
+            fi
+            ;;
+        codex)
+            local schema_path="$schema_file"
+            local temp_schema=""
+            if [[ -z "$schema_path" || ! -f "$schema_path" ]]; then
+                schema_path=$(mktemp)
+                temp_schema="$schema_path"
+                printf '%s\n' "$schema_text" > "$schema_path"
+            fi
+            if codex exec -m "$model" -s read-only --output-schema "$schema_path" - < "$prompt_file" > "$out_file" 2>&1; then
+                repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
+                if [[ -n "$repaired" ]]; then
+                    repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
+                fi
+            else
+                rg_log "review-gate: repair_json codex failed (model=$model)"
+            fi
+            [[ -n "$temp_schema" ]] && rm -f "$temp_schema"
+            ;;
+        gemini)
+            if gemini -m "$model" -o json < "$prompt_file" > "$out_file" 2>&1; then
+                repaired=$(tail -n +2 "$out_file" | jq -c '.' 2>/dev/null || true)
+                if [[ -z "$repaired" ]]; then
+                    repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
+                fi
+                if [[ -n "$repaired" ]]; then
+                    repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
+                fi
+            else
+                rg_log "review-gate: repair_json gemini failed (model=$model)"
+            fi
+            ;;
+    esac
+
+    rm -f "$prompt_file" "$out_file"
+
+    if [[ -z "$repaired" ]]; then
+        rg_log "review-gate: repair_json failed to extract JSON (reviewer=$reviewer)"
+        return 1
+    fi
+
+    if ! echo "$repaired" | jq -c '.' >/dev/null 2>&1; then
+        rg_log "review-gate: repair_json produced invalid JSON (reviewer=$reviewer)"
+        return 1
+    fi
+
+    rg_log "review-gate: repair_json success reviewer=$reviewer"
+    printf '%s' "$repaired"
 }
 
 # Extract the last JSON object from a file.
@@ -151,10 +359,15 @@ extract_json() {
     local reviewer="$2"
     local json=""
     local file_size=""
+    local raw_output=""
+    local repaired="false"
+    local schema_file=""
 
     if [[ -f "$file" ]]; then
         file_size=$(wc -c < "$file" 2>/dev/null || echo 0)
         rg_log "review-gate: extract_json START reviewer=$reviewer file=$file size=$file_size"
+        raw_output=$(cat "$file" 2>/dev/null || true)
+        schema_file="$(dirname "$file")/review-schema.json"
     else
         rg_log "review-gate: extract_json reviewer=$reviewer MISSING file=$file"
         return 1
@@ -207,6 +420,9 @@ extract_json() {
             local result_str
             result_str=$(jq -r '.result // empty' "$file" 2>/dev/null || true)
             if [[ -n "$result_str" ]]; then
+                raw_output="$result_str"
+            fi
+            if [[ -n "$result_str" ]]; then
                 # Try direct parse first (no fences)
                 json=$(echo "$result_str" | jq -c '.' 2>/dev/null || true)
                 if [[ -z "$json" ]]; then
@@ -242,20 +458,38 @@ extract_json() {
 
     if [[ -z "$json" ]]; then
         rg_log "review-gate: extract_json $reviewer NO JSON EXTRACTED"
-        return 1
+        if json=$(repair_review_output "$raw_output" "$schema_file" "$reviewer" "no_json_extracted"); then
+            repaired="true"
+        else
+            return 1
+        fi
     fi
 
     rg_log "review-gate: extract_json $reviewer before unwrap len=${#json}"
     if ! json=$(unwrap_review_json "$json" 2>/dev/null); then
         rg_log "review-gate: extract_json $reviewer unwrap FAILED"
-        return 1
+        if [[ "$repaired" != "true" ]] && json=$(repair_review_output "$raw_output" "$schema_file" "$reviewer" "unwrap_failed"); then
+            repaired="true"
+            if ! json=$(unwrap_review_json "$json" 2>/dev/null); then
+                return 1
+            fi
+        else
+            return 1
+        fi
     fi
 
     rg_log "review-gate: extract_json $reviewer after unwrap len=${#json}"
 
     if ! echo "$json" | jq -c '.' >/dev/null 2>&1; then
         rg_log "review-gate: extract_json $reviewer final jq validation FAILED"
-        return 1
+        if [[ "$repaired" != "true" ]] && json=$(repair_review_output "$raw_output" "$schema_file" "$reviewer" "jq_failed"); then
+            repaired="true"
+        else
+            return 1
+        fi
+        if ! echo "$json" | jq -c '.' >/dev/null 2>&1; then
+            return 1
+        fi
     fi
 
     # Log final extracted verdict for debugging
