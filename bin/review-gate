@@ -5,7 +5,7 @@
 #   check          Stop hook logic (reads JSON from stdin)
 #   spawn          Spawn reviewers for an artifact
 #   wait           Wait for review consensus (machine-readable JSON)
-#   resolve        Resolve gate with proceed|revise|abort
+#   resolve        Resolve gate (defaults to proceed)
 #   artifact-path  Print session-scoped artifact path
 #   author-context Set or clear author context injected into prompts
 
@@ -66,7 +66,7 @@ Commands:
   wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
-  resolve [--reason <text>] <proceed|revise|abort>
+  resolve [--reason <text>] [proceed|revise|abort]
     Resolve the active gate with a decision.
 
   artifact-path [--session-id <id>] [--transcript-path <path>]
@@ -391,7 +391,7 @@ USAGE
     fi
 
     # --- Session metadata ---
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
@@ -399,7 +399,7 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -621,7 +621,7 @@ USAGE
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
-    REVIEW_GATE_SESSION_ID="$session_id" \
+    CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
@@ -639,7 +639,7 @@ review_gate_spawn_plan_review() {
     local force_focus="false"
 
     # --- Session metadata ---
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     while [[ $# -gt 0 ]]; do
@@ -793,7 +793,7 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -940,7 +940,7 @@ JSON only, no markdown code fences:
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
-    REVIEW_GATE_SESSION_ID="$session_id" \
+    CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
@@ -969,7 +969,7 @@ review_gate_spawn_spec_review() {
     local context_file=""
 
     # --- Session metadata ---
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     while [[ $# -gt 0 ]]; do
@@ -1081,7 +1081,7 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -1211,7 +1211,7 @@ JSON only, no markdown code fences:
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
-    REVIEW_GATE_SESSION_ID="$session_id" \
+    CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
@@ -1233,7 +1233,7 @@ JSON only, no markdown code fences:
 }
 
 review_gate_artifact_path() {
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     while [[ $# -gt 0 ]]; do
@@ -1268,7 +1268,7 @@ USAGE
 }
 
 review_gate_author_context() {
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
     local clear="false"
     local context=""
@@ -1320,7 +1320,7 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set REVIEW_GATE_SESSION_ID or CLAUDE_SESSION_ID."
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
     fi
 
     if [[ "$clear" == "false" && -z "$context" ]]; then
@@ -1367,7 +1367,7 @@ review_gate_spawn() {
     # --- Session metadata ---
     OWNER_SESSION_KEY="${REVIEW_GATE_SESSION_KEY:-}"
     OWNER_SOURCE="${REVIEW_GATE_SESSION_SOURCE:-}"
-    OWNER_SESSION_ID="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    OWNER_SESSION_ID="${CLAUDE_SESSION_ID:-}"
     OWNER_TRANSCRIPT_PATH="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
     local artifact_arg=""
@@ -1463,7 +1463,7 @@ USAGE
     fi
 
     if [[ -z "$OWNER_SESSION_ID" ]]; then
-        die "REVIEW_GATE_SESSION_ID is required (or pass --session-id)"
+        die "CLAUDE_SESSION_ID is required (or pass --session-id)"
     fi
 
     # Session-scoped path resolution
@@ -1994,10 +1994,6 @@ SCHEMA
 }
 
 review_gate_resolve() {
-    if [[ $# -lt 1 ]]; then
-        die "Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
-    fi
-
     local decision=""
     local reason=""
 
@@ -2017,17 +2013,18 @@ review_gate_resolve() {
                 decision="$1"
                 ;;
             *)
-                die "Invalid argument '$1'. Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
+                die "Invalid argument '$1'. Usage: ${CLI_CMD} resolve [--reason <text>] [proceed|revise|abort]"
                 ;;
         esac
         shift
     done
 
+    # Default to proceed if no decision specified
     if [[ -z "$decision" ]]; then
-        die "Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
+        decision="proceed"
     fi
 
-    local session_id="${REVIEW_GATE_SESSION_ID:-}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
 
     local state_file=""
@@ -2096,7 +2093,7 @@ review_gate_wait() {
     local json_mode="false"
     local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
-    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
     local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
     local session_key_from_arg="false"

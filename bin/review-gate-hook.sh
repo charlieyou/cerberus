@@ -258,7 +258,7 @@ review_gate_check() {
 
             if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-               REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+               CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_GATE_BASE_SHA="$base_sha" \
                "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
@@ -273,7 +273,7 @@ review_gate_check() {
             if [[ -n "$plan_path" && -f "$plan_path" ]]; then
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$plan_path" >/dev/null 2>&1; then
                     spawn_success=true
@@ -282,7 +282,7 @@ review_gate_check() {
                 log "review-gate: plan-review-iterative missing plan_path, falling back to artifact"
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
                    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
@@ -298,7 +298,7 @@ review_gate_check() {
             if [[ -n "$spec_path" && -f "$spec_path" ]]; then
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$spec_path" >/dev/null 2>&1; then
                     spawn_success=true
@@ -307,7 +307,7 @@ review_gate_check() {
                 log "review-gate: spec missing spec_path, falling back to artifact"
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-                   REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
                    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
@@ -317,7 +317,7 @@ review_gate_check() {
         else
             if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
-               REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+               CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
                "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
@@ -1045,7 +1045,7 @@ INSTRUCTIONS
 
     if [[ "$CONSENSUS" == "auto_approve" ]]; then
         reset_iteration
-        REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+        CLAUDE_SESSION_ID="$SESSION_ID" \
             REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
             "$0" resolve proceed >&2 || true
         INFO_ITEMS=$(collect_informational_findings)
@@ -1078,7 +1078,7 @@ Please provide a brief summary of the review outcome, then you may stop."
             log "review-gate: max iterations reached"
             BLOCKING_ISSUES=$(collect_blocking_issues)
             INFO_ITEMS=$(collect_informational_findings)
-            REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+            CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
             REASON="$RESULTS
