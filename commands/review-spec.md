@@ -64,4 +64,4 @@ Reviewers evaluate the spec for:
 The iterative review continues until:
 - All reviewers agree the spec passes (unanimous PASS)
 - Maximum iterations (default 3, configurable via --max-rounds) are reached
-- You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed` or `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort`
+- You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve`

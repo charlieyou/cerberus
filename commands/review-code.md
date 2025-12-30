@@ -82,6 +82,5 @@ When reviewers don't all agree:
 If needed after max iterations:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed  # Accept anyway
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort    # Discard
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve  # Resolve the current gate
 ```

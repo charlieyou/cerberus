@@ -377,8 +377,9 @@ review-gate spawn-spec-review [options] <spec-path>
 
 ### resolve
 ```
-review-gate resolve [--reason <text>] <proceed|revise|abort>
+review-gate resolve [--reason <text>]
 ```
+Note: `resolve` always resolves the gate as "proceed". The `revise` and `abort` actions were removed.
 
 ### wait
 ```

@@ -212,14 +212,11 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn --context-file path/to/issue.txt pat
 
 ## Manual Override
 
-When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution only if you want to override that outcome (e.g. abort instead of proceed):
+When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution if you need to resolve the gate early:
 
 ```bash
-# Accept the current state and proceed
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed
-
-# Abort and discard
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort
+# Resolve the current gate
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve
 ```
 
 ## External Orchestration
