@@ -144,22 +144,22 @@ collect_informational_findings() -> string  # Returns markdown section or empty
 
 ## Implementation Plan
 
-1. [ ] Add `collect_informational_findings()` function to `bin/review-gate-hook.sh`
+1. [x] Add `collect_informational_findings()` function to `bin/review-gate-hook.sh`
    - Extract P2/P3 findings from all reviewers
    - Format as markdown section with reviewer headings
    - Return empty string if no P2/P3 findings
 
-2. [ ] Modify PASS block (~line 869-886) to include informational findings
+2. [x] Modify PASS block (~line 869-886) to include informational findings
    - Call `collect_informational_findings()`
    - Append to `SUMMARY_PROMPT` if non-empty
    - Update prompt text to mention informational items
 
-3. [ ] Modify max-iterations block (~line 889-907) to auto-resolve
+3. [x] Modify max-iterations block (~line 889-907) to auto-resolve
    - Auto-resolve gate with `reason: "auto_proceed_max_iter"` before prompting
    - Change from `output_block` to `output_block` with prompt that allows stop on next hook run
    - Actually: need to resolve first, THEN prompt (use `output_block` but gate is resolved)
 
-4. [ ] Update `review_gate_resolve()` to accept reason parameter
+4. [x] Update `review_gate_resolve()` to accept reason parameter
    - Add optional `--reason` flag or use env var
    - Write reason to state file
 
@@ -172,7 +172,7 @@ collect_informational_findings() -> string  # Returns markdown section or empty
    - Verify remaining issues are surfaced
    - Verify `auto_proceed_max_iter` is recorded
 
-7. [ ] Update documentation (README.md) to describe new behavior
+7. [x] Update documentation (README.md) to describe new behavior
 
 ## Testing Strategy
 

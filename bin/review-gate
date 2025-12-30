@@ -62,7 +62,7 @@ Commands:
   spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until all reviewers pass.
 
-  resolve <proceed|revise|abort>
+  resolve [--reason <text>] <proceed|revise|abort>
     Resolve the active gate with a decision.
 
   artifact-path [--session-id <id>] [--transcript-path <path>]
@@ -1741,18 +1741,37 @@ SCHEMA
 
 review_gate_resolve() {
     if [[ $# -lt 1 ]]; then
-        die "Usage: ${CLI_CMD} resolve <proceed|revise|abort>"
+        die "Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
     fi
 
-    local decision="$1"
+    local decision=""
+    local reason=""
 
-    case "$decision" in
-        proceed|revise|abort)
-            ;;
-        *)
-            die "Invalid decision '$decision'. Must be: proceed, revise, or abort"
-            ;;
-    esac
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --reason)
+                shift
+                if [[ -z "${1:-}" ]]; then
+                    die "Missing value for --reason"
+                fi
+                reason="$1"
+                ;;
+            proceed|revise|abort)
+                if [[ -n "$decision" ]]; then
+                    die "Multiple decisions provided (use only one of proceed|revise|abort)"
+                fi
+                decision="$1"
+                ;;
+            *)
+                die "Invalid argument '$1'. Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$decision" ]]; then
+        die "Usage: ${CLI_CMD} resolve [--reason <text>] <proceed|revise|abort>"
+    fi
 
     local session_id="${REVIEW_GATE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
@@ -1791,10 +1810,21 @@ review_gate_resolve() {
     local temp_file="${state_file}.tmp.$$"
     trap 'rm -f "${temp_file:-}"' EXIT
 
-    jq --arg decision "$decision" \
-       --arg timestamp "$timestamp" \
-       '.status = "resolved" | .decision.action = $decision | .decision.decided_at = $timestamp' \
-       "$state_file" > "$temp_file"
+    if [[ -n "$reason" ]]; then
+        jq --arg decision "$decision" \
+           --arg timestamp "$timestamp" \
+           --arg reason "$reason" \
+           '.status = "resolved"
+            | .decision.action = $decision
+            | .decision.decided_at = $timestamp
+            | .decision.reason = $reason' \
+           "$state_file" > "$temp_file"
+    else
+        jq --arg decision "$decision" \
+           --arg timestamp "$timestamp" \
+           '.status = "resolved" | .decision.action = $decision | .decision.decided_at = $timestamp' \
+           "$state_file" > "$temp_file"
+    fi
 
     if ! jq -e . "$temp_file" >/dev/null 2>&1; then
         die "Failed to create valid JSON output"

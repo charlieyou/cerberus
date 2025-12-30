@@ -682,6 +682,156 @@ review_gate_check() {
         echo -e "$all_issues"
     }
 
+    # --- Collect blocking (P0/P1) issues from non-PASS reviews ---
+    collect_blocking_issues() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local all_issues=""
+
+        for reviewer in $reviewers; do
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+
+            if [[ -f "$failed_file" ]]; then
+                continue
+            fi
+
+            if [[ -f "$output_file" ]]; then
+                local result
+                if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+                    log "review-gate: blocking issues: invalid reviewer output for $reviewer"
+                    continue
+                fi
+
+                local verdict
+                verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+                if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                    verdict="UNCLEAR"
+                fi
+
+                if [[ "$verdict" == "PASS" ]]; then
+                    continue
+                fi
+                if [[ "$verdict" == "UNCLEAR" ]]; then
+                    log "review-gate: blocking issues: skipping $reviewer due to UNCLEAR verdict"
+                    continue
+                fi
+
+                local findings
+                findings=$(echo "$result" | jq -r '
+                    def normalize_title($t; $p):
+                      if ($t // "") == "" then
+                        if $p != null then "[P" + ($p|tostring) + "]" else "Finding" end
+                      else
+                        if $t|test("^\\[P[0-3]\\]") then $t
+                        elif $p != null then "[P" + ($p|tostring) + "] " + $t
+                        else $t
+                        end
+                      end;
+                    .findings // [] |
+                    map(select(
+                      if .priority != null then (.priority | tonumber) <= 1
+                      else ((.title // "") | test("\\[P[01]\\]"))
+                      end
+                    )) |
+                    .[] |
+                    normalize_title(.title; .priority)
+                ' 2>/dev/null || echo "")
+                local summary
+                summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
+
+                if [[ -n "$findings" ]]; then
+                    all_issues+="### $reviewer ($verdict)\n"
+                    if [[ -n "$summary" ]]; then
+                        all_issues+="Summary: $summary\n"
+                    fi
+                    all_issues+="Findings:\n"
+                    while IFS= read -r finding; do
+                        all_issues+="- $finding\n"
+                    done <<< "$findings"
+                    all_issues+="\n"
+                fi
+            fi
+        done
+
+        echo -e "$all_issues"
+    }
+
+    # --- Collect informational (P2/P3) findings from all reviewers ---
+    collect_informational_findings() {
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        local info=""
+
+        for reviewer in $reviewers; do
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+
+            if [[ -f "$failed_file" ]]; then
+                continue
+            fi
+
+            if [[ -f "$output_file" ]]; then
+                local result
+                if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+                    log "review-gate: informational findings: invalid reviewer output for $reviewer"
+                    continue
+                fi
+
+                local verdict
+                verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+                if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                    verdict="UNCLEAR"
+                fi
+                if [[ "$verdict" == "UNCLEAR" ]]; then
+                    log "review-gate: informational findings: skipping $reviewer due to UNCLEAR verdict"
+                    continue
+                fi
+
+                local findings
+                findings=$(echo "$result" | jq -r '
+                    def normalize_title($t; $p):
+                      if ($t // "") == "" then
+                        if $p != null then "[P" + ($p|tostring) + "]" else "Finding" end
+                      else
+                        if $t|test("^\\[P[0-3]\\]") then $t
+                        elif $p != null then "[P" + ($p|tostring) + "] " + $t
+                        else $t
+                        end
+                      end;
+                    .findings // [] |
+                    map(select(
+                      if .priority != null then (.priority | tonumber) >= 2
+                      else ((.title // "") | test("\\[P[23]\\]"))
+                      end
+                    )) |
+                    .[] |
+                    normalize_title(.title; .priority)
+                ' 2>/dev/null || echo "")
+
+                if [[ -n "$findings" ]]; then
+                    info+=$'### '"$reviewer"$'\n'
+                    while IFS= read -r finding; do
+                        info+="- $finding"$'\n'
+                    done <<< "$findings"
+                    info+=$'\n'
+                fi
+            fi
+        done
+
+        if [[ -n "$info" ]]; then
+            cat <<INFO
+## Informational Items (P2/P3)
+
+The following non-blocking items were noted for your awareness:
+
+$info
+INFO
+        fi
+    }
+
     # --- Resolve revision template ---
     resolve_revision_template() {
         local type="$1"
@@ -869,6 +1019,7 @@ INSTRUCTIONS
     if [[ "$CONSENSUS" == "auto_approve" ]]; then
         reset_iteration
         "$0" resolve proceed >&2 || true
+        INFO_ITEMS=$(collect_informational_findings)
         # Prompt Claude for summary before allowing stop
         SUMMARY_PROMPT="$RESULTS
 
@@ -880,27 +1031,45 @@ INSTRUCTIONS
         if [[ $CURRENT_ITERATION -gt 1 ]]; then
             SUMMARY_PROMPT+=" (after $CURRENT_ITERATION iterations)"
         fi
-        SUMMARY_PROMPT+="
+        if [[ -n "$INFO_ITEMS" ]]; then
+            SUMMARY_PROMPT+="
+
+$INFO_ITEMS
+
+Please provide a brief summary of the review outcome, mentioning any informational items the user should be aware of."
+        else
+            SUMMARY_PROMPT+="
 
 Please provide a brief summary of the review outcome, then you may stop."
+        fi
         output_block "$SUMMARY_PROMPT"
     else
         # Check iteration limit
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
             log "review-gate: max iterations reached"
+            BLOCKING_ISSUES=$(collect_blocking_issues)
+            "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
             REASON="$RESULTS
 
 ---
 
 ## Max Iterations Reached
 
-**Max iterations ($MAX_ITERATIONS) reached without consensus.**
+**Max iterations ($MAX_ITERATIONS) reached without consensus.** The gate has been auto-resolved to proceed."
+            if [[ -n "$BLOCKING_ISSUES" ]]; then
+                REASON+="
 
-Please manually review and decide:
-- Run \`${CLI_CMD} resolve proceed\` to accept anyway
-- Run \`${CLI_CMD} resolve abort\` to discard
+### Remaining Issues (P0/P1)
 
-After resolving, provide a brief summary of the review outcome."
+$BLOCKING_ISSUES"
+            else
+                REASON+="
+
+No remaining P0/P1 issues were reported by non-PASS reviewers."
+            fi
+            REASON+="
+
+Please summarize the review outcome, noting that max iterations was reached and listing any unresolved issues."
 
             output_block "$REASON"
             exit 0
