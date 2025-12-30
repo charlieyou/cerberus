@@ -1045,7 +1045,9 @@ INSTRUCTIONS
 
     if [[ "$CONSENSUS" == "auto_approve" ]]; then
         reset_iteration
-        "$0" resolve proceed >&2 || true
+        REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+            REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+            "$0" resolve proceed >&2 || true
         INFO_ITEMS=$(collect_informational_findings)
         # Prompt Claude for summary before allowing stop
         SUMMARY_PROMPT="$RESULTS
@@ -1075,7 +1077,9 @@ Please provide a brief summary of the review outcome, then you may stop."
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
             log "review-gate: max iterations reached"
             BLOCKING_ISSUES=$(collect_blocking_issues)
-            "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
+            REVIEW_GATE_SESSION_ID="$SESSION_ID" \
+                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
             REASON="$RESULTS
 
 ---
