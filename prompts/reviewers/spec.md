@@ -2,6 +2,12 @@
 
 You are acting as a reviewer for a feature specification proposed by another engineer.
 
+## Specification to Review
+
+<spec>
+${SPEC_CONTENT}
+</spec>
+
 ### What to Evaluate
 
 1. **Clarity of Goals** - Is it clear what problem this solves and for whom?

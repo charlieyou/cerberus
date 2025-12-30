@@ -2,6 +2,12 @@
 
 You are acting as a reviewer for an implementation plan proposed by another engineer.
 
+### Plan to Review
+
+```markdown
+${PLAN_CONTENT}
+```
+
 ### What to Evaluate
 
 1. **Completeness** - Are all necessary steps included? Missing migrations, config, or setup?

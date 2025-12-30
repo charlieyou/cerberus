@@ -215,7 +215,7 @@ USAGE
                 fi
             fi
             if [[ -z "$diff_content" && -n "$base_sha" ]]; then
-                diff_content=$(git diff "${base_sha}..HEAD" 2>/dev/null || true)
+                diff_content=$(git diff "${base_sha}" 2>/dev/null || true)
             fi
             ;;
         --base)
