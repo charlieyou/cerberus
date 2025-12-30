@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
-    "name": "cyou"
+    "name": "charlieyou"
   },
   "repository": "https://github.com/charlieyou/cerberus",
   "license": "MIT",
