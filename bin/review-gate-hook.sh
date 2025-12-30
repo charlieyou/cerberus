@@ -1047,7 +1047,7 @@ INSTRUCTIONS
         reset_iteration
         CLAUDE_SESSION_ID="$SESSION_ID" \
             REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-            "$0" resolve proceed >&2 || true
+            "$0" resolve >&2 || true
         INFO_ITEMS=$(collect_informational_findings)
         # Prompt Claude for summary before allowing stop
         SUMMARY_PROMPT="$RESULTS
@@ -1080,7 +1080,7 @@ Please provide a brief summary of the review outcome, then you may stop."
             INFO_ITEMS=$(collect_informational_findings)
             CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
+                "$0" resolve --reason auto_proceed_max_iter >&2 || true
             REASON="$RESULTS
 
 ---

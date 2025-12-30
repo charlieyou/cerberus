@@ -5,7 +5,7 @@
 #   check          Stop hook logic (reads JSON from stdin)
 #   spawn          Spawn reviewers for an artifact
 #   wait           Wait for review consensus (machine-readable JSON)
-#   resolve        Resolve gate (defaults to proceed)
+#   resolve        Resolve gate and allow stop
 #   artifact-path  Print session-scoped artifact path
 #   author-context Set or clear author context injected into prompts
 
@@ -66,8 +66,8 @@ Commands:
   wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
-  resolve [--reason <text>] [proceed|revise|abort]
-    Resolve the active gate with a decision.
+  resolve [--reason <text>]
+    Resolve the active gate and allow the session to stop.
 
   artifact-path [--session-id <id>] [--transcript-path <path>]
     Print the session-scoped review artifact path.
@@ -1994,7 +1994,6 @@ SCHEMA
 }
 
 review_gate_resolve() {
-    local decision=""
     local reason=""
 
     while [[ $# -gt 0 ]]; do
@@ -2006,23 +2005,12 @@ review_gate_resolve() {
                 fi
                 reason="$1"
                 ;;
-            proceed|revise|abort)
-                if [[ -n "$decision" ]]; then
-                    die "Multiple decisions provided (use only one of proceed|revise|abort)"
-                fi
-                decision="$1"
-                ;;
             *)
-                die "Invalid argument '$1'. Usage: ${CLI_CMD} resolve [--reason <text>] [proceed|revise|abort]"
+                die "Invalid argument '$1'. Usage: ${CLI_CMD} resolve [--reason <text>]"
                 ;;
         esac
         shift
     done
-
-    # Default to proceed if no decision specified
-    if [[ -z "$decision" ]]; then
-        decision="proceed"
-    fi
 
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
@@ -2062,20 +2050,17 @@ review_gate_resolve() {
     trap 'rm -f "${temp_file:-}"' EXIT
 
     if [[ -n "$reason" ]]; then
-        jq --arg decision "$decision" \
-           --arg timestamp "$timestamp" \
+        jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
            '.status = "resolved"
-            | .decision.action = $decision
+            | .decision.action = "proceed"
             | .decision.decided_at = $timestamp
             | .decision.reason = $reason' \
            "$state_file" > "$temp_file"
     else
-        # Clear any existing reason (e.g., from auto_proceed_max_iter) when no reason provided
-        jq --arg decision "$decision" \
-           --arg timestamp "$timestamp" \
+        jq --arg timestamp "$timestamp" \
            '.status = "resolved"
-            | .decision.action = $decision
+            | .decision.action = "proceed"
             | .decision.decided_at = $timestamp
             | del(.decision.reason)' \
            "$state_file" > "$temp_file"
@@ -2086,7 +2071,7 @@ review_gate_resolve() {
     fi
 
     mv "$temp_file" "$state_file"
-    echo "Review gate resolved: $decision"
+    echo "Review gate resolved"
 }
 
 review_gate_wait() {
