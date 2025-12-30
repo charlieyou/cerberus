@@ -1820,9 +1820,13 @@ review_gate_resolve() {
             | .decision.reason = $reason' \
            "$state_file" > "$temp_file"
     else
+        # Clear any existing reason (e.g., from auto_proceed_max_iter) when no reason provided
         jq --arg decision "$decision" \
            --arg timestamp "$timestamp" \
-           '.status = "resolved" | .decision.action = $decision | .decision.decided_at = $timestamp' \
+           '.status = "resolved"
+            | .decision.action = $decision
+            | .decision.decided_at = $timestamp
+            | del(.decision.reason)' \
            "$state_file" > "$temp_file"
     fi
 

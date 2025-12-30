@@ -102,6 +102,7 @@ unwrap_review_json() {
 }
 
 # Find active review gate for current project
+# Also matches recently auto-resolved gates (from max iterations) so manual override works
 find_active_gate() {
     local transcript_path="${1:-}"
     local base_dir
@@ -120,6 +121,27 @@ find_active_gate() {
         if [[ "$status" == "pending" || "$status" == "awaiting_decision" ]]; then
             basename "$session_dir"
             return 0
+        fi
+
+        # Also match recently auto-resolved gates (max iterations) so manual override works
+        if [[ "$status" == "resolved" ]]; then
+            local reason
+            reason=$(jq -r '.decision.reason // ""' "$state_file" 2>/dev/null || echo "")
+            if [[ "$reason" == "auto_proceed_max_iter" ]]; then
+                # Check if it's recent (< 30 min old)
+                local created_at
+                created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
+                if [[ -n "$created_at" ]]; then
+                    local created_epoch now_epoch age_seconds
+                    created_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo 0)
+                    now_epoch=$(date +%s)
+                    age_seconds=$((now_epoch - created_epoch))
+                    if [[ $age_seconds -lt 1800 ]]; then
+                        basename "$session_dir"
+                        return 0
+                    fi
+                fi
+            fi
         fi
     done
 

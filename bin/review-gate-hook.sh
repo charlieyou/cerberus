@@ -578,9 +578,9 @@ review_gate_check() {
         local reviewers
         reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
 
-        local table="## Review Results\n\n"
-        table+="| Reviewer | Verdict | Confidence | Summary |\n"
-        table+="|----------|---------|------------|--------|\n"
+        local table=$'## Review Results\n\n'
+        table+=$'| Reviewer | Verdict | Confidence | Summary |\n'
+        table+=$'|----------|---------|------------|--------|\n'
 
         for reviewer in $reviewers; do
             local output_file="$REVIEWS_DIR/${reviewer}.json"
@@ -620,10 +620,10 @@ review_gate_check() {
                 fi
             fi
 
-            table+="| $reviewer | $verdict | $confidence | $summary |\n"
+            table+="| $reviewer | $verdict | $confidence | $summary |"$'\n'
         done
 
-        echo -e "$table"
+        printf '%s' "$table"
     }
 
     # --- Collect all issues from reviews ---
@@ -644,8 +644,8 @@ review_gate_check() {
             if [[ -f "$output_file" ]]; then
                 local result
                 if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
-                    all_issues+="### $reviewer (ERROR)\n"
-                    all_issues+="Summary: Invalid reviewer output\n\n"
+                    all_issues+=$'### '"$reviewer (ERROR)"$'\n'
+                    all_issues+=$'Summary: Invalid reviewer output\n\n'
                     continue
                 fi
 
@@ -663,23 +663,23 @@ review_gate_check() {
                     summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
 
                     if [[ -n "$findings" || -n "$summary" ]]; then
-                        all_issues+="### $reviewer ($verdict)\n"
+                        all_issues+=$'### '"$reviewer ($verdict)"$'\n'
                         if [[ -n "$summary" ]]; then
-                            all_issues+="Summary: $summary\n"
+                            all_issues+="Summary: $summary"$'\n'
                         fi
                         if [[ -n "$findings" ]]; then
-                            all_issues+="Findings:\n"
+                            all_issues+=$'Findings:\n'
                             while IFS= read -r finding; do
-                                all_issues+="- $finding\n"
+                                all_issues+="- $finding"$'\n'
                             done <<< "$findings"
                         fi
-                        all_issues+="\n"
+                        all_issues+=$'\n'
                     fi
                 fi
             fi
         done
 
-        echo -e "$all_issues"
+        printf '%s' "$all_issues"
     }
 
     # --- Collect blocking (P0/P1) issues from non-PASS reviews ---
@@ -742,20 +742,20 @@ review_gate_check() {
                 summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
 
                 if [[ -n "$findings" ]]; then
-                    all_issues+="### $reviewer ($verdict)\n"
+                    all_issues+=$'### '"$reviewer ($verdict)"$'\n'
                     if [[ -n "$summary" ]]; then
-                        all_issues+="Summary: $summary\n"
+                        all_issues+="Summary: $summary"$'\n'
                     fi
-                    all_issues+="Findings:\n"
+                    all_issues+=$'Findings:\n'
                     while IFS= read -r finding; do
-                        all_issues+="- $finding\n"
+                        all_issues+="- $finding"$'\n'
                     done <<< "$findings"
-                    all_issues+="\n"
+                    all_issues+=$'\n'
                 fi
             fi
         done
 
-        echo -e "$all_issues"
+        printf '%s' "$all_issues"
     }
 
     # --- Collect informational (P2/P3) findings from all reviewers ---
@@ -1036,7 +1036,7 @@ INSTRUCTIONS
 
 $INFO_ITEMS
 
-Please provide a brief summary of the review outcome, mentioning any informational items the user should be aware of."
+Please provide a brief summary of the review outcome, mentioning any informational items the user should be aware of, then you may stop."
         else
             SUMMARY_PROMPT+="
 
