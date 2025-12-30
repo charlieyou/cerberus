@@ -7,7 +7,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
-- **Automatic iteration**: Reviews loop until unanimous approval (default 5 rounds, configurable via `--max-rounds`)
+- **Automatic iteration**: Reviews loop until unanimous approval (default 5 rounds; spec review defaults to 3, configurable via `--max-rounds`)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan review**: Review implementation plans before execution
 - **Spec review**: Review feature specifications before implementation
@@ -116,7 +116,7 @@ All review commands accept `--agents <list>` to run a subset of the available re
 3. **Consensus**: Stop hook checks for unanimous PASS
 4. **Iterate**: If not all PASS, presents issues and blocks for revision
 5. **Repeat**: After changes, review automatically re-runs
-6. **Complete**: All PASS = session can stop; default 5 iterations = manual decision (configurable via `--max-rounds`)
+6. **Complete**: All PASS = session can stop; default 5 iterations (spec review defaults to 3) = manual decision (configurable via `--max-rounds`)
 
 ## Review Criteria
 
@@ -145,6 +145,8 @@ All review commands accept `--agents <list>` to run a subset of the available re
 - **Edge Cases** - Are error paths addressed?
 
 **Convergence policy for specs:** reviewers are instructed to PASS when there are no P0/P1 issues, even if they list P2/P3 suggestions. This keeps spec reviews focused on blocking gaps rather than endless detail expansion. If you want stricter behavior, increase reviewer count or lower `--max-rounds` and use manual override.
+
+**Default max rounds for specs:** 3 (unless overridden by `--max-rounds` or `REVIEW_GATE_MAX_ROUNDS`).
 
 **Author context example (recommended for spec reviews):**
 
