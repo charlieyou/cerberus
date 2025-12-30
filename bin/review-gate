@@ -4,6 +4,7 @@
 # Subcommands:
 #   check          Stop hook logic (reads JSON from stdin)
 #   spawn          Spawn reviewers for an artifact
+#   wait           Wait for review consensus (machine-readable JSON)
 #   resolve        Resolve gate with proceed|revise|abort
 #   artifact-path  Print session-scoped artifact path
 #   author-context Set or clear author context injected into prompts
@@ -46,21 +47,24 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <artifact-path>
+  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--uncommitted | --base <branch> | --commit <sha> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, <range>
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     all reviewers pass.
 
-  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <spec-path>
+  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until all reviewers pass.
+
+  wait --json [--timeout <sec>] [--session-key <key>]
+    Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
   resolve [--reason <text>] <proceed|revise|abort>
     Resolve the active gate with a decision.
@@ -92,6 +96,92 @@ validate_max_rounds() {
     fi
 }
 
+# Read author context from a file (error on missing/empty).
+read_context_file() {
+    local path="${1:-}"
+    if [[ -z "$path" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ ! -f "$path" ]]; then
+        die "Context file not found: $path"
+    fi
+    local content
+    content=$(cat "$path")
+    if [[ -z "$content" ]]; then
+        die "Context file is empty: $path"
+    fi
+    printf '%s' "$content"
+}
+
+# Resolve author context with precedence: context file > env override > stored state.
+resolve_author_context() {
+    local review_dir="${1:-}"
+    local context_file="${2:-}"
+    local context=""
+
+    if [[ -n "$context_file" ]]; then
+        context=$(read_context_file "$context_file")
+        printf '%s' "$context"
+        return 0
+    fi
+
+    if [[ -n "${REVIEW_GATE_AUTHOR_CONTEXT+x}" ]]; then
+        printf '%s' "$REVIEW_GATE_AUTHOR_CONTEXT"
+        return 0
+    fi
+
+    if [[ -n "$review_dir" ]]; then
+        local state_file="$review_dir/gate-state.json"
+        if [[ -f "$state_file" ]]; then
+            context=$(jq -r '.author_context // ""' "$state_file" 2>/dev/null || echo "")
+            if [[ "$context" == "null" ]]; then
+                context=""
+            fi
+        fi
+    fi
+
+    printf '%s' "$context"
+}
+
+# Build the author context block for prompts.
+author_context_block() {
+    local context="$1"
+    if [[ -z "$context" ]]; then
+        echo ""
+        return 0
+    fi
+    printf '%s' "## Author Context"$'\n\n'"Use these clarifications when evaluating the artifact and prior feedback."$'\n\n'"$context"
+}
+
+# Inject a context block before "## Output Format" (or append if not found).
+inject_context_block() {
+    local prompt_content="$1"
+    local context_block="$2"
+    if [[ -z "$context_block" ]]; then
+        printf '%s' "$prompt_content"
+        return 0
+    fi
+
+    local context_tmp
+    context_tmp=$(mktemp -t review-gate-context.XXXXXX)
+    printf '%s' "$context_block" > "$context_tmp"
+
+    local updated
+    updated=$(awk -v ctx_file="$context_tmp" '
+        BEGIN { while ((getline line < ctx_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(ctx_file); inserted=0 }
+        /^## Output Format/ && inserted==0 {
+            print ctx
+            print ""
+            inserted=1
+        }
+        { print }
+        END { if (inserted==0) { print ""; print ctx } }
+    ' <<< "$prompt_content")
+    rm -f "$context_tmp"
+    printf '%s' "$updated"
+}
+
 # normalize_mode and validate_mode are provided by review-gate-models.sh
 
 review_gate_spawn_code_review() {
@@ -103,6 +193,7 @@ review_gate_spawn_code_review() {
     local agents_csv=""
     local max_rounds=""
     local mode=""
+    local context_file=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -130,6 +221,14 @@ review_gate_spawn_code_review() {
                 mode="${2:-}"
                 shift 2
                 ;;
+            --context-file=*)
+                context_file="${1#*=}"
+                shift
+                ;;
+            --context-file)
+                context_file="${2:-}"
+                shift 2
+                ;;
             --uncommitted)
                 diff_mode="--uncommitted"
                 diff_args_str="--uncommitted"
@@ -155,6 +254,7 @@ Options:
   --agents <list>      Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>     Maximum review iterations before manual resolution
   --mode <level>       Intelligence mode: fast, smart, max
+  --context-file <path> Inject author context from file into the prompt
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha>      Review a specific commit
@@ -338,15 +438,7 @@ USAGE
     }
 
     local author_context=""
-    local state_file="$review_dir/gate-state.json"
-    if [[ -n "${REVIEW_GATE_AUTHOR_CONTEXT+x}" ]]; then
-        author_context="$REVIEW_GATE_AUTHOR_CONTEXT"
-    elif [[ -f "$state_file" ]]; then
-        author_context=$(jq -r '.author_context // ""' "$state_file" 2>/dev/null || echo "")
-        if [[ "$author_context" == "null" ]]; then
-            author_context=""
-        fi
-    fi
+    author_context=$(resolve_author_context "$review_dir" "$context_file")
 
     local previous_reviews=""
     previous_reviews=$(code_review_previous_reviews "$review_dir")
@@ -468,11 +560,15 @@ USAGE
     if [[ -n "$mode" ]]; then
         mode_arg=(--mode "$mode")
     fi
+    local -a context_file_arg=()
+    if [[ -n "$context_file" ]]; then
+        context_file_arg=(--context-file "$context_file")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 }
 
 review_gate_spawn_plan_review() {
@@ -480,6 +576,7 @@ review_gate_spawn_plan_review() {
     local agents_csv=""
     local max_rounds=""
     local mode=""
+    local context_file=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -511,6 +608,14 @@ review_gate_spawn_plan_review() {
                 mode="${2:-}"
                 shift 2
                 ;;
+            --context-file=*)
+                context_file="${1#*=}"
+                shift
+                ;;
+            --context-file)
+                context_file="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -530,6 +635,7 @@ Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>          Maximum review iterations before manual resolution
   --mode <level>           Intelligence mode: fast, smart, max
+  --context-file <path>     Inject author context from file into the prompt
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -717,11 +823,15 @@ JSON only, no markdown code fences:
     if [[ -n "$mode" ]]; then
         mode_arg=(--mode "$mode")
     fi
+    local -a context_file_arg=()
+    if [[ -n "$context_file" ]]; then
+        context_file_arg=(--context-file "$context_file")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="plan-review-iterative" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn --type="plan-review-iterative" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -743,6 +853,7 @@ review_gate_spawn_spec_review() {
     local agents_csv=""
     local max_rounds=""
     local mode=""
+    local context_file=""
 
     # --- Session metadata ---
     local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -774,6 +885,14 @@ review_gate_spawn_spec_review() {
                 mode="${2:-}"
                 shift 2
                 ;;
+            --context-file=*)
+                context_file="${1#*=}"
+                shift
+                ;;
+            --context-file)
+                context_file="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -792,6 +911,7 @@ Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>          Maximum review iterations before manual resolution
   --mode <level>           Intelligence mode: fast, smart, max
+  --context-file <path>     Inject author context from file into the prompt
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -974,11 +1094,15 @@ JSON only, no markdown code fences:
     if [[ -n "$mode" ]]; then
         mode_arg=(--mode "$mode")
     fi
+    local -a context_file_arg=()
+    if [[ -n "$context_file" ]]; then
+        context_file_arg=(--context-file "$context_file")
+    fi
     REVIEW_GATE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="spec" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn --type="spec" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
 
     # Update state to include spec path in mode
     local state_file="$review_dir/gate-state.json"
@@ -1137,6 +1261,7 @@ review_gate_spawn() {
     local agents_csv=""
     local max_rounds=""
     local mode=""
+    local context_file=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1164,6 +1289,14 @@ review_gate_spawn() {
                 mode="${2:-}"
                 shift 2
                 ;;
+            --context-file=*)
+                context_file="${1#*=}"
+                shift
+                ;;
+            --context-file)
+                context_file="${2:-}"
+                shift 2
+                ;;
             --type=*)
                 REVIEW_TYPE="${1#*=}"
                 shift
@@ -1182,7 +1315,7 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
                 return 0
                 ;;
@@ -1540,21 +1673,9 @@ PROMPT
 
     preflight_check
 
-    # --- Resolve author context (from env override or previous state) ---
-    local previous_author_context=""
-    if [[ -f "$STATE_FILE" ]]; then
-        previous_author_context=$(jq -r '.author_context // ""' "$STATE_FILE" 2>/dev/null || echo "")
-        if [[ "$previous_author_context" == "null" ]]; then
-            previous_author_context=""
-        fi
-    fi
-
+    # --- Resolve author context (context file > env override > previous state) ---
     local author_context=""
-    if [[ -n "${REVIEW_GATE_AUTHOR_CONTEXT+x}" ]]; then
-        author_context="$REVIEW_GATE_AUTHOR_CONTEXT"
-    else
-        author_context="$previous_author_context"
-    fi
+    author_context=$(resolve_author_context "$REVIEW_DIR" "$context_file")
 
     local artifact_path
     artifact_path=$(resolve_artifact "$artifact_arg")
@@ -1583,6 +1704,13 @@ PROMPT
 
     local prompt_file="$REVIEWS_DIR/review.prompt"
     if [[ -n "$prebuilt_prompt_content" ]]; then
+        if [[ -n "$author_context" ]]; then
+            if ! printf '%s' "$prebuilt_prompt_content" | grep -Fq "## Author Context"; then
+                local context_block
+                context_block=$(author_context_block "$author_context")
+                prebuilt_prompt_content=$(inject_context_block "$prebuilt_prompt_content" "$context_block")
+            fi
+        fi
         # Use pre-built prompt content (read before clean_state)
         echo "$prebuilt_prompt_content" > "$prompt_file"
     else
@@ -1838,6 +1966,332 @@ review_gate_resolve() {
     echo "Review gate resolved: $decision"
 }
 
+review_gate_wait() {
+    local json_mode="false"
+    local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
+    local session_key="${REVIEW_GATE_SESSION_KEY:-}"
+    local session_id="${REVIEW_GATE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+    local session_key_from_arg="false"
+    local session_id_from_arg="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                json_mode="true"
+                shift
+                ;;
+            --timeout=*)
+                timeout="${1#*=}"
+                shift
+                ;;
+            --timeout)
+                timeout="${2:-}"
+                shift 2
+                ;;
+            --session-key=*)
+                session_key="${1#*=}"
+                session_key_from_arg="true"
+                shift
+                ;;
+            --session-key)
+                session_key="${2:-}"
+                session_key_from_arg="true"
+                shift 2
+                ;;
+            --session-id)
+                session_id="${2:-}"
+                session_id_from_arg="true"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<USAGE
+Usage: ${CLI_CMD} wait --json [--timeout <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
+USAGE
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    if [[ "$json_mode" != "true" ]]; then
+        die "wait requires --json output"
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required but not installed" >&2
+        exit 5
+    fi
+
+    wait_error() {
+        local message="$1"
+        jq -n --arg status "error" --arg error "$message" \
+            '{status:$status, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[{reviewer:null, error:$error}]}'
+        exit 5
+    }
+
+    wait_no_reviewers() {
+        jq -n --arg status "no_reviewers" \
+            '{status:$status, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[]}'
+        exit 4
+    }
+
+    if [[ -z "$timeout" || ! "$timeout" =~ ^[0-9]+$ ]]; then
+        wait_error "Invalid --timeout '$timeout' (must be >= 0)"
+    fi
+
+    if [[ -z "$poll_interval" || ! "$poll_interval" =~ ^[0-9]+$ ]]; then
+        poll_interval=3
+    fi
+    if [[ "$poll_interval" -lt 1 ]]; then
+        poll_interval=1
+    fi
+
+    if [[ "$session_id_from_arg" != "true" && -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    find_state_by_session_key() {
+        local key="$1"
+        local candidate=""
+        local candidate_epoch=0
+        shopt -s nullglob
+        local state_file
+        for state_file in "$HOME/.claude/projects"/*/cerberus/*/gate-state.json; do
+            [[ ! -f "$state_file" ]] && continue
+            local owner_key
+            owner_key=$(jq -r '.owner.session_key // ""' "$state_file" 2>/dev/null || echo "")
+            if [[ "$owner_key" != "$key" ]]; then
+                continue
+            fi
+            local created_at epoch
+            created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
+            epoch=0
+            if [[ -n "$created_at" ]]; then
+                epoch=$(date -d "$created_at" +%s 2>/dev/null || echo 0)
+            fi
+            if [[ "$epoch" -eq 0 ]]; then
+                epoch=$(stat -c %Y "$state_file" 2>/dev/null || stat -f %m "$state_file" 2>/dev/null || echo 0)
+            fi
+            if [[ -z "$candidate" || "$epoch" -gt "$candidate_epoch" ]]; then
+                candidate="$state_file"
+                candidate_epoch="$epoch"
+            fi
+        done
+        shopt -u nullglob
+        printf '%s' "$candidate"
+    }
+
+    if [[ "$session_key_from_arg" == "true" && "$session_id_from_arg" != "true" ]]; then
+        session_id=""
+    fi
+
+    local state_file=""
+    if [[ -n "$session_id" ]]; then
+        local review_dir
+        review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+        state_file="$review_dir/gate-state.json"
+    elif [[ -n "$session_key" ]]; then
+        state_file=$(find_state_by_session_key "$session_key")
+    else
+        wait_error "session key or session id is required"
+    fi
+
+    if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+        wait_no_reviewers
+    fi
+
+    local review_dir
+    review_dir=$(dirname "$state_file")
+    local reviews_dir="$review_dir/reviews"
+
+    local state_consensus
+    state_consensus=$(jq -r '.consensus.verdict // ""' "$state_file" 2>/dev/null || echo "")
+    if [[ "$state_consensus" == "no_reviewers" ]]; then
+        wait_no_reviewers
+    fi
+
+    local reviewers
+    reviewers=$(jq -r '.reviewers | keys[]' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$reviewers" ]]; then
+        wait_no_reviewers
+    fi
+
+    local start_time
+    start_time=$(date +%s)
+    local timed_out="false"
+
+    while true; do
+        local all_done="true"
+        local reviewer
+        for reviewer in $reviewers; do
+            local done_file="$reviews_dir/${reviewer}.done"
+            local failed_file="$reviews_dir/${reviewer}.failed"
+            if [[ -f "$done_file" || -f "$failed_file" ]]; then
+                continue
+            fi
+            all_done="false"
+            break
+        done
+
+        if [[ "$all_done" == "true" ]]; then
+            break
+        fi
+
+        local now elapsed
+        now=$(date +%s)
+        elapsed=$((now - start_time))
+        if [[ "$elapsed" -ge "$timeout" ]]; then
+            timed_out="true"
+            break
+        fi
+        sleep "$poll_interval"
+    done
+
+    local result_json
+    result_json=$(jq -n '{status:null, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[]}')
+
+    local parse_error_count=0
+    local has_fail=0
+    local has_needs=0
+
+    local reviewer
+    for reviewer in $reviewers; do
+        local done_file="$reviews_dir/${reviewer}.done"
+        local failed_file="$reviews_dir/${reviewer}.failed"
+        local output_file="$reviews_dir/${reviewer}.json"
+
+        if [[ "$timed_out" == "true" && ! -f "$done_file" && ! -f "$failed_file" ]]; then
+            local reviewer_entry
+            reviewer_entry=$(jq -n --arg verdict "PENDING" --arg summary "Timed out waiting for reviewer" \
+                '{verdict:$verdict, summary:$summary, findings: []}')
+            result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+                '.reviewers[$reviewer] = $entry')
+            continue
+        fi
+
+        if [[ -f "$failed_file" ]]; then
+            local reviewer_entry
+            reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Reviewer process failed" \
+                '{verdict:$verdict, summary:$summary, findings: []}')
+            result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+                --arg error "reviewer_failed" \
+                '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error}]')
+            parse_error_count=$((parse_error_count + 1))
+            continue
+        fi
+
+        if [[ ! -f "$output_file" ]]; then
+            local reviewer_entry
+            reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Reviewer output missing" \
+                '{verdict:$verdict, summary:$summary, findings: []}')
+            result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+                --arg error "missing_output" \
+                '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error}]')
+            parse_error_count=$((parse_error_count + 1))
+            continue
+        fi
+
+        local result
+        if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+            local reviewer_entry
+            reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Invalid reviewer output" \
+                '{verdict:$verdict, summary:$summary, findings: []}')
+            result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+                --arg error "invalid_output" \
+                '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error}]')
+            parse_error_count=$((parse_error_count + 1))
+            continue
+        fi
+
+        local verdict summary findings_json
+        verdict=$(echo "$result" | jq -r '.verdict // ""' 2>/dev/null || echo "")
+        summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
+        findings_json=$(echo "$result" | jq -c '.findings // []' 2>/dev/null || echo "[]")
+
+        case "$verdict" in
+            PASS|FAIL|NEEDS_WORK)
+                ;;
+            *)
+                local reviewer_entry
+                reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Invalid verdict" \
+                    '{verdict:$verdict, summary:$summary, findings: []}')
+                result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+                    --arg error "invalid_verdict" \
+                    '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error}]')
+                parse_error_count=$((parse_error_count + 1))
+                continue
+                ;;
+        esac
+
+        local reviewer_entry
+        reviewer_entry=$(jq -n --arg verdict "$verdict" --arg summary "$summary" --argjson findings "$findings_json" \
+            '{verdict:$verdict, summary:$summary, findings:$findings}')
+        result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
+            '.reviewers[$reviewer] = $entry')
+        result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson findings "$findings_json" \
+            '.aggregated_findings += ($findings | map(. + {reviewer:$reviewer}))')
+
+        case "$verdict" in
+            FAIL) has_fail=1 ;;
+            NEEDS_WORK) has_needs=1 ;;
+        esac
+    done
+
+    local status consensus_verdict=""
+    if [[ "$timed_out" == "true" ]]; then
+        status="timeout"
+        consensus_verdict=""
+    else
+        status="complete"
+        if [[ "$parse_error_count" -gt 0 ]]; then
+            consensus_verdict="ERROR"
+        else
+            if [[ "$has_fail" -gt 0 ]]; then
+                consensus_verdict="FAIL"
+            elif [[ "$has_needs" -gt 0 ]]; then
+                consensus_verdict="NEEDS_WORK"
+            else
+                consensus_verdict="PASS"
+            fi
+        fi
+    fi
+
+    if [[ -n "$consensus_verdict" ]]; then
+        result_json=$(echo "$result_json" | jq --arg status "$status" --arg consensus "$consensus_verdict" \
+            '.status = $status | .consensus_verdict = $consensus')
+    else
+        result_json=$(echo "$result_json" | jq --arg status "$status" '.status = $status')
+    fi
+
+    echo "$result_json"
+
+    if [[ "$status" == "timeout" ]]; then
+        exit 3
+    fi
+    if [[ "$parse_error_count" -gt 0 ]]; then
+        exit 2
+    fi
+    case "$consensus_verdict" in
+        PASS)
+            exit 0
+            ;;
+        FAIL|NEEDS_WORK)
+            exit 2
+            ;;
+        *)
+            exit 5
+            ;;
+    esac
+}
+
 main() {
     local cmd="${1:-}"
     case "$cmd" in
@@ -1864,6 +2318,10 @@ main() {
         resolve)
             shift
             review_gate_resolve "$@"
+            ;;
+        wait)
+            shift
+            review_gate_wait "$@"
             ;;
         artifact-path|artifact_path)
             shift

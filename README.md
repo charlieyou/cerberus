@@ -193,6 +193,15 @@ Clear it when you're done:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context --clear
 ```
 
+For external integrations, you can inject context directly:
+
+```bash
+REVIEW_GATE_AUTHOR_CONTEXT="Issue: align schema names with API v2." \
+  ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn path/to/artifact.md
+
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn --context-file path/to/issue.txt path/to/artifact.md
+```
+
 ## Manual Override
 
 When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution only if you want to override that outcome (e.g. abort instead of proceed):
@@ -204,6 +213,16 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve proceed
 # Abort and discard
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve abort
 ```
+
+## External Orchestration
+
+Machine-readable wait for external callers:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate wait --json --session-key <key> [--timeout 600]
+```
+
+Exit codes: `0=PASS`, `2=FAIL/NEEDS_WORK or parse error`, `3=timeout`, `4=no_reviewers`, `5=internal error`.
 
 ## Configuration
 
@@ -221,6 +240,7 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 | `REVIEW_GATE_MAX_ROUNDS` | `3` | Max review iterations before auto-resolve |
 | `REVIEW_GATE_MAX_WAIT_SECONDS` | `600` | Max time to wait for reviewers |
 | `REVIEW_GATE_POLL_INTERVAL_SECONDS` | `3` | Polling interval |
+| `REVIEW_GATE_AUTHOR_CONTEXT` | `` | Inject author context into prompts |
 
 ## License
 
