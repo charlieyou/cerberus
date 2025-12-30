@@ -736,7 +736,7 @@ review_gate_check() {
                       end
                     )) |
                     .[] |
-                    normalize_title(.title; .priority)
+                    normalize_title(.title; .priority) + ": " + (.body // "")
                 ' 2>/dev/null || echo "")
                 local summary
                 summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
@@ -808,7 +808,7 @@ review_gate_check() {
                       end
                     )) |
                     .[] |
-                    normalize_title(.title; .priority)
+                    normalize_title(.title; .priority) + ": " + (.body // "")
                 ' 2>/dev/null || echo "")
 
                 if [[ -n "$findings" ]]; then
