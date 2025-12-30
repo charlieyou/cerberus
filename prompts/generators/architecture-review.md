@@ -4,7 +4,29 @@
 
 Perform a **principal-engineer-level** architecture review focused on **high-leverage design improvements**. Optimize for **maximum long-term payoff per hour invested**. Prefer **functional patterns** (pure functions, explicit data flow, composition) unless the codebase clearly benefits from OO constructs.
 
-This is not a correctness bug hunt. Only flag correctness issues if they block architectural change or reveal systemic design flaws.
+This is not a correctness bug hunt. Only flag correctness issues if they block architectural change or reveal systemic design flaws. Assume healthcheck already covered dead code, AI smells, hygiene, and missing tests.
+
+## Input
+
+Review the files/directories specified by the user. If none specified, review the entire codebase starting from entry points and high-traffic modules.
+
+## Ground Rules
+
+- **Be evidence-based**: only cite issues you can point to in code that was actually inspected.
+- **Avoid speculation**: if unsure, mark "Needs verification" and lower confidence.
+- **Be specific**: tie every point to concrete files, modules, or functions (no generic advice).
+- **Keep it incremental**: propose refactors that can land in steps; avoid "rewrite it all".
+- **If no issues**: still provide the Method block and explicitly state no high-leverage issues found.
+- **Clarify only if blocked**: ask at most 1–3 questions only when a key architectural assumption would materially change the review; otherwise state assumptions in Method.
+- **Keep excerpts tiny**: reference files and symbols; avoid long code blocks or large quotes.
+
+## Big-Picture Sweep (Required)
+
+1. **Map the system**: identify entry points, core modules, and the main orchestration/data flows.
+2. **Hotspot inventory**: list the top 5 files by LOC and top 5 functions by complexity (or best available proxy). Call out any file >500 LOC or function >80 lines.
+3. **God-file check**: if a core-path file is oversized or mixes concerns, either flag it as an issue or explicitly justify why it is cohesive enough to keep.
+
+Include the hotspot inventory in the **Method** block (as a single bullet).
 
 ## Guidelines for Flagging Issues
 
@@ -15,10 +37,10 @@ This is not a correctness bug hunt. Only flag correctness issues if they block a
 5. The fix should provide leverage - improving multiple areas, not just one.
 6. Avoid speculative concerns - identify concrete structural problems.
 7. Only cite issues you can point to in code you actually inspected.
-8. Do not rely on unstated assumptions; if you're not confident, skip it.
-9. Keep line ranges as tight as possible (avoid ranges over 5-10 lines).
+8. Do not rely on unstated assumptions; if evidence is partial, lower confidence and say what’s missing.
+9. Keep line ranges tight; for cross-cutting issues, cite **multiple small anchors** instead of one huge range.
 10. Use one issue per distinct problem.
-11. If there is no issue a maintainer would definitely fix, prefer no findings.
+11. If no high-leverage issues exist **after** the hotspot sweep, you may report none.
 
 ## Comment Guidelines
 
@@ -48,6 +70,12 @@ Thresholds (tune to language):
 - Cyclomatic complexity >= **15**
 - Function length >= **80** lines
 - File length >= **500** lines
+
+If lizard is unavailable, at least capture the largest files by LOC:
+
+```bash
+rg --files -g '*.{ts,js,py,go,java,kt,rb,cs}' | xargs wc -l | sort -nr | head -n 20
+```
 
 ### Dependency Exploration (Python - grimp)
 
@@ -90,6 +118,12 @@ npx jscpd --min-lines 30 --min-tokens 200 .
 
 Stop traversal once you have enough evidence to populate the top 6-12 issues.
 
+## Scope & Stopping Criteria
+
+- Focus primarily on **structural issues** and **testability**; use complexity/duplication metrics as supporting evidence.
+- Skip low-impact refactors unless they unlock significant simplification.
+- Output **all** findings you identify, then order them by priority (P0→P3).
+
 ## What to Look For
 
 ### 1. Boundary & Dependency Smells
@@ -97,6 +131,8 @@ Stop traversal once you have enough evidence to populate the top 6-12 issues.
 - UI/API code reaching into persistence or infra details
 - Domain logic scattered across `utils/` or unrelated modules
 - Inconsistent error handling or data validation across similar flows
+- Configuration scattered across multiple locations
+- Tight coupling to external services that makes core logic hard to test
 
 ### 2. Complexity & Duplication Hotspots
 - Functions with complex branching or deep nesting
@@ -144,6 +180,14 @@ When in doubt, prioritize:
 
 Use OO only when it clearly improves ergonomics (e.g., polymorphism with real behavior variance).
 
+## Verification Before Reporting
+
+Before marking an issue as High/P1 or above:
+1. Confirm the hotspot is **reachable** and on a meaningful path.
+2. Verify the behavior is not intentionally duplicated (performance or isolation).
+3. Check for existing tests that already cover the hard-to-test area.
+4. If uncertain, mark **"Needs verification"** and lower confidence.
+
 ## Out of Scope (Do Not Report)
 
 - Style/formatting issues (leave to linters)
@@ -159,7 +203,7 @@ Use OO only when it clearly improves ergonomics (e.g., polymorphism with real be
 
 Produce a structured architecture review with:
 
-1. **Method** block (3-6 bullets): tools run, entry points reviewed, key files scanned, assumptions/unknowns
+1. **Method** block (3-6 bullets): tools run, entry points reviewed, key files scanned, hotspot inventory, assumptions/unknowns
 
 2. **Issues** sorted by priority [P0-P3], each with:
    - **Priority tag and title** (e.g., "[P1] Circular dependency between auth and users")
