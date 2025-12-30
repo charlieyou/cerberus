@@ -16,11 +16,6 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # Load model helpers
 source "$SCRIPT_DIR/review-gate-models.sh"
 
-# Model defaults
-CODEX_MODEL="gpt-5.2-codex"
-GEMINI_MODEL="gemini-3-flash-preview"
-CLAUDE_MODEL="opus"
-
 usage() {
     cat <<'USAGE'
 Usage: generate [options]
