@@ -80,6 +80,37 @@ Perform a thorough code health analysis of this codebase. Focus on finding real 
 - If function A falls back to X, similar function B should too
 - Trace a value from input to where it affects output - if it doesn't, flag it
 
+### Cross-File Consistency
+- Same pattern should be used everywhere; if 9/10 functions handle errors one way and 1 does it differently, flag the outlier
+- Near-identical code blocks that should be extracted into a shared function (copy-paste detection)
+
+### Test Coverage Gaps
+- Public functions with no test that calls them
+- Critical code paths that lack any test coverage
+
+### Configuration Drift
+- Hardcoded values that should match config
+- Config values that don't match reality (docs say X, code does Y)
+- Multiple sources of truth for the same setting
+
+### Error Message Quality
+- Errors that don't include enough context to debug (e.g., "Failed" vs "Failed to connect to X: timeout after 30s")
+- Swallowed errors that log nothing
+
+### Boundary Validation
+- Public APIs that don't validate inputs
+- Internal functions that unnecessarily validate (validation should happen at boundaries, not everywhere)
+
+### Naming vs Behavior Mismatch
+- Function named `getX` that also sets state
+- `isValid` that throws instead of returning false
+- `create` that sometimes returns existing object
+
+### Implicit Dependencies
+- Code that assumes environment variables exist without checking
+- Code that assumes files/directories exist without checking
+- Hidden coupling to global state
+
 ## Priority Levels
 
 - [P0] - Critical. Broken functionality or security issue.
@@ -105,13 +136,27 @@ Otherwise, treat intentional API simplification as informational (P2/P3). The au
 
 ## Output
 
-Write your findings as free-form analysis. For each issue include:
-- Priority tag [P0-P3] and short title
-- File paths and line numbers
-- Why the issue matters (1 paragraph max)
-- Suggested fix (brief and concrete)
+Output your findings as JSON for easier synthesis:
 
-Be thorough but concise. Focus on issues that actually matter for code health. If there are no strong findings, output none.
+```json
+{
+  "findings": [
+    {
+      "priority": "P1",
+      "title": "Short descriptive title",
+      "category": "Behavioral Inconsistencies",
+      "files": ["path/to/file.ts:42-45"],
+      "description": "What's wrong and why it matters (1 paragraph max)",
+      "fix": "Concrete suggested fix"
+    }
+  ],
+  "summary": "Brief overall assessment (1-2 sentences)"
+}
+```
+
+If there are no strong findings, output `{"findings": [], "summary": "No significant issues found."}`.
+
+Be thorough but concise. Focus on issues that actually matter for code health.
 
 ## CRITICAL RULES
 
