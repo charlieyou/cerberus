@@ -297,18 +297,26 @@ USAGE
 
     if [[ ${#positionals[@]} -gt 0 ]]; then
         if [[ "$force_focus" != "true" && "$diff_mode" == "--uncommitted" ]]; then
-            if [[ "${positionals[0]}" == *..* ]]; then
-                # Commit range like main..feature
+            local first_pos="${positionals[0]}"
+            if [[ "$first_pos" == *..* ]]; then
+                # Commit range like main..feature - validate it exists
+                if ! git rev-parse --verify "${first_pos%%..*}^{commit}" >/dev/null 2>&1 || \
+                   ! git rev-parse --verify "${first_pos##*..}^{commit}" >/dev/null 2>&1; then
+                    die "Invalid commit range: $first_pos (use -- to force as focus text)"
+                fi
                 diff_mode="range"
-                diff_target="${positionals[0]}"
-                diff_args_str="${positionals[0]}"
+                diff_target="$first_pos"
+                diff_args_str="$first_pos"
                 positionals=("${positionals[@]:1}")
-            elif git rev-parse --verify "${positionals[0]}^{commit}" >/dev/null 2>&1; then
+            elif git rev-parse --verify "${first_pos}^{commit}" >/dev/null 2>&1; then
                 # Valid git reference (branch, tag, or SHA)
                 diff_mode="--base"
-                diff_target="${positionals[0]}"
-                diff_args_str="--base ${positionals[0]}"
+                diff_target="$first_pos"
+                diff_args_str="--base $first_pos"
                 positionals=("${positionals[@]:1}")
+            elif [[ "$first_pos" =~ ^[a-zA-Z0-9_/-]+$ ]] && [[ ${#positionals[@]} -eq 1 ]]; then
+                # Single word that looks like a git ref but doesn't exist - likely a typo
+                die "Unknown git reference: $first_pos (use -- to force as focus text)"
             fi
         fi
 
@@ -729,11 +737,15 @@ USAGE
     if [[ ${#positionals[@]} -gt 0 ]]; then
         local first_arg="${positionals[0]}"
         # Only treat as plan path if not forcing focus mode
-        # Only treat as plan path if it exists as a file, or looks like an explicit path prefix
-        # Note: *"/"* was removed because focus text like "check API/endpoint" would be misinterpreted
-        if [[ "$force_focus" != "true" ]] && [[ -f "$first_arg" || "$first_arg" == /* || "$first_arg" == ./* || "$first_arg" == ../* || "$first_arg" == *.md ]]; then
-            plan_path="$first_arg"
-            positionals=("${positionals[@]:1}")
+        if [[ "$force_focus" != "true" ]]; then
+            # Check for path-like patterns: existing file, explicit prefixes, .md extension, or contains /
+            if [[ -f "$first_arg" || "$first_arg" == /* || "$first_arg" == ./* || "$first_arg" == ../* || "$first_arg" == *.md ]]; then
+                plan_path="$first_arg"
+                positionals=("${positionals[@]:1}")
+            elif [[ "$first_arg" == *"/"* ]]; then
+                # Looks like a path (contains /) but file doesn't exist - error early
+                die "Plan file not found: $first_arg (use -- to force as focus text)"
+            fi
         fi
 
         if [[ ${#positionals[@]} -gt 0 ]]; then
@@ -883,9 +895,22 @@ JSON only, no markdown code fences:
 - file_path, line_start, line_end are optional (use null if not applicable)"
     fi
 
-    # --- Inject focus area if provided ---
+    # --- Inject focus area before Output Format section if provided ---
     if [[ -n "$focus_area" ]]; then
-        prompt_content+=$'\n\n## Focus Area\nPay special attention to the following when reviewing:\n\n'"$focus_area"
+        local focus_section=$'## Focus Area\nPay special attention to the following when reviewing:\n\n'"$focus_area"
+        local focus_tmp="${review_dir}/focus.tmp"
+        printf '%s' "$focus_section" > "$focus_tmp"
+        prompt_content=$(awk -v focus_file="$focus_tmp" '
+            BEGIN { while ((getline line < focus_file) > 0) focus = focus (focus ? "\n" : "") line; close(focus_file); inserted=0 }
+            /^## Output Format/ && inserted==0 {
+                print focus
+                print ""
+                inserted=1
+            }
+            { print }
+            END { if (inserted==0 && focus != "") { print ""; print focus } }
+        ' <<< "$prompt_content")
+        rm -f "$focus_tmp"
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
