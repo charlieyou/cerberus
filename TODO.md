@@ -16,6 +16,4 @@
    - Support `REVIEW_GATE_AUTHOR_CONTEXT` or `--context-file` for external integrations
    - Ensure it’s included in the built prompt for all review modes (not just iterative code review)
 
-* prompt claude to return more context about pass vs max iterations reached. block the stop hook, free it for the next hook run, and prompt with context?? code review should return p2/3/4 issues
-
 * plan generation mode
