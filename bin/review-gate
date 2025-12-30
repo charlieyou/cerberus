@@ -1576,8 +1576,16 @@ DEFAULT
             echo ""
         fi
 
+        # Use different framing for architecture-review (verification vs evaluation)
+        local intro_text
+        if [[ "$review_type" == "architecture-review" ]]; then
+            intro_text="You are verifying an architecture review artifact. Your task is to check whether the claims in the artifact are accurate by examining the actual codebase. Use tools to read files and search code to verify each finding."
+        else
+            intro_text="You are reviewing an artifact for quality and correctness."
+        fi
+
         cat <<PROMPT
-You are reviewing an artifact for quality and correctness.
+$intro_text
 
 ## Artifact
 Path: $artifact_path
