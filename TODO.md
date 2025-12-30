@@ -16,3 +16,5 @@
 * spawns should not exit immediately
 
 * code review flag to not fix the code, iterate on the review
+
+* Fix the message passing from claude back to reviewers -- pretty sure nothing happens
