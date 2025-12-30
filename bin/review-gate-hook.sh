@@ -1077,6 +1077,7 @@ Please provide a brief summary of the review outcome, then you may stop."
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
             log "review-gate: max iterations reached"
             BLOCKING_ISSUES=$(collect_blocking_issues)
+            INFO_ITEMS=$(collect_informational_findings)
             REVIEW_GATE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve proceed --reason auto_proceed_max_iter >&2 || true
@@ -1098,6 +1099,11 @@ $BLOCKING_ISSUES"
 
 No remaining P0/P1 issues were reported by non-PASS reviewers."
             fi
+            if [[ -n "$INFO_ITEMS" ]]; then
+                REASON+="
+
+$INFO_ITEMS"
+            fi
             REASON+="
 
 Please summarize the review outcome, noting that max iterations was reached and listing any unresolved issues."
@@ -1108,6 +1114,7 @@ Please summarize the review outcome, noting that max iterations was reached and 
 
         # Collect issues from non-PASS reviews
         ISSUES=$(collect_issues)
+        INFO_ITEMS=$(collect_informational_findings)
 
         # Extract mode paths/args BEFORE cleaning state (which deletes STATE_FILE)
         MODE_SPEC_PATH=$(jq -r '.mode.spec_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
@@ -1134,6 +1141,11 @@ Please summarize the review outcome, noting that max iterations was reached and 
 **All reviewers must agree (PASS) before proceeding.**
 
 $REVISION_INSTRUCTIONS"
+        if [[ -n "$INFO_ITEMS" ]]; then
+            REASON+="
+
+$INFO_ITEMS"
+        fi
 
         output_block "$REASON"
     fi
