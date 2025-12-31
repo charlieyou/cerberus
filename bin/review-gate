@@ -1476,7 +1476,7 @@ review_gate_spawn() {
                 OWNER_TRANSCRIPT_PATH="${2:-}"
                 shift 2
                 ;;
-            -h|--help|help)
+            -h|--help)
                 cat <<USAGE
 Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
