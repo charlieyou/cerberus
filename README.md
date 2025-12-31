@@ -61,6 +61,8 @@ Review git changes with external reviewers:
 /cerberus:review-code --agents codex,gemini  # Only run selected reviewers
 ```
 
+**Iterative fix tracking:** For `--commit`, `--base`, and range modes, the original review scope is locked at first spawn. Fix commits made during the review session are automatically included in subsequent iterations without shifting the original range.
+
 ### Plan Review
 
 Review an implementation plan:

@@ -121,6 +121,13 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract tip-sha from artifact frontmatter ---
+    extract_tip_sha() {
+        if [[ -f "$ARTIFACT_FILE" ]]; then
+            sed -n 's/^<!-- *tip-sha: *\([^ ]*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
     # --- Helper: Extract plan-path from artifact frontmatter ---
     extract_plan_path() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -246,8 +253,13 @@ review_gate_check() {
             log "review-gate: code-review-iterative re-spawn with diff_args='$diff_args'"
             local base_sha
             base_sha=$(extract_base_sha)
+            local tip_sha
+            tip_sha=$(extract_tip_sha)
             if [[ -n "$base_sha" ]]; then
                 log "review-gate: code-review-iterative using base_sha=$base_sha"
+            fi
+            if [[ -n "$tip_sha" ]]; then
+                log "review-gate: code-review-iterative using tip_sha=$tip_sha"
             fi
 
             # Parse diff_args into array safely (no eval to avoid command injection)
@@ -261,6 +273,7 @@ review_gate_check() {
                CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_GATE_BASE_SHA="$base_sha" \
+               REVIEW_GATE_TIP_SHA="$tip_sha" \
                "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
