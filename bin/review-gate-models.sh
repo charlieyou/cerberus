@@ -286,10 +286,9 @@ repair_review_output() {
             else
                 if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
                     gemini -m "$model" -o json < "$prompt_file" > "$out_file" 2>&1; then
-                    repaired=$(tail -n +2 "$out_file" | jq -c '.' 2>/dev/null || true)
-                    if [[ -z "$repaired" ]]; then
-                        repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
-                    fi
+                    # Use extract_last_json_object directly (consistent with extract_json)
+                    # This handles arbitrary preamble/noise before JSON
+                    repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
                     if [[ -n "$repaired" ]]; then
                         repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
                     fi
@@ -433,15 +432,18 @@ extract_json() {
             # Use extract_last_json_object directly which handles arbitrary preamble
             rg_log "review-gate: extract_json gemini using extract_last_json_object"
 
-            # Capture debug output to log file
-            local debug_output
-            debug_output=$(extract_last_json_object "$file" "true" 2>&1 >/dev/null || true)
+            # Single call with debug=true captures both stderr (debug) and stdout (result)
+            local extract_stderr extract_stdout
+            extract_stderr=$(mktemp)
+            extract_stdout=$(mktemp)
+            if extract_last_json_object "$file" "true" 2>"$extract_stderr" >"$extract_stdout"; then
+                json=$(cat "$extract_stdout")
+            fi
+            # Log debug output from stderr
             while IFS= read -r line; do
                 [[ -n "$line" ]] && rg_log "review-gate: $line"
-            done <<< "$debug_output"
-
-            # Get actual result (without debug)
-            json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+            done < "$extract_stderr"
+            rm -f "$extract_stderr" "$extract_stdout"
 
             if [[ -n "$json" ]]; then
                 rg_log "review-gate: extract_json gemini extracted len=${#json}"
