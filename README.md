@@ -233,9 +233,14 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn --context-file path/to/issue.txt pat
 
 When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution if you need to resolve the gate early:
 
+```
+/cerberus:clear-gate                     # Clear the gate via slash command
+```
+
+Or via CLI:
+
 ```bash
-# Resolve the current gate
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve --reason "manual clear"
 ```
 
 ## External Orchestration
