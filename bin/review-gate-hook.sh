@@ -450,7 +450,7 @@ review_gate_check() {
         STATUS=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
     fi
 
-    # If resolved, allow stop unless a new artifact is present
+    # If resolved, allow stop unless artifact changed
     if [[ "$STATUS" == "resolved" ]]; then
         log "review-gate: status resolved"
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -462,9 +462,13 @@ review_gate_check() {
                 cleanup_stale_state
                 reset_iteration
                 spawn_reviewers
+                # Fall through to progress check instead of allowing
+            else
+                output_allow
             fi
+        else
+            output_allow
         fi
-        output_allow
     fi
 
     # --- Artifact exists but no state file → spawn reviewers ---
