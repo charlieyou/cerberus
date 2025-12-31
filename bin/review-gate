@@ -83,7 +83,7 @@ USAGE
 
 die() {
     echo "Error: $*" >&2
-    exit 1
+    exit 2
 }
 
 validate_max_rounds() {
@@ -1482,7 +1482,7 @@ USAGE
 
         if [[ ${#missing[@]} -gt 0 ]]; then
             echo "Missing required commands: ${missing[*]}" >&2
-            exit 1
+            exit 2
         fi
 
         # Optional: agents (warn if missing, but continue)
@@ -1503,7 +1503,7 @@ USAGE
             realpath "$REVIEW_DIR/latest.md"
         else
             echo "No artifact found. Provide path as argument." >&2
-            exit 1
+            exit 2
         fi
     }
 
@@ -1526,7 +1526,7 @@ USAGE
                     if [[ $age_seconds -lt 1800 ]]; then
                         echo "Review gate already active (status: $status, age: ${age_seconds}s)" >&2
                         echo "Use ${CLI_CMD} resolve to complete the existing gate first." >&2
-                        exit 1
+                        exit 2
                     fi
                     # Stale, proceed to clean up
                     echo "Cleaning up stale gate (age: ${age_seconds}s)" >&2
@@ -2143,14 +2143,14 @@ USAGE
 
     if ! command -v jq >/dev/null 2>&1; then
         echo "Error: jq is required but not installed" >&2
-        exit 5
+        exit 2
     fi
 
     wait_error() {
         local message="$1"
         jq -n --arg status "error" --arg error "$message" \
             '{status:$status, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[{reviewer:null, error:$error}]}'
-        exit 5
+        exit 2
     }
 
     wait_no_reviewers() {
@@ -2397,10 +2397,10 @@ USAGE
             exit 0
             ;;
         FAIL|NEEDS_WORK)
-            exit 2
+            exit 1
             ;;
         *)
-            exit 5
+            exit 2
             ;;
     esac
 }
@@ -2450,7 +2450,7 @@ main() {
         *)
             echo "Unknown command: $cmd" >&2
             usage >&2
-            exit 1
+            exit 2
             ;;
     esac
 }

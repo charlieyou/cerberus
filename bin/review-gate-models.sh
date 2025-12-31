@@ -429,19 +429,26 @@ extract_json() {
             fi
             ;;
         gemini)
-            # Gemini: skip first line (status), parse JSON
-            rg_log "review-gate: extract_json gemini trying tail+jq"
-            json=$(tail -n +2 "$file" | jq -c '.' 2>/dev/null || true)
+            # Gemini: output may have multiple lines of stderr noise before JSON
+            # Use extract_last_json_object directly which handles arbitrary preamble
+            rg_log "review-gate: extract_json gemini using extract_last_json_object"
+
+            # Capture debug output to log file
+            local debug_output
+            debug_output=$(extract_last_json_object "$file" "true" 2>&1 >/dev/null || true)
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && rg_log "review-gate: $line"
+            done <<< "$debug_output"
+
+            # Get actual result (without debug)
+            json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+
             if [[ -n "$json" ]]; then
-                rg_log "review-gate: extract_json gemini tail+jq succeeded len=${#json}"
-            else
-                rg_log "review-gate: extract_json gemini tail+jq failed, trying extract_last_json_object"
-                json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
-                rg_log "review-gate: extract_json gemini extract_last_json_object len=${#json}"
-            fi
-            if [[ -n "$json" ]]; then
+                rg_log "review-gate: extract_json gemini extracted len=${#json}"
                 local preview="${json:0:200}"
                 rg_log "review-gate: extract_json gemini preview: $preview"
+            else
+                rg_log "review-gate: extract_json gemini extract_last_json_object FAILED (empty result)"
             fi
             ;;
         claude)
