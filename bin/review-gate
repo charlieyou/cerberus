@@ -256,18 +256,36 @@ review_gate_spawn_code_review() {
             --commit)
                 diff_mode="--commit"
                 shift
-                # Collect all following args until next option or --
+                # Collect all following args that are valid commits; stop at first non-commit
                 local -a commit_shas=()
                 while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
-                    # Handle comma-separated SHAs in a single arg
                     local arg="$1"
-                    shift
-                    for sha in ${arg//,/ }; do
-                        if ! git rev-parse --verify "$sha^{commit}" &>/dev/null; then
-                            die "Invalid commit SHA: $sha"
+                    # Check if this looks like comma-separated SHAs
+                    if [[ "$arg" == *,* ]]; then
+                        # Handle comma-separated SHAs in a single arg
+                        local all_valid=true
+                        for sha in ${arg//,/ }; do
+                            if ! git rev-parse --verify "$sha^{commit}" &>/dev/null; then
+                                all_valid=false
+                                break
+                            fi
+                        done
+                        if [[ "$all_valid" == "true" ]]; then
+                            shift
+                            for sha in ${arg//,/ }; do
+                                commit_shas+=("$sha")
+                            done
+                        else
+                            # Not valid commits - stop collecting, rest is focus text
+                            break
                         fi
-                        commit_shas+=("$sha")
-                    done
+                    elif git rev-parse --verify "$arg^{commit}" &>/dev/null; then
+                        shift
+                        commit_shas+=("$arg")
+                    else
+                        # Not a valid commit - stop collecting, rest becomes focus text
+                        break
+                    fi
                 done
                 if [[ ${#commit_shas[@]} -eq 0 ]]; then
                     die "--commit requires at least one commit SHA"
@@ -275,6 +293,7 @@ review_gate_spawn_code_review() {
                 # Store as comma-separated for consistent round-tripping
                 diff_target=$(IFS=,; echo "${commit_shas[*]}")
                 diff_args_str="--commit $diff_target"
+                # Remaining non-option args will be collected as focus text by the positionals handler
                 ;;
             -h|--help)
                 cat <<USAGE
@@ -1407,6 +1426,14 @@ review_gate_spawn() {
     local mode=""
     local context_file=""
 
+    # Show help if no arguments provided
+    if [[ $# -eq 0 ]]; then
+        cat <<USAGE
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+USAGE
+        return 0
+    fi
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --agents=*)
@@ -1457,7 +1484,7 @@ review_gate_spawn() {
                 OWNER_TRANSCRIPT_PATH="${2:-}"
                 shift 2
                 ;;
-            -h|--help|help|"")
+            -h|--help|help)
                 cat <<USAGE
 Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
