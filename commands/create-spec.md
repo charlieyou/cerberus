@@ -7,6 +7,21 @@ argument-hint: [--mode <fast|smart|max>] <feature description>
 
 Transform a vague feature idea into a complete, reviewable specification by combining codebase research, a targeted interview, multi-model generation, and a spec review gate.
 
+## Mode Behavior
+
+Modes control depth and rigor. Use soft budgets—exit early when quality is sufficient.
+
+| Mode | Interview Depth | Review Rounds | Extras |
+|------|-----------------|---------------|--------|
+| fast | Until essentials filled (~60%) | 1 max | minimal |
+| smart | Until ~80% filled | up to 2 | standard |
+| max | Until ~95% filled + proactive probing | up to 3 | alternatives + risk analysis |
+
+**Soft budget rules:**
+- Stop interviewing when skeleton is sufficiently filled and essentials (Ownership, Acceptance Criteria, Backwards Compatibility) are covered
+- In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
+- In `max`, actively probe for edge cases, alternatives, and risks even if user doesn't raise them
+
 ## Input
 
 The user provides a brief feature description inline, e.g.:
@@ -26,11 +41,86 @@ Before asking any questions, understand the existing codebase:
 4. Capture key files you will reference in the spec
 5. Identify existing ownership patterns (who owns related modules?)
 
-Document findings internally—these inform your questions and the final spec.
+Document findings internally—these inform the skeleton and your questions.
+
+### Phase 1b: Draft Spec Skeleton
+
+Create a skeleton of the spec with placeholders based on your research. This drives targeted interviewing.
+
+```markdown
+# [Feature Name]
+
+## Overview
+[TBD: 2-3 sentence summary]
+
+## Goals
+- [TBD: Primary objective]
+
+## Non-Goals (Out of Scope)
+- [TBD or inferred from research]
+
+## Ownership
+- Product/feature owner: [TBD]
+- Technical owner: [TBD]
+- Key code areas: [Pre-fill from research if known]
+
+## User Stories
+- [TBD]
+
+## Acceptance Criteria
+- [TBD: Concrete conditions]
+
+## Technical Design
+
+### Architecture
+[Pre-fill with relevant files/patterns found in research, mark gaps as TBD]
+
+### Key Components
+- [TBD or pre-fill from research]
+
+### Integration Points
+- [Pre-fill known integrations from research]
+
+### Data Model
+[TBD or "Not applicable"]
+
+### API Design
+[TBD or "Not applicable"]
+
+### Backwards Compatibility
+- Existing behaviors affected: [TBD]
+- Impact on clients/integrations: [TBD]
+- Rollout strategy: [TBD]
+- Rollback plan: [TBD]
+
+## User Experience
+
+### Primary Flow
+[TBD]
+
+### Error States
+[TBD]
+
+### Edge Cases
+[TBD]
+
+## Open Questions
+- [List unknowns from research]
+
+## Decisions Made
+- [Record any obvious decisions from codebase conventions]
+```
+
+**Skeleton rules:**
+- Pre-fill anything you can confidently infer from research
+- Mark unknowns explicitly as `[TBD]` or `[TBD: hint about what's needed]`
+- The skeleton drives Phase 2 questions—every TBD is a potential question
 
 ### Phase 2: Strategic Interviewing
 
-Ask 2-4 questions at a time. Only ask what you cannot answer from the codebase.
+Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot answer from the codebase.
+
+**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Acceptance Criteria section needs performance thresholds—here are options: [A] 200ms p99 latency, [B] best-effort, [C] you decide. Which?"
 
 **Interview Principles**
 
@@ -82,11 +172,6 @@ Ask 2-4 questions at a time. Only ask what you cannot answer from the codebase.
 - Does this affect [related feature you discovered]?
 - Any external services or third-party APIs involved?
 
-#### Testing & Validation
-- How should this be tested? (unit, integration, manual)
-- Which acceptance criteria need automated coverage?
-- Any regression risks to guard against?
-
 **Handling Common Responses**
 
 | User says... | You should... |
@@ -99,15 +184,16 @@ Ask 2-4 questions at a time. Only ask what you cannot answer from the codebase.
 
 ### Phase 3: Build Spec Context
 
-Create a compact context block for generators:
+Create a compact context block for generators, including the skeleton:
 
+- **Spec skeleton** (with TBDs filled from interview, remaining gaps marked)
 - Feature summary (1-2 paragraphs)
 - Codebase findings (key files, patterns, constraints, ownership)
-- User answers (structured bullets, mapped to spec sections)
+- User answers (structured bullets, mapped to skeleton sections)
 - Decisions made + rationale
 - Remaining open questions
 
-**Context Checklist** — Ensure you have enough to fill:
+**Context Checklist** — Ensure skeleton has:
 - [ ] Ownership (product, technical, code areas)
 - [ ] Acceptance criteria (concrete, testable)
 - [ ] Backwards compatibility stance
@@ -125,33 +211,35 @@ cat >> "$PROMPT_TMP" <<'EOF'
 
 ## Context
 
-[Paste the context you built in Phase 3]
 EOF
 ```
 
-Then spawn generators. **IMPORTANT**: Set the Bash timeout based on mode:
-- `--mode fast`: 300000ms (5 minutes)
-- `--mode smart`: 600000ms (10 minutes)
-- `--mode max`: 900000ms (15 minutes)
+Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
+
+Spawn generators with the mode flag. The generate script enforces timeouts internally:
+- `fast`: ~5 minutes
+- `smart`: ~10 minutes
+- `max`: ~15 minutes
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-spec --prompt-file "$PROMPT_TMP" $ARGUMENTS
+# MODE is extracted from --mode argument, defaults to smart
+MODE="${MODE:-smart}"
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-spec --mode "$MODE" --prompt-file "$PROMPT_TMP"
 ```
-
-Defaults to `--mode smart` if not specified.
 
 Wait for the generator output containing all drafts.
 
 ### Phase 5: Synthesize Drafts
 
-Synthesize the generator drafts into a single spec:
+Merge generator drafts into the skeleton structure:
 
-1. Identify common conclusions across drafts
-2. Resolve conflicts by checking the codebase and user answers
-3. Deduplicate overlapping sections
-4. Ensure all required sections are present (Ownership, Acceptance Criteria, Backwards Compatibility)
-5. Mark API/Data Model as "Not applicable" if not needed (don't leave empty)
-6. Produce a single coherent spec in the template format
+1. Use the skeleton as the canonical structure—don't invent new sections
+2. Identify common conclusions across drafts for each skeleton section
+3. Resolve conflicts by checking the codebase and user answers
+4. Fill remaining TBDs with synthesized content or mark as Open Questions
+5. Ensure all required sections are present (Ownership, Acceptance Criteria, Backwards Compatibility)
+6. Mark API/Data Model as "Not applicable" if not needed (don't leave empty)
+7. In `max` mode: include alternatives considered and risk analysis
 
 ### Phase 6: Write the Spec File
 
@@ -174,7 +262,10 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review path/to/spec.md
 If reviewers find issues:
 1. Fix the spec
 2. Re-run the review gate command
-3. Iterate until all reviewers pass (or max rounds reached)
+3. Iterate until all reviewers pass or mode's max rounds reached:
+   - `fast`: 1 round max
+   - `smart`: up to 2 rounds
+   - `max`: up to 3 rounds
 
 ## Done
 

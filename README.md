@@ -251,7 +251,15 @@ Machine-readable wait for external callers:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate wait --json --session-key <key> [--timeout 600] [--poll-interval 3]
 ```
 
-Exit codes: `0=PASS`, `2=FAIL/NEEDS_WORK or parse error`, `3=timeout`, `4=no_reviewers`, `5=internal error`.
+Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | PASS - consensus achieved, no issues |
+| `1` | FAIL/NEEDS_WORK - review found issues |
+| `2` | Error - parse failures, missing deps, invalid args |
+| `3` | Timeout - polling exceeded `--timeout` |
+| `4` | No reviewers - no review sessions exist |
 
 ## Configuration
 
