@@ -1,6 +1,6 @@
 {
   "name": "cerberus",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"
