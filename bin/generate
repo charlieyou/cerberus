@@ -197,7 +197,7 @@ review_gate_generate() {
     local draft_dir
     draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
     # Ensure cleanup even if generation fails early
-    trap 'rm -rf "$draft_dir"' EXIT
+    trap '[[ -n "${draft_dir:-}" ]] && rm -rf "$draft_dir"' EXIT
 
     local codex_draft="$draft_dir/draft-codex.md"
     local gemini_draft="$draft_dir/draft-gemini.md"
