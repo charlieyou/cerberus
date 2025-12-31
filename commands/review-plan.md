@@ -56,12 +56,14 @@ If no path is provided, the most recent plan from `~/.claude/plans/` will be use
 
 Reviewers evaluate the plan for:
 
-- **Completeness** - Does it cover all necessary changes?
-- **Correctness** - Are the proposed modifications technically sound?
-- **Order of Operations** - Are steps sequenced correctly (dependencies first)?
-- **Edge Cases** - Are error paths, fallbacks, and corner cases addressed?
-- **Breaking Changes** - Are backwards compatibility concerns identified?
-- **Testability** - Can the implementation be verified?
+- **Template & Structure** - Does it follow the standard implementation plan template (context, scope, prerequisites, detailed tasks with verification and rollback, risks, testing, rollback, open questions)?
+- **Completeness** - Does it cover all necessary changes, including migrations, config/env, rollout, rollback, monitoring, and documentation?
+- **Correctness** - Are the proposed modifications technically sound and grounded in the described codebase?
+- **Order of Operations & Dependencies** - Are steps sequenced correctly (prerequisites and safety work first)?
+- **Edge Cases & Risk** - Are error paths, fallbacks, and failure modes addressed?
+- **Breaking Changes & Rollout/Rollback** - Are compatibility risks identified, with clear rollout and rollback strategies?
+- **Testability & Verification** - Can the implementation be verified, with per-task verification steps and an overall testing strategy?
+- **Scope** - Is the plan appropriately scoped (MVP vs follow-ups, clear non-goals)?
 
 ## Iteration Loop
 

@@ -12,6 +12,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 - **Plan review**: Review implementation plans before execution
 - **Spec review**: Review feature specifications before implementation
 - **Spec creation**: Interview + generator flow to draft specs before review
+- **Plan creation**: Interview + generator flow to draft implementation plans before review
 
 ## Installation
 
@@ -90,6 +91,21 @@ You can also run the generator directly with a custom prompt file that includes 
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-spec --prompt-file path/to/prompt.md
+```
+
+### Create Plan (Generator)
+
+Interview the user, run multi-model generators, synthesize an implementation plan, then run the plan review gate:
+
+```
+/cerberus:create-plan
+/cerberus:create-plan --from-spec docs/my-feature-spec.md
+```
+
+You can also run the generator directly:
+
+```
+${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-plan --prompt-file path/to/prompt.md
 ```
 
 ### Healthcheck & Architecture Review
@@ -171,11 +187,14 @@ Examples:
 
 ### Plan Review
 
-- **Completeness** - All necessary changes covered?
-- **Correctness** - Technically sound approach?
-- **Order of Operations** - Dependencies sequenced correctly?
-- **Edge Cases** - Error paths addressed?
-- **Testability** - Can it be verified?
+- **Template & Structure** - Follows standard plan template with all required sections?
+- **Completeness** - Covers migrations, config, rollout, rollback, monitoring, docs?
+- **Correctness** - Technically sound and grounded in the codebase?
+- **Order of Operations** - Dependencies sequenced correctly (prerequisites first)?
+- **Edge Cases & Risk** - Error paths, fallbacks, and failure modes addressed?
+- **Breaking Changes & Rollout/Rollback** - Compatibility risks identified with clear strategies?
+- **Testability & Verification** - Per-task verification steps and overall testing strategy?
+- **Scope** - Appropriately scoped (MVP vs follow-ups, clear non-goals)?
 
 ### Spec Review
 

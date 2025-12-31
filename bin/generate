@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# generate - Multi-model generator for healthcheck/architecture-review/create-spec
+# generate - Multi-model generator for healthcheck/architecture-review/create-spec/create-plan
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ usage() {
 Usage: generate [options]
 
 Options:
-  --type <type>         Named preset: healthcheck, architecture-review, create-spec (default: healthcheck)
+  --type <type>         Named preset: healthcheck, architecture-review, create-spec, create-plan (default: healthcheck)
   --mode <level>        Intelligence mode: fast, smart, max
   --prompt-file <path>  Path to custom prompt file
   --prompt <text>       Inline prompt text (replaces base prompt)
