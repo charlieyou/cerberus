@@ -55,7 +55,8 @@ Review git changes with external reviewers:
 ```
 /cerberus:review-code                    # Review uncommitted changes (default)
 /cerberus:review-code --base main        # Review changes from main to HEAD
-/cerberus:review-code --commit abc123    # Review a specific commit
+/cerberus:review-code --commit abc123    # Review a single commit
+/cerberus:review-code --commit abc123 def456  # Review multiple commits
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini  # Only run selected reviewers
 ```

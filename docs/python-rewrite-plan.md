@@ -357,7 +357,7 @@ review-gate spawn-code-review [options]
   --agents, --max-rounds, --mode, --context-file (as above)
   --uncommitted             Review uncommitted changes (default)
   --base <branch>           Review changes from branch to HEAD
-  --commit <sha>            Review a specific commit
+  --commit <sha...>         Review one or more commits (space or comma separated)
   <range>                   Review a commit range (e.g., main..feature)
 ```
 

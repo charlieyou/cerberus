@@ -51,11 +51,11 @@ Commands:
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--uncommitted | --base <branch> | --commit <sha> | --commits <shas...> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
-    Diff modes: --uncommitted (default), --base <branch>, --commit <sha>, --commits <shas...>, <range>
+    Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
-      --commits <shas>    Review multiple commits (space or comma separated)
+      --commit <shas>     Review one or more commits (space or comma separated)
 
   spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
@@ -255,25 +255,26 @@ review_gate_spawn_code_review() {
                 ;;
             --commit)
                 diff_mode="--commit"
-                diff_target="${2:-HEAD}"
-                diff_args_str="--commit $diff_target"
-                shift 2
-                ;;
-            --commits)
-                diff_mode="--commits"
                 shift
                 # Collect all following args until next option or --
                 local -a commit_shas=()
                 while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
-                    commit_shas+=("$1")
+                    # Handle comma-separated SHAs in a single arg
+                    local arg="$1"
                     shift
+                    for sha in ${arg//,/ }; do
+                        if ! git rev-parse --verify "$sha^{commit}" &>/dev/null; then
+                            die "Invalid commit SHA: $sha"
+                        fi
+                        commit_shas+=("$sha")
+                    done
                 done
                 if [[ ${#commit_shas[@]} -eq 0 ]]; then
-                    die "--commits requires at least one commit SHA"
+                    die "--commit requires at least one commit SHA"
                 fi
                 # Store as comma-separated for consistent round-tripping
                 diff_target=$(IFS=,; echo "${commit_shas[*]}")
-                diff_args_str="--commits $diff_target"
+                diff_args_str="--commit $diff_target"
                 ;;
             -h|--help)
                 cat <<USAGE
@@ -287,8 +288,7 @@ Options:
   --focus <text>       Focus area to emphasize in the review
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
-  --commit <sha>      Review a specific commit
-  --commits <shas>    Review multiple commits (space or comma separated)
+  --commit <sha...>   Review one or more commits (space or comma separated)
   <range>             Review a commit range (e.g., main..feature)
   [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
@@ -398,10 +398,7 @@ USAGE
             diff_content=$(git diff "${diff_target}...HEAD" 2>/dev/null || true)
             ;;
         --commit)
-            diff_content=$(git show "$diff_target" 2>/dev/null || true)
-            ;;
-        --commits)
-            # Multiple commits: normalize separators and show each
+            # Support one or more commits: normalize separators and show each
             local commits_list="${diff_target//,/ }"
             for commit_sha in $commits_list; do
                 local commit_diff

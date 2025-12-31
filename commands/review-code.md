@@ -1,6 +1,6 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--uncommitted | --base <branch> | --commit <sha> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] ["<focus area>"]
+argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] ["<focus area>"]
 ---
 
 # Code Review (Iterative)
@@ -13,7 +13,8 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code                    # Review uncommitted changes (default)
 /cerberus:review-code --uncommitted      # Review uncommitted changes
 /cerberus:review-code --base main        # Review changes from main to HEAD
-/cerberus:review-code --commit abc123    # Review a specific commit
+/cerberus:review-code --commit abc123    # Review a single commit
+/cerberus:review-code --commit abc123 def456  # Review multiple commits
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
@@ -33,7 +34,7 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 
 Use the Bash tool to spawn the code review.
 
-Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, diff selectors (`--uncommitted`, `--base`, `--commit`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
