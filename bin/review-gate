@@ -1426,14 +1426,6 @@ review_gate_spawn() {
     local mode=""
     local context_file=""
 
-    # Show help if no arguments provided
-    if [[ $# -eq 0 ]]; then
-        cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
-USAGE
-        return 0
-    fi
-
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --agents=*)
