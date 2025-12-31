@@ -131,14 +131,14 @@ review_gate_check() {
     # --- Helper: Extract plan-path from artifact frontmatter ---
     extract_plan_path() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
-            sed -n 's/^<!-- *plan-path: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+            sed -n 's/^<!-- *plan-path: *\(.*[^ ]\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
         fi
     }
 
     # --- Helper: Extract spec-path from artifact frontmatter ---
     extract_spec_path() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
-            sed -n 's/^<!-- *spec-path: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+            sed -n 's/^<!-- *spec-path: *\(.*[^ ]\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
         fi
     }
 
