@@ -11,13 +11,30 @@ Example (spawn one agent per issue, all in parallel):
 Task(subagent_type="general-purpose", description="Fix [P1] issue title", prompt="Fix this issue: [full issue details]. Edit the relevant files to address the problem.")
 ```
 
+## Communicating with Reviewers
+
+**When to use author-context:**
+- Reviewers flagged a **false positive** (behavior is intentional or already correct)
+- A finding was **addressed this iteration** and you want to prevent re-flagging
+- There are **non-obvious constraints** (performance, backwards compat, product decisions) justifying keeping something as-is
+- You have **questions for reviewers** ("we considered A vs B; please confirm B is acceptable")
+
+**Do NOT use author-context instead of fixing** clear, correct issues you can resolve in code.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
+```
+
+Keep it to a short summary (1-2 paragraphs max). Update each iteration to reflect current state; do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.
+
 ## Self-Review Before Stopping
 
 After all sub-agents complete their fixes:
 1. Review the changes made by each sub-agent
 2. Verify the fixes address the original issues
 3. Check for any obvious regressions or new issues introduced
-4. Only then finalize and STOP
+4. Set author-context if there are false positives or clarifications for reviewers
+5. Only then finalize and STOP
 
 **Commit Policy (${DIFF_ARGS}):**
 ${COMMIT_INSTRUCTIONS}
