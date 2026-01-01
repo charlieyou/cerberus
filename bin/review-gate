@@ -1461,11 +1461,34 @@ USAGE
     fi
 
     local review_dir
-    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
-    local state_file="$review_dir/gate-state.json"
+    local state_file
 
+    # First try resolving with transcript path
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    state_file="$review_dir/gate-state.json"
+
+    # If state doesn't exist and we don't have transcript path, search all projects
+    if [[ ! -f "$state_file" && -z "$transcript_path" ]]; then
+        local found_state=""
+        for candidate in "$HOME/.claude/projects"/*/cerberus/"$session_id"/gate-state.json; do
+            if [[ -f "$candidate" ]]; then
+                found_state="$candidate"
+                break
+            fi
+        done
+        if [[ -n "$found_state" ]]; then
+            state_file="$found_state"
+            review_dir="$(dirname "$state_file")"
+        fi
+    fi
+
+    mkdir -p "$review_dir"
+
+    # Create minimal state if not exists (state may have been cleaned between iterations)
     if [[ ! -f "$state_file" ]]; then
-        die "No active gate state found for session: $session_id"
+        local now
+        now=$(date -Iseconds)
+        echo "{\"status\": \"pending\", \"created_at\": \"$now\"}" > "$state_file"
     fi
 
     if ! command -v jq >/dev/null 2>&1; then
