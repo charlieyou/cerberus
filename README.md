@@ -26,7 +26,7 @@ You need the following CLI tools installed:
 | `gemini` | Google Gemini reviewer | [Gemini CLI](https://ai.google.dev/gemini-api/docs/get-started/cli) |
 | `jq` | JSON processing | `apt install jq` / `brew install jq` |
 
-Verified CLI versions (December 30, 2025):
+Verified CLI versions (January 1, 2026):
 
 | Tool | Version |
 |------|---------|
@@ -88,8 +88,24 @@ Review a feature specification:
 Interview the user, run multi-model generators, synthesize a spec, then run the spec review gate:
 
 ```
-/cerberus:create-spec
+/cerberus:create-spec                    # Create spec with smart mode (default)
+/cerberus:create-spec --mode fast        # Faster, less thorough interview
+/cerberus:create-spec --mode max         # Maximum depth with risk analysis
 ```
+
+**Workflow phases:**
+1. **Codebase research** - Understand existing patterns and integration points
+2. **Draft skeleton** - Create spec template with TBD placeholders
+3. **Strategic interview** - Ask prioritized questions to fill gaps (coverage varies by mode)
+4. **Multi-model generation** - Codex, Gemini, and Claude generate draft specs
+5. **Synthesis** - Merge drafts into coherent spec
+6. **Interactive review** - Review gate with user consultation on P0-P2 issues
+
+| Mode | Interview Depth | Review Rounds |
+|------|-----------------|---------------|
+| fast | ~60% coverage | 1 max |
+| smart | ~80% coverage | up to 2 |
+| max | ~95% + probing | up to 3 |
 
 You can also run the generator directly with a custom prompt file that includes your context:
 
@@ -102,9 +118,27 @@ ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-spec --prompt-file path/to/prom
 Interview the user, run multi-model generators, synthesize an implementation plan, then run the plan review gate:
 
 ```
-/cerberus:create-plan
-/cerberus:create-plan --from-spec docs/my-feature-spec.md
+/cerberus:create-plan                              # Create plan with smart mode (default)
+/cerberus:create-plan --from-spec docs/spec.md    # Start from an existing spec
+/cerberus:create-plan --mode fast                  # Faster, essential questions only
+/cerberus:create-plan --mode max                   # Maximum depth with risk analysis
 ```
+
+**Workflow phases:**
+1. **Spec detection** - Use provided spec or ask for one
+2. **Codebase research** - Identify files, patterns, and integration points
+3. **File verification** - Check which files exist vs need creation
+4. **Draft skeleton** - Create plan template with TBD placeholders
+5. **Implementation interview** - Ask about scope, constraints, rollout, testing
+6. **Multi-model generation** - Codex, Gemini, and Claude generate draft plans
+7. **Subagent synthesis** - Merge drafts into coherent plan (preserves context)
+8. **Review gate** - Iterate until all reviewers pass
+
+| Mode | Interview Depth | Review Rounds |
+|------|-----------------|---------------|
+| fast | ~60% coverage | 1 max |
+| smart | ~80% coverage | up to 2 |
+| max | ~95% + probing | up to 3 |
 
 You can also run the generator directly:
 
@@ -134,7 +168,7 @@ All review commands accept `--agents <list>` to run a subset of the available re
 
 ### Intelligence Modes
 
-All review commands accept `--mode <fast|smart|max>` to trade off speed vs depth. Default is `smart`.
+All review and generator commands accept `--mode <fast|smart|max>` to trade off speed vs depth. Default is `smart`.
 
 | Mode | Codex reasoning | Gemini model | Claude model | Prompt |
 |------|-----------------|--------------|--------------|--------|
@@ -148,6 +182,8 @@ Examples:
 /cerberus:review-code --mode fast
 /cerberus:review-plan --mode smart path/to/plan.md
 /cerberus:review-spec --mode max path/to/spec.md
+/cerberus:create-spec --mode max
+/cerberus:create-plan --mode fast --from-spec docs/spec.md
 ```
 
 ## How It Works
@@ -168,7 +204,7 @@ Examples:
                                         ▼                    ▼
                         ┌───────────────────┐    ┌────────────────────┐
                         │   Auto-approve    │    │ Request revision   │
-                        │   Session stops   │    │ (loop default 5x)  │
+                        │   Session stops   │    │ (loop default 3x)  │
                         └───────────────────┘    └────────────────────┘
 ```
 
