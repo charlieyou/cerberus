@@ -2255,20 +2255,51 @@ review_gate_resolve() {
     local temp_file="${state_file}.tmp.$$"
     trap 'rm -f "${temp_file:-}"' EXIT
 
+    # Update shas to current values so subsequent hook runs don't detect "changes"
+    # This prevents respawning reviewers after auto_approve when files were edited during review
+    local plan_path spec_path artifact_path review_dir
+    review_dir=$(dirname "$state_file")
+    plan_path=$(jq -r '.mode.plan_path // empty' "$state_file" 2>/dev/null || echo "")
+    spec_path=$(jq -r '.mode.spec_path // empty' "$state_file" 2>/dev/null || echo "")
+    artifact_path="$review_dir/latest.md"
+
+    local plan_sha="" spec_sha="" artifact_sha=""
+    if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+        plan_sha=$(compute_sha256 "$plan_path" 2>/dev/null || echo "")
+    fi
+    if [[ -n "$spec_path" && -f "$spec_path" ]]; then
+        spec_sha=$(compute_sha256 "$spec_path" 2>/dev/null || echo "")
+    fi
+    if [[ -f "$artifact_path" ]]; then
+        artifact_sha=$(compute_sha256 "$artifact_path" 2>/dev/null || echo "")
+    fi
+
     if [[ -n "$reason" ]]; then
         jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
+           --arg plan_sha "$plan_sha" \
+           --arg spec_sha "$spec_sha" \
+           --arg artifact_sha "$artifact_sha" \
            '.status = "resolved"
             | .decision.action = "proceed"
             | .decision.decided_at = $timestamp
-            | .decision.reason = $reason' \
+            | .decision.reason = $reason
+            | if $plan_sha != "" then .artifact.plan_sha = $plan_sha else . end
+            | if $spec_sha != "" then .artifact.spec_sha = $spec_sha else . end
+            | if $artifact_sha != "" then .artifact.sha256 = $artifact_sha else . end' \
            "$state_file" > "$temp_file"
     else
         jq --arg timestamp "$timestamp" \
+           --arg plan_sha "$plan_sha" \
+           --arg spec_sha "$spec_sha" \
+           --arg artifact_sha "$artifact_sha" \
            '.status = "resolved"
             | .decision.action = "proceed"
             | .decision.decided_at = $timestamp
-            | del(.decision.reason)' \
+            | del(.decision.reason)
+            | if $plan_sha != "" then .artifact.plan_sha = $plan_sha else . end
+            | if $spec_sha != "" then .artifact.spec_sha = $spec_sha else . end
+            | if $artifact_sha != "" then .artifact.sha256 = $artifact_sha else . end' \
            "$state_file" > "$temp_file"
     fi
 

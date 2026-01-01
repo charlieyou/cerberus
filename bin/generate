@@ -27,6 +27,7 @@ Options:
   --prompt <text>       Inline prompt text (replaces base prompt)
   --focus <text>        Focus area to append to base prompt
   --analysis-file <path>  Append analysis output from a file (repeatable)
+  --output-dir <path>   Write drafts to files in this directory (outputs paths instead of content)
   [--] <focus>          Optional focus text (or trailing text; -- forces focus)
 USAGE
 }
@@ -44,6 +45,7 @@ review_gate_generate() {
     local prompt_inline=""
     local focus_area=""
     local mode=""
+    local output_dir=""
     local -a extra_args=()
     local -a analysis_files=()
 
@@ -95,6 +97,14 @@ review_gate_generate() {
                 ;;
             --analysis-file)
                 analysis_files+=("${2:-}")
+                shift 2
+                ;;
+            --output-dir=*)
+                output_dir="${1#*=}"
+                shift
+                ;;
+            --output-dir)
+                output_dir="${2:-}"
                 shift 2
                 ;;
             -h|--help)
@@ -193,15 +203,22 @@ review_gate_generate() {
         prompt_content=$'ultrathink\n\n'"$prompt_content"
     fi
 
-    # Create temp directory for drafts
+    # Create temp directory for drafts (or use --output-dir if provided)
     local draft_dir
-    draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
-    # Ensure cleanup even if generation fails early
-    trap '[[ -n "${draft_dir:-}" ]] && rm -rf "$draft_dir"' EXIT
+    local persistent_output=false
+    if [[ -n "$output_dir" ]]; then
+        draft_dir="$output_dir"
+        mkdir -p "$draft_dir"
+        persistent_output=true
+    else
+        draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
+        # Ensure cleanup even if generation fails early (only for temp dirs)
+        trap '[[ -n "${draft_dir:-}" && "${persistent_output:-false}" == "false" ]] && rm -rf "$draft_dir"' EXIT
+    fi
 
-    local codex_draft="$draft_dir/draft-codex.md"
-    local gemini_draft="$draft_dir/draft-gemini.md"
-    local claude_draft="$draft_dir/draft-claude.md"
+    local codex_draft="$draft_dir/codex.md"
+    local gemini_draft="$draft_dir/gemini.md"
+    local claude_draft="$draft_dir/claude.md"
     local codex_done="$draft_dir/codex.done"
     local gemini_done="$draft_dir/gemini.done"
     local claude_done="$draft_dir/claude.done"
@@ -356,7 +373,30 @@ review_gate_generate() {
         echo "Warning: Only one generator succeeded. Proceeding with partial results." >&2
     fi
 
-    # Output drafts for synthesis
+    # If --output-dir was provided, output paths only (for subagent synthesis)
+    if [[ "$persistent_output" == "true" ]]; then
+        echo ""
+        echo "# Generator Drafts Written"
+        echo ""
+        echo "Drafts have been written to files. Use a subagent to synthesize them."
+        echo ""
+        echo "## Draft Files"
+        echo ""
+        for draft in "${drafts[@]}"; do
+            local model_name
+            model_name=$(basename "$draft" .md)
+            echo "- **$model_name**: $draft"
+        done
+        echo ""
+        echo "## Synthesis Instructions"
+        echo ""
+        echo "Use a Task/subagent to read these files and synthesize into a single artifact."
+        echo "Do NOT read the files in your main context to preserve context window."
+        echo ""
+        return 0
+    fi
+
+    # Legacy mode: output drafts inline for synthesis (when no --output-dir)
     echo ""
     echo "# Generator Drafts for Synthesis"
     echo ""
@@ -367,7 +407,7 @@ review_gate_generate() {
     local draft_num=1
     for draft in "${drafts[@]}"; do
         local model_name
-        model_name=$(basename "$draft" .md | sed 's/draft-//')
+        model_name=$(basename "$draft" .md)
         echo "---"
         echo ""
         echo "## Draft $draft_num ($model_name)"
@@ -388,7 +428,7 @@ review_gate_generate() {
     echo "4. Produce a coherent final artifact"
     echo ""
 
-    # Cleanup
+    # Cleanup temp dir (only for non-persistent output)
     rm -rf "$draft_dir"
 }
 

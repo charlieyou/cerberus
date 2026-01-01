@@ -520,15 +520,16 @@ review_gate_check() {
         STATUS=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
     fi
 
-    # If resolved, allow stop unless underlying files changed
-    if [[ "$STATUS" == "resolved" ]]; then
-        log "review-gate: status resolved"
+    # If resolved or passed, allow stop WITHOUT auto-respawn
+    # Edits after pass/resolve require explicit spawn-plan-review call
+    if [[ "$STATUS" == "resolved" || "$STATUS" == "passed" ]]; then
+        log "review-gate: status $STATUS"
 
-        local respawned=false
         local detected_type
         detected_type=$(detect_review_type)
+        local file_changed=false
 
-        # For plan-review-iterative, check if plan file changed
+        # Check if underlying file changed (for informational logging only)
         if [[ "$detected_type" == "plan-review-iterative" ]]; then
             local plan_path stored_plan_sha current_plan_sha
             plan_path=$(jq -r '.mode.plan_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
@@ -538,18 +539,11 @@ review_gate_check() {
                 current_plan_sha=$(compute_sha256 "$plan_path" 2>/dev/null || echo "")
 
                 if [[ -n "$stored_plan_sha" && -n "$current_plan_sha" && "$stored_plan_sha" != "$current_plan_sha" ]]; then
-                    log "review-gate: plan file changed; respawn reviewers"
-                    cleanup_stale_state
-                    reset_iteration
-                    export REVIEW_GATE_RERUN=1
-                    spawn_reviewers
-                    respawned=true
+                    file_changed=true
+                    log "review-gate: plan file changed after $STATUS (not auto-respawning)"
                 fi
             fi
-        fi
-
-        # For spec review, check if spec file changed
-        if [[ "$detected_type" == "spec" ]]; then
+        elif [[ "$detected_type" == "spec" ]]; then
             local spec_path stored_spec_sha current_spec_sha
             spec_path=$(jq -r '.mode.spec_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
 
@@ -558,36 +552,18 @@ review_gate_check() {
                 current_spec_sha=$(compute_sha256 "$spec_path" 2>/dev/null || echo "")
 
                 if [[ -n "$stored_spec_sha" && -n "$current_spec_sha" && "$stored_spec_sha" != "$current_spec_sha" ]]; then
-                    log "review-gate: spec file changed; respawn reviewers"
-                    cleanup_stale_state
-                    reset_iteration
-                    export REVIEW_GATE_RERUN=1
-                    spawn_reviewers
-                    respawned=true
+                    file_changed=true
+                    log "review-gate: spec file changed after $STATUS (not auto-respawning)"
                 fi
             fi
         fi
 
-        # If we didn't respawn for plan/spec changes, check artifact SHA
-        if [[ "$respawned" == "false" ]]; then
-            if [[ -f "$ARTIFACT_FILE" ]]; then
-                STATE_SHA=$(jq -r '.artifact.sha256 // ""' "$STATE_FILE" 2>/dev/null || echo "")
-                CURRENT_SHA=$(compute_sha256 "$ARTIFACT_FILE" 2>/dev/null || echo "")
-
-                if [[ -n "$STATE_SHA" && -n "$CURRENT_SHA" && "$STATE_SHA" != "$CURRENT_SHA" ]]; then
-                    log "review-gate: artifact changed; respawn reviewers"
-                    cleanup_stale_state
-                    reset_iteration
-                    export REVIEW_GATE_RERUN=1
-                    spawn_reviewers
-                    # Fall through to progress check instead of allowing
-                else
-                    output_allow
-                fi
-            else
-                output_allow
-            fi
+        # Allow stop regardless of file changes - no auto-respawn after pass/resolve
+        # If user wants re-review, they must explicitly call spawn-plan-review
+        if [[ "$file_changed" == "true" ]]; then
+            log "review-gate: allowing stop; re-run 'review-gate spawn-plan-review' to review changes"
         fi
+        output_allow
     fi
 
     # --- Artifact exists but no state file → spawn reviewers ---
