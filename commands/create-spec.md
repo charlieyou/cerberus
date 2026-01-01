@@ -124,11 +124,39 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 
 **Interview Principles**
 
-1. **Propose, don't probe** — Offer concrete options with tradeoffs instead of open-ended questions
-2. **Reference evidence** — "I see X in Y—should this follow the same approach?"
-3. **Decide when delegated** — If user says "you decide," make a sensible choice and record it
-4. **Cover gaps, not ground** — Skip questions the codebase already answers
-5. **Map to template** — Every answer should fill a specific spec section
+1. **Be thorough, not brief** — Ask all relevant questions, even if it takes multiple rounds
+2. **Propose, don't probe** — Offer concrete options with tradeoffs instead of open-ended questions
+3. **Reference evidence** — "I see X in Y—should this follow the same approach?"
+4. **Decide when delegated** — If user says "you decide," make a sensible choice and record it
+5. **Cover gaps, not ground** — Skip questions the codebase already answers
+6. **Map to template** — Every answer should fill a specific spec section
+7. **Iterate until complete** — Don't stop after one batch; continue asking until all TBDs are addressed
+8. **Handle halted interviews** — If the user stops responding or declines further questions, mark remaining TBDs as Open Questions with your best guess or "needs product decision"
+
+**Minimum Question Coverage** — You MUST ask about these areas (unless already answered by codebase research):
+
+- [ ] Ownership: Who is the product owner? Who is the technical owner?
+- [ ] Scope: What's MVP vs. nice-to-have? What's explicitly out of scope?
+- [ ] Acceptance criteria: What are the concrete "done" conditions?
+- [ ] User context: Who uses this and in what scenario?
+- [ ] Primary flow: What's the happy path step-by-step?
+- [ ] Error handling: What happens when X fails?
+- [ ] Backwards compatibility: Any existing clients/integrations affected?
+- [ ] Rollout: Feature flag? Gradual? Big bang?
+- [ ] Edge cases: At least 2-3 specific edge cases for this feature
+- [ ] Performance: Any latency, throughput, or resource constraints?
+- [ ] Observability: How will we monitor success/failure? (metrics, logging, alerts)
+- [ ] Security & permissions: Any auth, privacy, or compliance constraints?
+- [ ] Risks & assumptions: Anything that could make this fail?
+
+**N/A handling:** If an item is clearly not applicable (e.g., performance for trivial internal tooling), mark as "N/A" with a one-line rationale instead of forcing a question.
+
+**Mode-specific coverage:**
+- `fast`: At minimum, cover Ownership, Acceptance Criteria, Backwards Compatibility. For other items, prefer marking as Open Questions if the user is time-constrained.
+- `smart`: Aim to cover all items; only leave as Open Questions if the user cannot answer.
+- `max`: Fully clear all items; actively probe for risks, alternatives, and edge cases even if user doesn't raise them.
+
+**Priority order:** Ownership → Acceptance Criteria → Backwards Compatibility → User context → Error handling → Remaining items.
 
 **Question Categories** (adapt order based on context):
 
@@ -251,7 +279,7 @@ docs/YYYY-MM-DD-FEATURE_NAME-spec.md
 
 Write the synthesized spec to the chosen path.
 
-### Phase 7: Review Gate (Iterative)
+### Phase 7: Review Gate with Interactive Refinement
 
 Spawn external reviewers to validate the spec:
 
@@ -259,13 +287,49 @@ Spawn external reviewers to validate the spec:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review path/to/spec.md
 ```
 
-If reviewers find issues:
-1. Fix the spec
-2. Re-run the review gate command
-3. Iterate until all reviewers pass or mode's max rounds reached:
-   - `fast`: 1 round max
-   - `smart`: up to 2 rounds
-   - `max`: up to 3 rounds
+**Interactive Refinement Loop:**
+
+When reviewers find issues, DO NOT just fix them silently. Instead:
+
+1. **Present findings to the user** — Show reviewer feedback grouped by priority (P0/P1 first)
+2. **Ask clarifying questions** — For each finding, ask the user:
+   - "Reviewer flagged [issue]. How would you like to address this?"
+   - "They suggest [X], but [Y] is also possible. Which approach?"
+   - "This seems like a scope decision—should we include [Z] or mark it out-of-scope?"
+3. **Propose solutions** — Offer 2-3 concrete options for resolving each issue
+4. **Record decisions** — Add resolutions to the Decisions Made section
+5. **Fix the spec** based on user input
+6. **Re-run the review gate** — Continue until all reviewers pass or mode's max rounds reached
+
+**Questions to ask during refinement:**
+
+- "Reviewers noted [gap]. Can you clarify [specific detail]?"
+- "There's disagreement about [X]. Which interpretation is correct?"
+- "This edge case wasn't covered: [scenario]. What should happen?"
+- "The rollback plan is unclear. If this fails in production, how do we recover?"
+- "Reviewer thinks [section] is too vague to implement. Can you be more specific about [detail]?"
+
+**Priority definitions** (use reviewer's assigned severity, or these guidelines):
+- P0: Blocking/incorrect behavior — spec is fundamentally unclear or contradictory
+- P1: Major clarity/coverage issues — will cause implementation failures
+- P2: Should be clarified before implementation
+- P3: Nits and minor improvements
+
+**Do NOT:**
+- Silently fix substantive issues (scope, behavior, design) without consulting the user
+- Assume you know the right answer for ambiguous issues
+- Skip asking about P2/P3 issues (they often reveal important context)
+
+**OK to silently fix:** Typos, formatting, and purely mechanical issues the reviewers flagged.
+
+**Handling unresolved disagreements:** If neither reviewers nor user can decide, record it as an Open Question or explicit tradeoff in Decisions Made, and ensure the spec clearly flags the ambiguity.
+
+**After applying fixes:** Summarize changes back to the user in 2-3 bullets so they see how feedback was applied. If an issue changes behavior, update Acceptance Criteria and User Stories, not just Decisions Made.
+
+**Round limits by mode:**
+- `fast`: 1 round max (P0/P1 issues only; leave other feedback as future improvements)
+- `smart`: up to 2 rounds (ask about P0-P2 issues)
+- `max`: up to 3 rounds (ask about all issues, probe for additional concerns)
 
 ## Done
 
