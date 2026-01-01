@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Shared helpers for review-gate.
 
+# Fallback log for library context when hook log isn't available.
+if ! declare -f log >/dev/null 2>&1; then
+    log() { echo "[review-gate-lib] $*" >&2; }
+fi
+
 # Get project hash from transcript path or calculate from project root
 get_project_hash() {
     local transcript_path="${1:-}"
@@ -73,6 +78,56 @@ archive_reviews() {
     mv "$reviews_dir" "$archive_dir"
     echo "$archive_dir" >&2
     return 0
+}
+
+# Load iteration from state or iteration.txt (state is authoritative)
+load_iteration() {
+    local review_dir="${1:-$REVIEW_DIR}"
+    local state_file="$review_dir/gate-state.json"
+    local iter_file="$review_dir/iteration.txt"
+
+    if [[ -f "$state_file" ]]; then
+        local iter
+        iter=$(jq -r '.iteration // empty' "$state_file" 2>/dev/null || echo "")
+        if [[ "$iter" =~ ^[0-9]+$ ]]; then
+            if [[ -f "$iter_file" ]]; then
+                local file_iter
+                file_iter=$(cat "$iter_file" 2>/dev/null || echo "")
+                if [[ "$file_iter" != "$iter" ]]; then
+                    log "review-gate: WARNING: iteration.txt ($file_iter) diverged from state ($iter), using state"
+                fi
+            fi
+            echo "$iter"
+            return 0
+        fi
+    fi
+
+    if [[ -f "$iter_file" ]]; then
+        local iter
+        iter=$(cat "$iter_file" 2>/dev/null || echo "")
+        if [[ "$iter" =~ ^[0-9]+$ ]]; then
+            echo "$iter"
+            return 0
+        fi
+    fi
+
+    echo "0"
+}
+
+# Save iteration to iteration.txt and update state if present
+save_iteration() {
+    local iter="$1"
+    local review_dir="${2:-$REVIEW_DIR}"
+    local state_file="$review_dir/gate-state.json"
+    local iter_file="$review_dir/iteration.txt"
+
+    echo "$iter" > "$iter_file"
+
+    if [[ -f "$state_file" ]]; then
+        local tmp="${state_file}.tmp.$$"
+        jq --argjson iter "$iter" '.iteration = $iter' "$state_file" > "$tmp"
+        mv "$tmp" "$state_file"
+    fi
 }
 
 # Unwrap review JSON from various wrapper formats

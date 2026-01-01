@@ -135,10 +135,30 @@ review_gate_check() {
         fi
     }
 
+    extract_plan_path_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local path
+            path=$(jq -r '.mode.plan_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ -n "$path" && "$path" != "null" ]]; then
+                echo "$path"
+            fi
+        fi
+    }
+
     # --- Helper: Extract spec-path from artifact frontmatter ---
     extract_spec_path() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
             sed -n 's/^<!-- *spec-path: *\(.*[^ ]\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
+        fi
+    }
+
+    extract_spec_path_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local path
+            path=$(jq -r '.mode.spec_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ -n "$path" && "$path" != "null" ]]; then
+                echo "$path"
+            fi
         fi
     }
 
@@ -280,7 +300,12 @@ review_gate_check() {
         # For plan-review-iterative, re-read the plan file to capture edits
         elif [[ "$detected_type" == "plan-review-iterative" ]]; then
             local plan_path
-            plan_path=$(extract_plan_path)
+            plan_path=$(extract_plan_path_from_state)
+            # Ignore state plan_path if it points to the artifact (legacy gates)
+            if [[ "$plan_path" == "$ARTIFACT_FILE" ]] || [[ "$plan_path" == *"/latest.md" ]]; then
+                plan_path=""
+            fi
+            [[ -z "$plan_path" ]] && plan_path=$(extract_plan_path)
             log "review-gate: plan-review-iterative re-spawn with plan_path='$plan_path'"
 
             if [[ -n "$plan_path" && -f "$plan_path" ]]; then
@@ -305,7 +330,12 @@ review_gate_check() {
         # For spec review, re-read the spec file to capture edits
         elif [[ "$detected_type" == "spec" ]]; then
             local spec_path
-            spec_path=$(extract_spec_path)
+            spec_path=$(extract_spec_path_from_state)
+            # Ignore state spec_path if it points to the artifact (legacy gates)
+            if [[ "$spec_path" == "$ARTIFACT_FILE" ]] || [[ "$spec_path" == *"/latest.md" ]]; then
+                spec_path=""
+            fi
+            [[ -z "$spec_path" ]] && spec_path=$(extract_spec_path)
             log "review-gate: spec re-spawn with spec_path='$spec_path'"
 
             if [[ -n "$spec_path" && -f "$spec_path" ]]; then
@@ -435,38 +465,53 @@ review_gate_check() {
         log "review-gate: state file missing"
     fi
 
-    # --- Get/increment iteration count ---
+    # --- Get iteration count ---
     get_iteration() {
-        if [[ -f "$ITERATION_FILE" ]]; then
-            cat "$ITERATION_FILE"
-        else
-            echo "0"
-        fi
-    }
-
-    increment_iteration() {
-        local current
-        current=$(get_iteration)
-        echo $((current + 1)) > "$ITERATION_FILE"
+        load_iteration
     }
 
     reset_iteration() {
-        rm -f "$ITERATION_FILE"
+        # Use save_iteration to reset both iteration.txt and state file
+        save_iteration 0
     }
 
     # --- Archive previous reviews (in check context) ---
     archive_previous_reviews_check() {
         local iteration
-        iteration=$(get_iteration)
+        iteration=$(load_iteration)
         # Use shared archive function (outputs archive path to stderr for logging)
         archive_reviews "$REVIEW_DIR" "$REVIEWS_DIR" "$iteration"
     }
 
     # --- Clean state for re-review ---
     clean_for_rerun() {
-        archive_previous_reviews_check
-        rm -f "$STATE_FILE"
+        # Archive reviews with current iteration
+        local current_iter
+        current_iter=$(load_iteration)
+        archive_reviews "$REVIEW_DIR" "$REVIEWS_DIR" "$current_iter"
+
+        # Increment iteration for next round
+        local next_iter=$((current_iter + 1))
+        save_iteration "$next_iter"
+
+        # Update state in-place (don't delete - preserves config, mode, owner)
+        if [[ -f "$STATE_FILE" ]]; then
+            local now
+            now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            local tmp="${STATE_FILE}.tmp.$$"
+            jq --arg now "$now" '
+                .status = "pending"
+                | .reviewers = {}
+                | .consensus = null
+                | .decision = null
+                | .created_at = $now
+            ' "$STATE_FILE" > "$tmp"
+            mv "$tmp" "$STATE_FILE"
+        fi
+
+        # Clear reviews directory
         rm -rf "$REVIEWS_DIR"
+        mkdir -p "$REVIEWS_DIR"
     }
 
     # --- Check status (if state exists) ---
@@ -475,24 +520,73 @@ review_gate_check() {
         STATUS=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
     fi
 
-    # If resolved, allow stop unless artifact changed
+    # If resolved, allow stop unless underlying files changed
     if [[ "$STATUS" == "resolved" ]]; then
         log "review-gate: status resolved"
-        if [[ -f "$ARTIFACT_FILE" ]]; then
-            STATE_SHA=$(jq -r '.artifact.sha256 // ""' "$STATE_FILE" 2>/dev/null || echo "")
-            CURRENT_SHA=$(compute_sha256 "$ARTIFACT_FILE" 2>/dev/null || echo "")
 
-            if [[ -n "$STATE_SHA" && -n "$CURRENT_SHA" && "$STATE_SHA" != "$CURRENT_SHA" ]]; then
-                log "review-gate: artifact changed; respawn reviewers"
-                cleanup_stale_state
-                reset_iteration
-                spawn_reviewers
-                # Fall through to progress check instead of allowing
+        local respawned=false
+        local detected_type
+        detected_type=$(detect_review_type)
+
+        # For plan-review-iterative, check if plan file changed
+        if [[ "$detected_type" == "plan-review-iterative" ]]; then
+            local plan_path stored_plan_sha current_plan_sha
+            plan_path=$(jq -r '.mode.plan_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
+
+            if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+                stored_plan_sha=$(jq -r '.artifact.plan_sha // empty' "$STATE_FILE" 2>/dev/null || echo "")
+                current_plan_sha=$(compute_sha256 "$plan_path" 2>/dev/null || echo "")
+
+                if [[ -n "$stored_plan_sha" && -n "$current_plan_sha" && "$stored_plan_sha" != "$current_plan_sha" ]]; then
+                    log "review-gate: plan file changed; respawn reviewers"
+                    cleanup_stale_state
+                    reset_iteration
+                    export REVIEW_GATE_RERUN=1
+                    spawn_reviewers
+                    respawned=true
+                fi
+            fi
+        fi
+
+        # For spec review, check if spec file changed
+        if [[ "$detected_type" == "spec" ]]; then
+            local spec_path stored_spec_sha current_spec_sha
+            spec_path=$(jq -r '.mode.spec_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
+
+            if [[ -n "$spec_path" && -f "$spec_path" ]]; then
+                stored_spec_sha=$(jq -r '.artifact.spec_sha // empty' "$STATE_FILE" 2>/dev/null || echo "")
+                current_spec_sha=$(compute_sha256 "$spec_path" 2>/dev/null || echo "")
+
+                if [[ -n "$stored_spec_sha" && -n "$current_spec_sha" && "$stored_spec_sha" != "$current_spec_sha" ]]; then
+                    log "review-gate: spec file changed; respawn reviewers"
+                    cleanup_stale_state
+                    reset_iteration
+                    export REVIEW_GATE_RERUN=1
+                    spawn_reviewers
+                    respawned=true
+                fi
+            fi
+        fi
+
+        # If we didn't respawn for plan/spec changes, check artifact SHA
+        if [[ "$respawned" == "false" ]]; then
+            if [[ -f "$ARTIFACT_FILE" ]]; then
+                STATE_SHA=$(jq -r '.artifact.sha256 // ""' "$STATE_FILE" 2>/dev/null || echo "")
+                CURRENT_SHA=$(compute_sha256 "$ARTIFACT_FILE" 2>/dev/null || echo "")
+
+                if [[ -n "$STATE_SHA" && -n "$CURRENT_SHA" && "$STATE_SHA" != "$CURRENT_SHA" ]]; then
+                    log "review-gate: artifact changed; respawn reviewers"
+                    cleanup_stale_state
+                    reset_iteration
+                    export REVIEW_GATE_RERUN=1
+                    spawn_reviewers
+                    # Fall through to progress check instead of allowing
+                else
+                    output_allow
+                fi
             else
                 output_allow
             fi
-        else
-            output_allow
         fi
     fi
 
@@ -500,6 +594,17 @@ review_gate_check() {
     if [[ ! -f "$STATE_FILE" ]]; then
         log "review-gate: spawning reviewers (no state)"
         spawn_reviewers
+    else
+        # --- State exists but pending with no reviewers → re-spawn ---
+        local status reviewers_count
+        status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+        reviewers_count=$(jq -r '.reviewers | keys | length' "$STATE_FILE" 2>/dev/null || echo "0")
+
+        if [[ "$status" == "pending" && "$reviewers_count" == "0" ]]; then
+            log "review-gate: re-spawning reviewers (pending state with no reviewers)"
+            export REVIEW_GATE_RERUN=1
+            spawn_reviewers
+        fi
     fi
 
     # --- Check progress of reviewers ---
@@ -531,15 +636,21 @@ review_gate_check() {
         echo "$completed|$total|${running_list[*]}"
     }
 
-    # --- Calculate consensus (AUTONOMOUS MODE - requires all reviewers to PASS) ---
+    # --- Calculate consensus (PRIORITY-BASED) ---
+    # P0/P1 anywhere → requires_decision (blocking)
+    # All PASS → auto_approve
+    # No P0/P1 + at least 2 PASS → auto_approve (P2/P3 advisory)
+    # Otherwise → requires_decision
     calculate_consensus() {
         local reviewers
         reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
 
         local pass_count=0
         local fail_count=0
+        local needs_work_count=0  # Used for logging split vote details
         local other_count=0
         local reviewer_count=0
+        local max_priority=99  # Track highest (lowest number) priority across all reviewers
 
         for reviewer in $reviewers; do
             local output_file="$REVIEWS_DIR/${reviewer}.json"
@@ -571,6 +682,13 @@ review_gate_check() {
                 verdict="UNCLEAR"
             fi
 
+            # Extract highest priority from findings
+            local highest_priority
+            highest_priority=$(echo "$result" | jq -r '[.findings[]?.priority // 99] | min // 99' 2>/dev/null || echo "99")
+            if [[ "$highest_priority" =~ ^[0-9]+$ ]] && [[ "$highest_priority" -lt "$max_priority" ]]; then
+                max_priority="$highest_priority"
+            fi
+
             case "$verdict" in
                 PASS)
                     ((pass_count++)) || true
@@ -578,7 +696,10 @@ review_gate_check() {
                 FAIL)
                     ((fail_count++)) || true
                     ;;
-                NEEDS_WORK|*)
+                NEEDS_WORK)
+                    ((needs_work_count++)) || true
+                    ;;
+                *)
                     ((other_count++)) || true
                     ;;
             esac
@@ -592,13 +713,55 @@ review_gate_check() {
             return
         fi
 
+        # Strict: any invalid/malformed reviewer output → requires_decision
+        if [[ $other_count -gt 0 ]]; then
+            log "review-gate: consensus=requires_decision (invalid/malformed reviewer output detected)"
+            echo "requires_decision"
+            return
+        fi
+
+        # Strict: any FAIL verdict → requires_decision (even without P0 finding)
+        if [[ $fail_count -gt 0 ]]; then
+            log "review-gate: consensus=requires_decision (FAIL verdict detected)"
+            echo "requires_decision"
+            return
+        fi
+
+        # Priority-based consensus:
+        # P0 anywhere → requires_decision (FAIL-level)
+        if [[ "$max_priority" -eq 0 ]]; then
+            log "review-gate: consensus=requires_decision (P0 finding detected)"
+            echo "requires_decision"
+            return
+        fi
+
+        # P1 anywhere → requires_decision (must fix before proceeding)
+        if [[ "$max_priority" -eq 1 ]]; then
+            log "review-gate: consensus=requires_decision (P1 finding detected)"
+            echo "requires_decision"
+            return
+        fi
+
         # All reviewers PASS → auto-approve
         if [[ $pass_count -eq $reviewer_count ]]; then
             echo "auto_approve"
             return
         fi
 
-        # Anything else requires revision
+        # No P0/P1, but some NEEDS_WORK votes with only P2/P3 findings:
+        # If at least 2 reviewers say PASS, treat as auto_approve (P2/P3 are advisory)
+        if [[ "$max_priority" -ge 2 ]] && [[ $pass_count -ge 2 ]]; then
+            log "review-gate: consensus=auto_approve (no P0/P1, at least 2 PASS, P2/P3 advisory)"
+            echo "auto_approve"
+            return
+        fi
+
+        # No P0/P1, split opinion but not enough PASS votes → still requires_decision
+        # Log that there are no P0/P1 findings
+        if [[ "$max_priority" -ge 2 ]]; then
+            log "review-gate: consensus=requires_decision (no P0/P1 findings, split votes: pass=$pass_count needs_work=$needs_work_count)"
+        fi
+
         echo "requires_decision"
     }
 
@@ -1152,9 +1315,6 @@ Please summarize the review outcome, noting that max iterations was reached and 
         # Clean state so reviewers will be re-spawned after revision
         # (Archive uses the current iteration number, so do this before incrementing.)
         clean_for_rerun
-
-        # Increment iteration for next round
-        increment_iteration
 
         log "review-gate: revision required; incremented iteration"
 

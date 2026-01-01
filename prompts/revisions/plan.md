@@ -2,6 +2,11 @@ Please revise **${PLAN_PATH}** to address the following issues:
 
 ${ISSUES}
 
+**IMPORTANT:**
+- Edit ONLY the plan file at `${PLAN_PATH}`
+- Do NOT edit `latest.md` or any artifact/snapshot files
+- The artifact files are read-only representations
+
 While revising, ensure the plan follows the standard template structure:
 
 - Context & Goals

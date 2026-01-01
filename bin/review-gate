@@ -935,12 +935,15 @@ USAGE
     # --- Read plan content ---
     local plan_content
     plan_content=$(cat "$plan_path")
+    local plan_sha
+    plan_sha=$(compute_sha256 "$plan_path" 2>/dev/null || echo "")
 
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
         echo "<!-- review-type: plan-review-iterative -->"
         echo "<!-- plan-path: $plan_path -->"
+        echo "<!-- plan-sha: $plan_sha -->"
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -1082,7 +1085,10 @@ JSON only, no markdown code fences:
     if [[ -f "$state_file" ]]; then
         local temp_file="${state_file}.tmp.$$"
         jq --arg plan_path "$plan_path" \
-           '.mode.plan_path = $plan_path | .mode.type = "plan"' \
+           --arg plan_sha "$plan_sha" \
+           '.mode.plan_path = $plan_path
+            | .mode.type = "plan"
+            | .artifact.plan_sha = $plan_sha' \
            "$state_file" > "$temp_file"
         mv "$temp_file" "$state_file"
     fi
@@ -1223,12 +1229,15 @@ USAGE
     # --- Read spec content ---
     local spec_content
     spec_content=$(cat "$spec_path")
+    local spec_sha
+    spec_sha=$(compute_sha256 "$spec_path" 2>/dev/null || echo "")
 
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
         echo "<!-- review-type: spec -->"
         echo "<!-- spec-path: $spec_path -->"
+        echo "<!-- spec-sha: $spec_sha -->"
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -1353,7 +1362,10 @@ JSON only, no markdown code fences:
     if [[ -f "$state_file" ]]; then
         local temp_file="${state_file}.tmp.$$"
         jq --arg spec_path "$spec_path" \
-           '.mode.spec_path = $spec_path | .mode.type = "spec"' \
+           --arg spec_sha "$spec_sha" \
+           '.mode.spec_path = $spec_path
+            | .mode.type = "spec"
+            | .artifact.spec_sha = $spec_sha' \
            "$state_file" > "$temp_file"
         mv "$temp_file" "$state_file"
     fi
@@ -1663,6 +1675,10 @@ USAGE
 
     # --- Check for active gate ---
     check_existing_gate() {
+        if [[ "${REVIEW_GATE_RERUN:-}" == "1" ]]; then
+            return 0
+        fi
+
         if [[ -f "$STATE_FILE" ]]; then
             local status
             status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
@@ -1692,10 +1708,8 @@ USAGE
     # --- Archive previous reviews ---
     archive_previous_reviews() {
         # Get current iteration (or 0 if not set)
-        local iteration=0
-        if [[ -f "$ITERATION_FILE" ]]; then
-            iteration=$(cat "$ITERATION_FILE" 2>/dev/null || echo "0")
-        fi
+        local iteration
+        iteration=$(load_iteration "$REVIEW_DIR")
 
         # Use shared archive function
         archive_reviews "$REVIEW_DIR" "$REVIEWS_DIR" "$iteration"
@@ -2035,6 +2049,8 @@ SCHEMA
     # Initialize state
     local now
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local current_iter
+    current_iter=$(load_iteration "$REVIEW_DIR")
 
     # Mode configuration (for iterative review types)
     local mode_type="artifact"
@@ -2060,6 +2076,7 @@ SCHEMA
         --arg path "$artifact_path" \
         --arg sha256 "$artifact_sha256" \
         --arg created "$now" \
+        --argjson iteration "$current_iter" \
         --arg author_context "$author_context" \
         --arg owner_key "$OWNER_SESSION_KEY" \
         --arg owner_source "$OWNER_SOURCE" \
@@ -2098,7 +2115,8 @@ SCHEMA
             reviewers: {},
             consensus: null,
             decision: null,
-            created_at: $created
+            created_at: $created,
+            iteration: $iteration
         }')
 
     # Spawn reviewers and record in state

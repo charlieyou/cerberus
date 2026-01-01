@@ -105,16 +105,75 @@ A good implementation plan should:
 
 ### Priority Levels
 
-- [P0] - Plan is fundamentally broken. Cannot execute as written.
-- [P1] - Urgent gap. Will cause failures or serious risk if not addressed.
-- [P2] - Normal. Should be fixed or clarified before implementation.
-- [P3] - Low. Nice-to-have clarity or polish.
+**[P0] – Plan is not executable**
+
+Use when the plan is structurally or logically impossible to execute as written.
+
+- Criteria:
+  - Core objective cannot be achieved (missing major phases or components).
+  - Critical contradictions or ambiguities make it impossible to know what to build.
+  - No reasonable implementer could proceed without a major re-write of the plan.
+- Examples:
+  - Plan assumes access to a non-existent system or API with no fallback or alternative.
+  - Steps require mutually incompatible architectures with no clarification.
+  - Core data flow is undefined (no source of truth, no write path, etc.).
+
+**[P1] – High-severity, must-fix before implementation**
+
+Use when leaving the issue unfixed will *very likely* cause failure or serious risk on normal, expected execution paths.
+
+- Criteria (any one is enough):
+  - The main "happy path" will fail or be blocked for a large portion of users.
+  - There is a clear, direct path to data loss, security/privacy breach, or major outage.
+  - A required piece is missing and cannot be reasonably inferred or safely filled in by the implementer.
+- Examples:
+  - Plan for an API endpoint never defines how it authenticates/authorizes requests.
+  - Core environment variable for connecting to the primary database is missing entirely.
+  - Migration plan that can leave the system in an unrecoverable state.
+- **Non-examples (these are P2):**
+  - An env var is missing only for a rare debug/diagnostic path.
+  - Logging setup is missing for a divergence-warning path but doesn't crash the main flow.
+
+**[P2] – Normal, should be resolved before implementation**
+
+Use when the plan is executable but has gaps that could cause bugs, confusion, or rework in some paths—but are not clearly catastrophic for the main flow.
+
+- Criteria:
+  - Some paths might fail or misbehave if not clarified.
+  - An implementer can proceed but would have to guess or make assumptions.
+  - The impact is limited to certain features, edge cases, or observability.
+- Examples:
+  - Missing env var for an optional analytics integration or rarely used admin path.
+  - Missing logging only in debug-only flows; main processing still works.
+  - Unclear behavior for non-core edge cases.
+- **When torn between P1 and P2, default to P2.**
+
+**[P3] – Low-severity, nice-to-have clarity or polish**
+
+Use for feedback that would improve quality but is not expected to cause failures if ignored.
+
+- Examples:
+  - Suggesting clearer step ordering for readability.
+  - Recommending additional comments or diagrams.
+  - Proposing more detailed logging levels when basic logging exists.
 
 ### Verdict Guidelines
 
-- **PASS**: Plan is complete, ordered correctly, and executable with no P0/P1 issues. P2/P3 issues may exist but are non-blocking.
-- **NEEDS_WORK**: Plan has gaps that make execution risky or unclear, but the core approach is sound and fixable without a rewrite.
-- **FAIL**: Plan has blocking issues, is fundamentally flawed, or is too incomplete or contradictory to execute.
+- **PASS**: No P0 or P1 findings. P2/P3 findings are allowed as non-blocking suggestions.
+- **NEEDS_WORK**: At least one P1 finding (no P0), OR P2 issues that collectively make execution meaningfully risky (you must explain this in the summary).
+- **FAIL**: At least one P0 finding, or the plan is not meaningfully reviewable.
+
+**Do not choose NEEDS_WORK solely because P2/P3 findings exist.** Use NEEDS_WORK only when issues actually prevent safe execution or are P1+.
+
+**Multi-reviewer consensus:** In multi-reviewer mode, NEEDS_WORK based only on P2/P3 can be overridden if at least two other reviewers PASS with no P0/P1 findings. FAIL verdicts always block regardless of priority levels.
+
+## Reasoning Process
+
+Before outputting your review, use ultrathink to reason step-by-step:
+1. Evaluate each dimension (completeness, correctness, dependencies, risks, etc.)
+2. For each potential finding, explicitly ask: "Does this meet P1 criteria, or is it P2?"
+3. Consider edge cases and failure modes carefully
+4. Only then formulate your findings and verdict
 
 ## Output Format
 
@@ -131,12 +190,13 @@ JSON only, no markdown code fences:
     }
   ],
   "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
-  "summary": "1-3 sentence explanation"
+  "summary": "Highest priority: P{N}. {1-2 sentences explaining why verdict matches the rules.}"
 }
 
-- PASS: No significant findings
-- FAIL: Blocking issues (P0/P1)
-- NEEDS_WORK: Non-blocking issues (P2/P3)
+- PASS: No P0/P1 findings; P2/P3 allowed
+- NEEDS_WORK: At least one P1, or P2s that collectively prevent safe execution
+- FAIL: At least one P0
 - file_path, line_start, line_end: use null for plan reviews (not applicable)
+- summary MUST state the highest priority level and justify the verdict
 
 If any guidance here conflicts with these output format rules, follow the output format rules above.
