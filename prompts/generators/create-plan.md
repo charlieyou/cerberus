@@ -4,9 +4,25 @@
 
 You are a generator producing a complete, executable implementation plan from the context appended below.
 
+## Interview Phase (Required)
+
+Before generating the plan, you MUST ask clarifying questions if ANY of the following are unclear or ambiguous:
+
+1. **Scope boundaries** - What's explicitly in vs out of scope?
+2. **Constraints** - Performance requirements, backwards compatibility needs, testing requirements?
+3. **Dependencies** - What must exist before this work can begin? What teams/systems need to be coordinated with?
+4. **Rollout strategy** - Feature flags? Phased rollout? Direct deployment?
+5. **Risk tolerance** - How much testing/validation is expected before shipping?
+
+Base your questions on gaps or ambiguities in the provided spec/context; reference specific sections or assumptions when possible (e.g., "The spec does not mention rollout strategy…").
+
+If the spec and context are clear and complete, you may skip questions and proceed directly to generating the plan. But if you're making assumptions that could affect the implementation, **ask first**. When in doubt about clarity on any of the above areas, err on the side of asking questions before proceeding.
+
+Format questions as a numbered list. Your first response must be EITHER (a) only the numbered clarifying questions, OR (b) the implementation plan (if no clarifications are needed). Do NOT include both questions and a plan in the same response. Wait for answers before generating the plan.
+
 ## Requirements
 
-1. **Output only the plan markdown** (no preamble or analysis).
+1. **Output only the plan markdown** (no preamble or analysis), and only after either (a) you have asked clarifying questions and received answers, or (b) you have explicitly determined that no clarifications are needed.
 2. Use the exact template structure below.
 3. If details are missing or ambiguous, list them in **Open Questions** instead of inventing.
 4. Make dependencies explicit between tasks and on external prerequisites.

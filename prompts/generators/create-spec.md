@@ -11,10 +11,24 @@ You are a generator producing a complete feature specification from the context 
 3. If details are missing or ambiguous, list them in **Open Questions** instead of inventing.
 4. Keep scope explicit: include clear **Goals** and **Non-Goals**.
 5. Reference existing codebase structure when provided (files, modules, patterns).
-6. **Ownership must be specified** - identify teams/modules responsible for each component.
-7. **Backwards Compatibility is required** - state impact and mitigation even if "none".
-8. **Acceptance Criteria must be concrete and testable** - write them so they can be directly turned into verification steps in an implementation plan (e.g., "Given X, when Y, then Z").
-9. **API/Data Model sections**: include when the feature touches APIs or stored data; explicitly mark "Not applicable" otherwise.
+6. **Acceptance Criteria must be concrete and testable** - write them as "Given X, when Y, then Z" statements.
+7. **No implementation details** - do NOT include code snippets, line numbers, function signatures, data models, or test code. Keep descriptions at the spec level.
+
+## What NOT to Include (Implementation Details)
+
+A spec defines **what** to build and **why**, not **how**. Leave these for the implementation plan:
+
+- ❌ Code snippets or pseudo-code
+- ❌ Exact line numbers or line ranges in files
+- ❌ Step-by-step implementation instructions
+- ❌ Specific function signatures or method names
+- ❌ Data models, schemas, or type definitions
+- ❌ Test code examples
+- ❌ "Before/After" code comparisons
+
+Instead, use high-level descriptions:
+- ✅ "Add a new event to the MalaEventSink protocol"
+- ❌ "Add `def on_validation_started(self, agent_id: str) -> None:` at line 399"
 
 ## Spec Template
 
@@ -31,58 +45,26 @@ You are a generator producing a complete feature specification from the context 
 ## Non-Goals (Out of Scope)
 - [Explicitly excluded functionality]
 
-## Ownership
-- Product/feature owner: [team/person]
-- Technical owner: [team/person]
-- Key code areas: [paths/modules responsible for this feature]
-
-## User Stories
-- As a [user type], I want to [action] so that [benefit]
-
 ## Acceptance Criteria
-[Write criteria that can be directly turned into tests or verification steps.]
+[Concrete, testable conditions. Focus on observable behavior, not test implementation.]
 
-- [Concrete, testable condition — e.g., "Given X, when Y, then Z"]
+- Given [precondition], when [action], then [expected result]
 - [Performance/reliability/UX criteria where relevant]
 
-## Technical Design
+## Technical Context
 
 ### Architecture
-[How this fits into the existing codebase, referencing specific files/patterns]
+[High-level description of how this fits into the existing codebase. Reference patterns, modules, and concepts—not specific code changes.]
 
 ### Key Components
-- [Component 1]: [purpose and responsibility] (Owner: [module/team])
-- [Component 2]: [purpose and responsibility] (Owner: [module/team])
+[List logical components or systems involved, with their purpose. No function names or signatures.]
+
+- [Component 1]: [purpose and responsibility]
+- [Component 2]: [purpose and responsibility]
 
 ### Integration Points
 - [Existing system/service]: [how this feature interacts with it]
 - [External dependency]: [usage and failure handling]
-
-### Data Model
-[Required if this feature introduces or changes stored data, schemas, or types.]
-
-- New/changed entities: [Entity name]: [fields, types, constraints]
-- Storage: [database/table, index changes, retention]
-- Migration: [how existing data is migrated, if applicable]
-
-If not applicable, state: "Not applicable — no new or changed data models."
-
-### API Design
-[Required if this feature introduces or changes APIs (HTTP, RPC, events, etc.).]
-
-- Endpoint: `[METHOD] /path`
-  - Request: [shape, required/optional fields]
-  - Response: [shape, error envelope]
-  - Auth: [requirements]
-  - Versioning: [behavior for existing clients]
-
-If not applicable, state: "Not applicable — no new or changed APIs."
-
-### Backwards Compatibility
-- Existing behaviors affected: [what changes, if anything]
-- Impact on clients/integrations: [none | describe impact and mitigation]
-- Rollout strategy: [feature flags, gradual rollout, etc.]
-- Rollback plan: [how to disable/rollback safely]
 
 ## User Experience
 
@@ -92,8 +74,7 @@ If not applicable, state: "Not applicable — no new or changed APIs."
 3. [Step 3]
 
 ### Error States
-- [Error scenario]: [How it's handled and displayed]
-- [System failure]: [Fallback behavior]
+- [Error scenario]: [How it's handled]
 
 ### Edge Cases
 - [Edge case]: [Expected behavior]
