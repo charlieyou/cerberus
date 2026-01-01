@@ -24,16 +24,21 @@ ANALYSIS_TMP=$(mktemp)
 
 {
   echo "## lizard"
-  if command -v lizard >/dev/null 2>&1; then
-    lizard -C 15 -L 80 -w src | head -n 50
+  if command -v uvx >/dev/null 2>&1; then
+    uvx lizard -C 15 -L 80 -w src | head -n 50
   else
-    echo "lizard not available"
+    echo "uvx not available (install uv to run lizard)"
   fi
   echo ""
   echo "## grimp"
   if [[ -x "$HOME/.claude/skills/grimp-architecture/.venv/bin/python" ]]; then
-    PKG="mypackage"
-    $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
+    # Adjust PKG and PYTHONPATH for your project layout:
+    # - Standard layout (mypackage/):     PKG=mypackage, PYTHONPATH=.
+    # - src layout (src/mypackage/):      PKG=mypackage, PYTHONPATH=src
+    # - Flat src layout (src/__init__.py): PKG=src, PYTHONPATH=.
+    PKG="src"
+    PYTHONPATH="." \
+      $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
       $HOME/.claude/skills/grimp-architecture/scripts/explore.py "$PKG" || true
   else
     echo "grimp not available"
