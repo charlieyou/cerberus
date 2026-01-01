@@ -11,7 +11,7 @@ You are a generator producing a complete feature specification from the context 
 3. If details are missing or ambiguous, list them in **Open Questions** instead of inventing.
 4. Keep scope explicit: include clear **Goals** and **Non-Goals**.
 5. Reference existing codebase structure when provided (files, modules, patterns).
-6. **Acceptance Criteria must be concrete and testable** - write them as "Given X, when Y, then Z" statements.
+6. **Acceptance Criteria must be concrete and testable** - write them as "Given X, when Y, then Z" statements. See **Acceptance Criteria Quality** below.
 7. **No implementation details** - do NOT include code snippets, line numbers, function signatures, data models, or test code. Keep descriptions at the spec level.
 
 ## What NOT to Include (Implementation Details)
@@ -89,6 +89,40 @@ Instead, use high-level descriptions:
 
 - [Decision 1]: [Choice made] — [why]
 ```
+
+## Acceptance Criteria Quality
+
+Acceptance criteria must describe **observable outcomes**, not **proxy metrics** that can be gamed or satisfied without achieving the actual goal.
+
+Numeric targets are acceptable only when they directly measure user-visible behavior or system SLOs (e.g., latency, error rate), not internal structure (file size, LOC) or process (test counts, time spent).
+
+### Anti-patterns (Gameable)
+
+| Type | ❌ Bad AC | Why it fails |
+|------|----------|--------------|
+| Refactoring | "File under 500 lines" | Can inline, delete docs, split arbitrarily |
+| Features | "Add 3 unit tests" | Tests can be trivial/meaningless |
+| Performance | "Reduce function calls by 50%" | Can inline everything, hurt readability |
+| Coverage | "Achieve 80% coverage" | Can add tests that assert nothing |
+| Bugs | "Fix the crash" | Doesn't verify correct behavior restored |
+| Process metrics | "Spend 2 days refactoring" / "Touch 5 files" | Time/effort/file-count says nothing about outcome |
+
+### Good AC Patterns
+
+| Type | ✅ Good AC | Why it works |
+|------|-----------|--------------|
+| Refactoring | "X delegates to Y; no direct Z manipulation" | Describes responsibility boundaries |
+| Features | "Given X, when Y, then Z" | Observable behavior |
+| Performance | "P95 latency < 200ms under load L" | Measurable user impact |
+| Bugs | "Given [repro], system returns [expected]" | Verifies correct behavior |
+| Cleanup | "No references to deprecated API remain" | Verifiable state |
+
+### The Malicious Compliance Test
+
+Before finalizing AC, ask:
+1. **Can this be satisfied while missing the point?** → Rewrite
+2. **Does this focus on a side effect (size, count, coverage) instead of behavior or invariants?** → Rewrite to describe the behavior or invariant
+3. **Would a malicious-compliance agent pass this?** → Add behavioral constraint
 
 ## Context
 

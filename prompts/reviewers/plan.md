@@ -100,8 +100,38 @@ A good implementation plan should:
 - Circular dependencies between steps or unclear ordering for risky operations.
 - No rollback strategy for risky changes (either per-task or for the overall rollout).
 - High-risk changes without any verification or monitoring plan.
+- **Gameable acceptance criteria** (see below)
 
 > Note: Do **not** flag a plan for referencing a file/module that is explicitly labeled as "new" or "to be created". Only treat it as a red flag when the plan incorrectly assumes existing artifacts.
+
+### Gameable Acceptance Criteria (Flag as P2)
+
+Acceptance criteria that use **proxy metrics** instead of **observable outcomes** are gameable—they can be satisfied without achieving the actual goal. Flag these as P2 issues.
+
+**Anti-patterns to flag:**
+
+| Pattern | Example | Why it's gameable |
+|---------|---------|-------------------|
+| Line/size limits | "File under 500 lines" | Can inline, delete docs, split arbitrarily |
+| Count-based | "Add 3 unit tests" | Tests can be trivial/meaningless |
+| Percentage targets | "Reduce calls by 50%" | Can inline everything, hurt readability |
+| Coverage numbers | "Achieve 80% coverage" | Can add tests that assert nothing |
+| Vague fixes | "Fix the crash" | Doesn't verify correct behavior restored |
+| Process metrics | "Spend 2 days refactoring" / "Touch 5 files" | Time/effort/file-count says nothing about outcome |
+
+**What to suggest instead:**
+
+| Type | Good AC pattern |
+|------|-----------------|
+| Refactoring | "X delegates to Y; no direct Z manipulation" |
+| Features | "Given X, when Y, then Z" |
+| Performance | "P95 latency < 200ms under load L" |
+| Bugs | "Given [repro], system returns [expected]" |
+| Cleanup | "No references to deprecated API remain" |
+
+**The test:** Could a malicious-compliance agent satisfy this AC while missing the point? If yes, flag it.
+
+In general, prefer AC that describe behavior, invariants, or verifiable states—not internal structure limits or work quotas.
 
 ### Priority Levels
 
