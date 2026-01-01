@@ -59,6 +59,7 @@ Review git changes with external reviewers:
 /cerberus:review-code --commit abc123 def456  # Review multiple commits
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini  # Only run selected reviewers
+/cerberus:review-code --exclude ':(exclude,glob)dist/**'  # Ignore files using git pathspec syntax
 ```
 
 **Iterative fix tracking:** For `--commit`, `--base`, and range modes, the original review scope is locked at first spawn. Fix commits made during the review session are automatically included in subsequent iterations without shifting the original range.

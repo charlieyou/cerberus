@@ -51,11 +51,12 @@ Commands:
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
     Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
       --commit <shas>     Review one or more commits (space or comma separated)
+      --exclude <spec>    Exclude files using git pathspec exclude syntax (:! or :(exclude))
 
   spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
@@ -201,6 +202,7 @@ review_gate_spawn_code_review() {
     local -a positionals=()
     local force_focus="false"
     local artifact_only="false"
+    local -a exclude_pathspecs=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -246,6 +248,14 @@ review_gate_spawn_code_review() {
                 ;;
             --focus)
                 focus_area="${2:-}"
+                shift 2
+                ;;
+            --exclude=*)
+                exclude_pathspecs+=("${1#*=}")
+                shift
+                ;;
+            --exclude)
+                exclude_pathspecs+=("${2:-}")
                 shift 2
                 ;;
             --uncommitted)
@@ -311,6 +321,7 @@ Options:
   --mode <level>       Intelligence mode: fast, smart, max
   --context-file <path> Inject author context from file into the prompt
   --focus <text>       Focus area to emphasize in the review
+  --exclude <pathspec> Exclude files using git pathspec exclude syntax (:! or :(exclude))
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha...>   Review one or more commits (space or comma separated)
@@ -372,6 +383,18 @@ USAGE
         fi
     fi
 
+    if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
+        local spec
+        for spec in "${exclude_pathspecs[@]}"; do
+            if [[ -z "$spec" ]]; then
+                die "--exclude requires a pathspec"
+            fi
+            if [[ "$spec" != :!* && "$spec" != ":(exclude"* ]]; then
+                die "--exclude expects git exclude pathspec syntax (e.g. :!path or :(exclude,glob)path): $spec"
+            fi
+        done
+    fi
+
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
         mode="smart"
@@ -385,6 +408,13 @@ USAGE
     fi
 
     validate_max_rounds "$max_rounds"
+
+    if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
+        local spec
+        for spec in "${exclude_pathspecs[@]}"; do
+            diff_args_str+=" --exclude $spec"
+        done
+    fi
 
     # --- Resolve base_sha and tip_sha for all modes ---
     # These are used to:
@@ -443,6 +473,10 @@ USAGE
     local fix_diff=""
     local current_head
     current_head=$(git rev-parse HEAD 2>/dev/null || true)
+    local -a pathspec_args=()
+    if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
+        pathspec_args=(-- . "${exclude_pathspecs[@]}")
+    fi
     
     case "$diff_mode" in
         --uncommitted)
@@ -450,14 +484,14 @@ USAGE
             # since the original review started. This ensures fixes applied by the
             # agent are visible even if they were staged or the index changed.
             if [[ -n "$base_sha" ]]; then
-                diff_content=$(git diff "${base_sha}" 2>/dev/null || true)
+                diff_content=$(git diff "${base_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             # Fallback to unstaged + staged changes only when base_sha is not set
             # (i.e., first-time review or non-iterative scenario)
             if [[ -z "$diff_content" ]]; then
-                diff_content=$(git diff 2>/dev/null || true)
+                diff_content=$(git diff "${pathspec_args[@]}" 2>/dev/null || true)
                 local cached_diff
-                cached_diff=$(git diff --cached 2>/dev/null || true)
+                cached_diff=$(git diff --cached "${pathspec_args[@]}" 2>/dev/null || true)
                 if [[ -n "$cached_diff" ]]; then
                     if [[ -n "$diff_content" ]]; then
                         diff_content+=$'\n'"$cached_diff"
@@ -469,10 +503,10 @@ USAGE
             ;;
         --base)
             # Original scope: base..tip_sha (stable)
-            diff_content=$(git diff "${base_sha}..${tip_sha}" 2>/dev/null || true)
+            diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             # Fix diff: tip_sha..HEAD (new commits since review started)
             if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" 2>/dev/null || true)
+                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
         --commit)
@@ -480,7 +514,7 @@ USAGE
             local commits_list="${diff_target//,/ }"
             for sha in $commits_list; do
                 local commit_diff
-                commit_diff=$(git show "$sha" 2>/dev/null || true)
+                commit_diff=$(git show "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
                 if [[ -n "$commit_diff" ]]; then
                     if [[ -n "$diff_content" ]]; then
                         diff_content+=$'\n'"$commit_diff"
@@ -491,15 +525,15 @@ USAGE
             done
             # Fix diff: tip_sha..HEAD (new commits since review started)
             if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" 2>/dev/null || true)
+                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
         range)
             # Original scope: base..tip (using resolved SHAs for stability)
-            diff_content=$(git diff "${base_sha}..${tip_sha}" 2>/dev/null || true)
+            diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             # Fix diff: tip_sha..HEAD (new commits since review started)
             if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" 2>/dev/null || true)
+                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
     esac

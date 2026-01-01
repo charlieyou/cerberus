@@ -324,6 +324,107 @@ test_multiple_fix_iterations() {
     fi
 }
 
+# Test 6: --exclude filters uncommitted diffs
+test_exclude_uncommitted_filters_diff() {
+    ((TESTS_RUN++)) || true
+    log_test "--exclude filters uncommitted diffs"
+
+    setup_test_repo
+
+    mkdir -p excluded
+    echo "baseline include" > include.txt
+    echo "baseline skip" > excluded/skip.txt
+    git add include.txt excluded/skip.txt
+    git commit -q -m "baseline include/exclude"
+
+    echo "keep this" > include.txt
+    echo "skip this" > excluded/skip.txt
+
+    export CLAUDE_SESSION_ID="test-session-$$-6"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local output
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --exclude ":(exclude,glob)excluded/**" 2>&1)
+    local artifact_path
+    artifact_path=$(get_artifact_path "$output")
+
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if echo "$diff_content" | grep -q "include.txt" && ! echo "$diff_content" | grep -q "excluded/skip.txt"; then
+            log_pass "excluded paths omitted from uncommitted diff"
+        else
+            log_fail "excluded paths still present in diff"
+        fi
+    else
+        log_fail "artifact not created at $artifact_path"
+    fi
+}
+
+# Test 7: --exclude filters commit and fix diffs
+test_exclude_commit_and_fix() {
+    ((TESTS_RUN++)) || true
+    log_test "--exclude filters commit and fix diffs"
+
+    setup_test_repo
+
+    mkdir -p excluded
+    echo "include v1" > include.txt
+    echo "skip v1" > excluded/skip.txt
+    git add include.txt excluded/skip.txt
+    git commit -q -m "commit to review"
+    local commit_sha
+    commit_sha=$(git rev-parse HEAD)
+
+    export CLAUDE_SESSION_ID="test-session-$$-7"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local output
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude ":!excluded/**" 2>&1)
+    local artifact_path
+    artifact_path=$(get_artifact_path "$output")
+
+    local commit_ok=false
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if ! echo "$diff_content" | grep -q "excluded/skip.txt"; then
+            commit_ok=true
+        fi
+    fi
+
+    # Fix commit touching excluded path only; should remain excluded on re-spawn
+    echo "skip v2" > excluded/skip.txt
+    git add excluded/skip.txt
+    git commit -q -m "fix commit excluded only"
+
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude ":!excluded/**" 2>&1)
+    artifact_path=$(get_artifact_path "$output")
+
+    local fix_ok=false
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if ! echo "$diff_content" | grep -q "skip v2"; then
+            fix_ok=true
+        fi
+    fi
+
+    if $commit_ok && $fix_ok; then
+        log_pass "excluded paths omitted from commit and fix diffs"
+    else
+        if ! $commit_ok; then
+            log_fail "excluded paths present in commit diff"
+        fi
+        if ! $fix_ok; then
+            log_fail "excluded paths present in fix diff"
+        fi
+    fi
+}
+
 # Run all tests
 main() {
     echo "========================================"
@@ -336,6 +437,8 @@ main() {
     test_range_mode_stores_resolved_shas
     test_range_mode_includes_fixes_without_shift
     test_multiple_fix_iterations
+    test_exclude_uncommitted_filters_diff
+    test_exclude_commit_and_fix
     
     echo ""
     echo "========================================"

@@ -1,6 +1,6 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] ["<focus area>"]
+argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]
 ---
 
 # Code Review (Iterative)
@@ -19,6 +19,7 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
 /cerberus:review-code --mode max         # Use max intelligence mode
+/cerberus:review-code --exclude ':(exclude,glob)dist/**'  # Ignore files using git pathspec syntax
 /cerberus:review-code "focus on error handling"  # Focus review on specific area
 ```
 
@@ -34,7 +35,7 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 
 Use the Bash tool to spawn the code review.
 
-Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--exclude <pathspec>` (git pathspec exclude syntax like `:!` or `:(exclude)`), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
@@ -50,6 +51,9 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --focus "focus on securi
 
 # User: /review-code --base main "check error handling"
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --base main --focus "check error handling"
+
+# User: /review-code --exclude ':(exclude,glob)dist/**' --exclude ':!**/*.snap'
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --exclude ':(exclude,glob)dist/**' --exclude ':!**/*.snap'
 
 # User: /review-code main..feature focus on error handling
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review main..feature focus on error handling
