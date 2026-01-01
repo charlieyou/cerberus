@@ -401,6 +401,8 @@ Spawn external reviewers:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review path/to/plan.md
 ```
 
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.
+
 If reviewers find issues:
 1. Fix the plan file
 2. Re-run the review gate command

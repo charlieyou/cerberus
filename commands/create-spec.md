@@ -269,6 +269,8 @@ Spawn external reviewers to validate the spec:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review path/to/spec.md
 ```
 
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.
+
 **Interactive Refinement Loop:**
 
 When reviewers find issues, DO NOT just fix them silently. Instead:
