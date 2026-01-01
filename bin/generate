@@ -210,6 +210,8 @@ review_gate_generate() {
         draft_dir="$output_dir"
         mkdir -p "$draft_dir"
         persistent_output=true
+        # Clear stale sentinel files from prior runs to avoid reusing stale markers
+        rm -f "$draft_dir"/*.done "$draft_dir"/*.failed 2>/dev/null || true
     else
         draft_dir=$(mktemp -d "/tmp/review-gate-drafts-XXXXXX")
         # Ensure cleanup even if generation fails early (only for temp dirs)
