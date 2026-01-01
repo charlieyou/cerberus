@@ -39,7 +39,6 @@ Before asking any questions, understand the existing codebase:
 2. Note existing conventions (naming, patterns, testing, error handling)
 3. Find integration points and constraints
 4. Capture key files you will reference in the spec
-5. Identify existing ownership patterns (who owns related modules?)
 
 Document findings internally—these inform the skeleton and your questions.
 
@@ -60,8 +59,6 @@ Create a skeleton of the spec with placeholders based on your research. This dri
 - [TBD or inferred from research]
 
 ## Ownership
-- Product/feature owner: [TBD]
-- Technical owner: [TBD]
 - Key code areas: [Pre-fill from research if known]
 
 ## User Stories
@@ -90,8 +87,6 @@ Create a skeleton of the spec with placeholders based on your research. This dri
 ### Backwards Compatibility
 - Existing behaviors affected: [TBD]
 - Impact on clients/integrations: [TBD]
-- Rollout strategy: [TBD]
-- Rollback plan: [TBD]
 
 ## User Experience
 
@@ -120,7 +115,7 @@ Create a skeleton of the spec with placeholders based on your research. This dri
 
 Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot answer from the codebase.
 
-**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Acceptance Criteria section needs performance thresholds—here are options: [A] 200ms p99 latency, [B] best-effort, [C] you decide. Which?"
+**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Acceptance Criteria section needs concrete conditions—what does 'done' look like for this feature?"
 
 **Interview Principles**
 
@@ -135,58 +130,43 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 
 **Minimum Question Coverage** — You MUST ask about these areas (unless already answered by codebase research):
 
-- [ ] Ownership: Who is the product owner? Who is the technical owner?
+- [ ] Ownership: Which code areas/modules will this touch?
 - [ ] Scope: What's MVP vs. nice-to-have? What's explicitly out of scope?
 - [ ] Acceptance criteria: What are the concrete "done" conditions?
 - [ ] User context: Who uses this and in what scenario?
 - [ ] Primary flow: What's the happy path step-by-step?
 - [ ] Error handling: What happens when X fails?
 - [ ] Backwards compatibility: Any existing clients/integrations affected?
-- [ ] Rollout: Feature flag? Gradual? Big bang?
 - [ ] Edge cases: At least 2-3 specific edge cases for this feature
-- [ ] Performance: Any latency, throughput, or resource constraints?
-- [ ] Observability: How will we monitor success/failure? (metrics, logging, alerts)
-- [ ] Security & permissions: Any auth, privacy, or compliance constraints?
-- [ ] Risks & assumptions: Anything that could make this fail?
-
-**N/A handling:** If an item is clearly not applicable (e.g., performance for trivial internal tooling), mark as "N/A" with a one-line rationale instead of forcing a question.
 
 **Mode-specific coverage:**
-- `fast`: At minimum, cover Ownership, Acceptance Criteria, Backwards Compatibility. For other items, prefer marking as Open Questions if the user is time-constrained.
+- `fast`: At minimum, cover Ownership, Acceptance Criteria, Backwards Compatibility. Mark remaining unknowns as Open Questions.
 - `smart`: Aim to cover all items; only leave as Open Questions if the user cannot answer.
-- `max`: Fully clear all items; actively probe for risks, alternatives, and edge cases even if user doesn't raise them.
-
-**Priority order:** Ownership → Acceptance Criteria → Backwards Compatibility → User context → Error handling → Remaining items.
+- `max`: Fully clear all items; actively probe for edge cases even if user doesn't raise them.
 
 **Question Categories** (adapt order based on context):
 
 #### Scope & Ownership
 - What's the MVP vs. nice-to-have?
 - What's explicitly out of scope?
-- Who owns this feature? (team/person for product and technical decisions)
 - Which existing modules will this live in or extend?
 
 #### Acceptance Criteria
 - What are the concrete conditions for "done"? (Given X, when Y, then Z)
-- Are there performance thresholds? (latency, throughput, error rates)
 - What would a failed acceptance look like?
 
 #### User Experience
 - Who uses this and in what context?
 - What's the primary workflow/happy path?
 - What feedback does the user need? (loading states, confirmations, errors)
-- Are there accessibility requirements?
 
 #### Technical Implementation
 - Preferences on specific libraries, patterns, or approaches?
-- Performance requirements or constraints?
 - Data storage/persistence needs?
 - API design preferences (if applicable)?
 
-#### Backwards Compatibility & Rollout
+#### Backwards Compatibility
 - Are there existing clients/integrations that depend on affected code?
-- What's the rollout strategy? (feature flag, gradual, big bang)
-- What's the rollback plan if something goes wrong?
 - Any data migrations required?
 
 #### Edge Cases & Error Handling
@@ -216,13 +196,13 @@ Create a compact context block for generators, including the skeleton:
 
 - **Spec skeleton** (with TBDs filled from interview, remaining gaps marked)
 - Feature summary (1-2 paragraphs)
-- Codebase findings (key files, patterns, constraints, ownership)
+- Codebase findings (key files, patterns, constraints)
 - User answers (structured bullets, mapped to skeleton sections)
 - Decisions made + rationale
 - Remaining open questions
 
 **Context Checklist** — Ensure skeleton has:
-- [ ] Ownership (product, technical, code areas)
+- [ ] Ownership (code areas/modules affected)
 - [ ] Acceptance criteria (concrete, testable)
 - [ ] Backwards compatibility stance
 - [ ] API/Data model needs (or explicit "not applicable")
@@ -306,7 +286,6 @@ When reviewers find issues, DO NOT just fix them silently. Instead:
 - "Reviewers noted [gap]. Can you clarify [specific detail]?"
 - "There's disagreement about [X]. Which interpretation is correct?"
 - "This edge case wasn't covered: [scenario]. What should happen?"
-- "The rollback plan is unclear. If this fails in production, how do we recover?"
 - "Reviewer thinks [section] is too vague to implement. Can you be more specific about [detail]?"
 
 **Priority definitions** (use reviewer's assigned severity, or these guidelines):
