@@ -8,7 +8,7 @@ INSTALLED_PLUGINS="$HOME/.claude/plugins/installed_plugins.json"
 PLUGIN_CACHE="$HOME/.claude/plugins/cache/cerberus/cerberus"
 
 echo "==> Updating plugin from marketplace..."
-claude plugin marketplace update charlieyou/cerberus
+claude plugin marketplace update cerberus
 
 echo "==> Updating local plugin installation..."
 claude plugin update cerberus@cerberus
