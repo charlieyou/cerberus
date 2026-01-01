@@ -113,6 +113,8 @@ Create a skeleton of the spec with placeholders based on your research. This dri
 
 ### Phase 2: Strategic Interviewing
 
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Do NOT just print questions as text—the user cannot respond to printed text. Each question must be asked using the tool to get a response.
+
 Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot answer from the codebase.
 
 **Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Acceptance Criteria section needs concrete conditions—what does 'done' look like for this feature?"

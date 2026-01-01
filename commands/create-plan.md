@@ -205,6 +205,8 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 **Prerequisites:** Phase 1c skeleton MUST exist before starting Phase 2.
 
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Do NOT just print questions as text—the user cannot respond to printed text. Each question must be asked using the tool to get a response.
+
 Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot infer from the spec and codebase.
 
 **Phase 2 Rules:**
