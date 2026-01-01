@@ -369,6 +369,18 @@ review_gate_check() {
         rm -rf "$REVIEWS_DIR"
     }
 
+    mark_stale_resolved() {
+        local now tmp
+        now=$(date -Iseconds)
+        tmp="${STATE_FILE}.tmp.$$"
+        jq --arg now "$now" \
+           '.status="resolved"
+            | .decision = (.decision // {})
+            | .decision.reason="stale_timeout"
+            | .decision.decided_at=$now' \
+           "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+    }
+
     # --- Ensure state has an owner to avoid cross-session blocking ---
     ensure_state_owner() {
         [[ -z "$SESSION_KEY" ]] && return 0
@@ -413,8 +425,8 @@ review_gate_check() {
             log "review-gate: state age ${AGE_SECONDS}s"
 
             if [[ $AGE_SECONDS -gt 1800 ]]; then
-                log "review-gate: cleaning stale state"
-                cleanup_stale_state
+                log "review-gate: stale state; marking resolved"
+                mark_stale_resolved
                 output_allow
             fi
         fi
