@@ -1,0 +1,50 @@
+#!/bin/bash
+# Updates the cerberus plugin and fixes allowlist paths in settings.json
+
+set -e
+
+SETTINGS_FILE="$HOME/.claude/settings.json"
+INSTALLED_PLUGINS="$HOME/.claude/plugins/installed_plugins.json"
+PLUGIN_CACHE="$HOME/.claude/plugins/cache/cerberus/cerberus"
+
+echo "==> Updating plugin from marketplace..."
+claude plugin marketplace update charlieyou/cerberus
+
+echo "==> Updating local plugin installation..."
+claude plugin update cerberus@cerberus
+
+# Get the new version from installed_plugins.json
+NEW_VERSION=$(jq -r '.plugins["cerberus@cerberus"][0].version' "$INSTALLED_PLUGINS")
+
+if [[ -z "$NEW_VERSION" || "$NEW_VERSION" == "null" ]]; then
+    echo "Error: Could not determine new version from $INSTALLED_PLUGINS"
+    exit 1
+fi
+
+NEW_BIN_PATH="$PLUGIN_CACHE/$NEW_VERSION/bin"
+
+echo "==> New version: $NEW_VERSION"
+echo "==> New bin path: $NEW_BIN_PATH"
+
+# Update settings.json: replace any cerberus version path with the new one
+# Match pattern: /home/cyou/.claude/plugins/cache/cerberus/cerberus/<version>/bin/<script>
+if [[ -f "$SETTINGS_FILE" ]]; then
+    # Use sed to replace version numbers in cerberus paths
+    ESCAPED_CACHE=$(printf '%s\n' "$PLUGIN_CACHE" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    
+    # Replace pattern: cache/cerberus/cerberus/<old-version>/bin/ with new version
+    sed -i -E "s|($ESCAPED_CACHE)/[^/]+/bin/|\\1/$NEW_VERSION/bin/|g" "$SETTINGS_FILE"
+    
+    echo "==> Updated settings.json allowlist paths"
+else
+    echo "Warning: $SETTINGS_FILE not found"
+fi
+
+echo "==> Done!"
+echo ""
+echo "Scripts available to allowlist:"
+for script in "$NEW_BIN_PATH"/*; do
+    if [[ -f "$script" && -x "$script" ]]; then
+        echo "  Bash($script:*)"
+    fi
+done
