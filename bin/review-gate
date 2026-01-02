@@ -1060,7 +1060,8 @@ JSON only, no markdown code fences:
 - PASS: No significant findings
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)
-- file_path, line_start, line_end are optional (use null if not applicable)"
+- file_path, line_start, line_end are optional (use null if not applicable)
+"
     fi
 
     # --- Inject focus area before Output Format section if provided ---
@@ -2594,15 +2595,31 @@ USAGE
         esac
     done
 
+    # Count valid verdicts (PASS, FAIL, NEEDS_WORK) - needed for both consensus and exit code
+    local valid_verdict_count=$((has_fail + has_needs))
+    # Check if we have at least one PASS (need to count separately since has_pass isn't tracked)
+    local has_pass=0
+    for reviewer in $reviewers; do
+        local v
+        v=$(echo "$result_json" | jq -r --arg r "$reviewer" '.reviewers[$r].verdict // ""')
+        if [[ "$v" == "PASS" ]]; then
+            has_pass=1
+            valid_verdict_count=$((valid_verdict_count + 1))
+            break
+        fi
+    done
+
     local status consensus_verdict=""
     if [[ "$timed_out" == "true" ]]; then
         status="timeout"
         consensus_verdict=""
     else
         status="complete"
-        if [[ "$parse_error_count" -gt 0 ]]; then
+        # Only treat as ERROR if ALL reviewers failed to produce valid verdicts
+        if [[ "$valid_verdict_count" -eq 0 && "$parse_error_count" -gt 0 ]]; then
             consensus_verdict="ERROR"
         else
+            # Use valid verdicts for consensus (most severe wins)
             if [[ "$has_fail" -gt 0 ]]; then
                 consensus_verdict="FAIL"
             elif [[ "$has_needs" -gt 0 ]]; then
@@ -2625,7 +2642,8 @@ USAGE
     if [[ "$status" == "timeout" ]]; then
         exit 3
     fi
-    if [[ "$parse_error_count" -gt 0 ]]; then
+    # Only exit 2 (parse error) if ALL reviewers failed - otherwise use consensus
+    if [[ "$valid_verdict_count" -eq 0 && "$parse_error_count" -gt 0 ]]; then
         exit 2
     fi
     case "$consensus_verdict" in
