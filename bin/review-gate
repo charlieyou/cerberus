@@ -2529,12 +2529,48 @@ USAGE
         fi
 
         if [[ -f "$failed_file" ]]; then
+            # Extract error details from the output file if it exists
+            local error_details="Reviewer process failed"
+            if [[ -f "$output_file" ]]; then
+                # Try to get meaningful error message from output
+                local raw_output
+                raw_output=$(head -c 4000 "$output_file" 2>/dev/null || true)
+                if [[ -n "$raw_output" ]]; then
+                    # Check for external error report file (Gemini CLI pattern)
+                    # e.g., "Full report available at: /tmp/gemini-client-error-*.json"
+                    local external_error_file
+                    external_error_file=$(echo "$raw_output" | grep -oiE 'available at: [^ ]+\.json' 2>/dev/null | sed 's/.*available at: //' | head -1 || true)
+                    if [[ -n "$external_error_file" && -f "$external_error_file" ]]; then
+                        # Read and format the external error report
+                        local ext_error
+                        if ! ext_error=$(jq -r 'to_entries | map("\(.key): \(.value | if type == "object" then (to_entries | map("\(.key)=\(.value)") | join(", ")) else . end)") | join("; ")' "$external_error_file" 2>/dev/null); then
+                            ext_error=$(head -c 1000 "$external_error_file" 2>/dev/null || true)
+                        fi
+                        if [[ -n "$ext_error" ]]; then
+                            error_details="$ext_error"
+                        fi
+                    fi
+                    # If no external file or couldn't read it, try inline error extraction
+                    if [[ "$error_details" == "Reviewer process failed" ]]; then
+                        # Try to extract error message from JSON if present
+                        local json_error
+                        json_error=$(echo "$raw_output" | jq -r '.error.message // .error // .message // empty' 2>/dev/null || true)
+                        if [[ -n "$json_error" && "$json_error" != "[object Object]" ]]; then
+                            error_details="$json_error"
+                        elif [[ "$raw_output" == *"Error"* || "$raw_output" == *"error"* ]]; then
+                            # Capture lines containing error info (|| true to avoid set -e exit)
+                            error_details=$(echo "$raw_output" | grep -i "error" 2>/dev/null | head -3 | tr '\n' ' ' | sed 's/  */ /g' | head -c 500 || true)
+                            [[ -z "$error_details" ]] && error_details=$(echo "$raw_output" | head -5 | tr '\n' ' ' | sed 's/  */ /g' | head -c 500)
+                        fi
+                    fi
+                fi
+            fi
             local reviewer_entry
-            reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Reviewer process failed" \
+            reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "$error_details" \
                 '{verdict:$verdict, summary:$summary, findings: []}')
             result_json=$(echo "$result_json" | jq --arg reviewer "$reviewer" --argjson entry "$reviewer_entry" \
-                --arg error "reviewer_failed" \
-                '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error}]')
+                --arg error "reviewer_failed" --arg details "$error_details" \
+                '.reviewers[$reviewer] = $entry | .parse_errors += [{reviewer:$reviewer, error:$error, details:$details}]')
             parse_error_count=$((parse_error_count + 1))
             continue
         fi
