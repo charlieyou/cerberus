@@ -60,29 +60,26 @@ resolve_intelligence_mode() {
 
     case "$mode" in
         fast)
-            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-medium}"
-            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-medium}"
-            # Mode determines model - only respect env override if explicitly set
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-flash-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-sonnet}"
+            CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-medium}"
+            # Mode determines model - respect override, then base var, then mode default
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-flash-preview}}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-sonnet}}"
             ;;
         smart)
-            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-high}"
-            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-high}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-pro-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-opus}"
+            CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-high}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-pro-preview}}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
             ;;
         max)
-            CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-xhigh}"
-            CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-xhigh}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-pro-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-opus}"
+            CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-xhigh}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-pro-preview}}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
             PROMPT_ULTRATHINK="true"
             ;;
     esac
 
     # Codex model does not vary by mode.
-    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL:-gpt-5.2-codex}"
+    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL_OVERRIDE:-${CODEX_MODEL:-gpt-5.2-codex}}"
 }
 
 # Read-only tool policy for external CLIs.
@@ -185,10 +182,10 @@ repair_review_output() {
             [[ -z "$model" ]] && model="haiku"
             ;;
         codex)
-            [[ -z "$model" ]] && model="${CODEX_MODEL:-gpt-5.2-codex}"
+            [[ -z "$model" ]] && model="gpt-5.1-codex-mini"
             ;;
         gemini)
-            [[ -z "$model" ]] && model="${GEMINI_MODEL:-gemini-3-flash-preview}"
+            [[ -z "$model" ]] && model="gemini-2.5-flash-lite"
             ;;
         *)
             rg_log "review-gate: repair_json unknown provider '$provider'"
@@ -554,7 +551,7 @@ spawn_reviewer() {
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
-    local codex_reasoning="${CODEX_REVIEW_REASONING_EFFORT:-high}"
+    local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
 
     local output_file="$REVIEWS_DIR/${name}.json"
     local sentinel_file="$REVIEWS_DIR/${name}.done"

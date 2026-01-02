@@ -233,7 +233,7 @@ review_gate_generate() {
 
     # Spawn Codex (with repo access via read-only sandbox)
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
-    local codex_reasoning="${CODEX_GENERATE_REASONING_EFFORT:-medium}"
+    local codex_reasoning="${CODEX_REASONING_EFFORT:-medium}"
     if command -v codex >/dev/null 2>&1; then
         echo "Spawning Codex generator (model: $codex_model)..." >&2
         (

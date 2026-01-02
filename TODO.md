@@ -13,3 +13,4 @@
 * dont pass a diff directly to the code review, agents should explore themselves
 * after pass, it should fix the non blocking issues
 * separate templates from orchestration - users can choose their own template to use
+* strictness modes -- fail on any error, require 3, etc

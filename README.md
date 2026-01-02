@@ -329,6 +329,15 @@ Other environment variables:
 | `REVIEW_REPAIR_PROVIDER` | auto | Repair model provider (`claude`, `codex`, or `gemini`). `auto`/unset picks the first available (prefers Claude). |
 | `REVIEW_REPAIR_MODEL` | `haiku` | Repair model name (provider-specific). Defaults are low-cost and do not vary with `--mode`. |
 
+Model override variables (override the mode-based defaults):
+
+| Variable | Description |
+|----------|-------------|
+| `CODEX_MODEL_OVERRIDE` | Override Codex model (default: `gpt-5.2-codex`) |
+| `GEMINI_MODEL_OVERRIDE` | Override Gemini model (e.g., `gemini-2.5-pro`) |
+| `CLAUDE_MODEL_OVERRIDE` | Override Claude model (e.g., `sonnet`) |
+| `CODEX_REASONING_EFFORT_OVERRIDE` | Override Codex reasoning effort (`medium`/`high`/`xhigh`) |
+
 ## License
 
 MIT
