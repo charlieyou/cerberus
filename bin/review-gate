@@ -56,7 +56,7 @@ Commands:
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
       --commit <shas>     Review one or more commits (space or comma separated)
-      --exclude <spec>    Exclude files using git pathspec exclude syntax (:! or :(exclude))
+      --exclude <spec>    Exclude files matching pattern (auto-prefixed with :! for git)
 
   spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
@@ -321,7 +321,7 @@ Options:
   --mode <level>       Intelligence mode: fast, smart, max
   --context-file <path> Inject author context from file into the prompt
   --focus <text>       Focus area to emphasize in the review
-  --exclude <pathspec> Exclude files using git pathspec exclude syntax (:! or :(exclude))
+  --exclude <pathspec> Exclude files matching pattern (auto-prefixed with :! for git)
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
   --commit <sha...>   Review one or more commits (space or comma separated)
@@ -385,14 +385,18 @@ USAGE
 
     if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
         local spec
+        local -a normalized_excludes=()
         for spec in "${exclude_pathspecs[@]}"; do
             if [[ -z "$spec" ]]; then
                 die "--exclude requires a pathspec"
             fi
+            # Auto-prefix with :! if not already a git exclude pathspec
             if [[ "$spec" != :!* && "$spec" != ":(exclude"* ]]; then
-                die "--exclude expects git exclude pathspec syntax (e.g. :!path or :(exclude,glob)path): $spec"
+                spec=":!$spec"
             fi
+            normalized_excludes+=("$spec")
         done
+        exclude_pathspecs=("${normalized_excludes[@]}")
     fi
 
     mode=$(normalize_mode "$mode")

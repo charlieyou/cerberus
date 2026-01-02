@@ -52,8 +52,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --focus "focus on securi
 # User: /review-code --base main "check error handling"
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --base main --focus "check error handling"
 
-# User: /review-code --exclude ':(exclude,glob)dist/**' --exclude ':!**/*.snap'
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --exclude ':(exclude,glob)dist/**' --exclude ':!**/*.snap'
+# User: /review-code --exclude 'dist/**' --exclude '**/*.snap'
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --exclude 'dist/**' --exclude '**/*.snap'
 
 # User: /review-code main..feature focus on error handling
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review main..feature focus on error handling

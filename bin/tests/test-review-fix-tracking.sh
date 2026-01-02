@@ -344,7 +344,7 @@ test_exclude_uncommitted_filters_diff() {
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
-    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --exclude ":(exclude,glob)excluded/**" 2>&1)
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --exclude "excluded/**" 2>&1)
     local artifact_path
     artifact_path=$(get_artifact_path "$output")
 
@@ -381,7 +381,7 @@ test_exclude_commit_and_fix() {
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
-    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude ":!excluded/**" 2>&1)
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude "excluded/**" 2>&1)
     local artifact_path
     artifact_path=$(get_artifact_path "$output")
 
@@ -400,7 +400,7 @@ test_exclude_commit_and_fix() {
     git add excluded/skip.txt
     git commit -q -m "fix commit excluded only"
 
-    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude ":!excluded/**" 2>&1)
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$commit_sha" --exclude "excluded/**" 2>&1)
     artifact_path=$(get_artifact_path "$output")
 
     local fix_ok=false
