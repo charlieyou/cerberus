@@ -2317,6 +2317,18 @@ review_gate_resolve() {
 }
 
 review_gate_wait() {
+    # Defensive error handling: ensure we always output JSON even on unexpected errors
+    # This trap catches any unhandled errors from set -e and outputs valid JSON
+    _wait_error_json() {
+        trap - ERR  # Clear trap to prevent recursion
+        local exit_code="${1:-1}"  # Exit code passed explicitly from trap
+        local line_no="${2:-unknown}"
+        # Use printf to avoid any jq issues in error path
+        printf '{"status":"error","consensus_verdict":null,"reviewers":{},"aggregated_findings":[],"parse_errors":[{"reviewer":null,"error":"internal_error","details":"Unexpected error at line %s (exit %d)"}]}\n' "$line_no" "$exit_code"
+        exit 2
+    }
+    trap '_wait_error_json $? $LINENO' ERR
+
     local json_mode="false"
     local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
@@ -2368,34 +2380,41 @@ review_gate_wait() {
                 shift 2
                 ;;
             -h|--help)
+                # Note: No need to clear ERR trap here - return 0 doesn't trigger it
                 cat <<USAGE
 Usage: ${CLI_CMD} wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
 USAGE
                 return 0
                 ;;
             *)
+                trap - ERR  # Clear trap before die
                 die "Unknown option '$1'"
                 ;;
         esac
     done
 
     if [[ "$json_mode" != "true" ]]; then
+        trap - ERR
         die "wait requires --json output"
     fi
 
     if ! command -v jq >/dev/null 2>&1; then
-        echo "Error: jq is required but not installed" >&2
+        # Output JSON even when jq is missing (use printf)
+        printf '{"status":"error","consensus_verdict":null,"reviewers":{},"aggregated_findings":[],"parse_errors":[{"reviewer":null,"error":"missing_dependency","details":"jq is required but not installed"}]}\n'
+        trap - ERR
         exit 2
     fi
 
     wait_error() {
         local message="$1"
+        trap - ERR  # Clear trap before explicit error exit
         jq -n --arg status "error" --arg error "$message" \
             '{status:$status, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[{reviewer:null, error:$error}]}'
         exit 2
     }
 
     wait_no_reviewers() {
+        trap - ERR  # Clear trap before explicit exit
         jq -n --arg status "no_reviewers" \
             '{status:$status, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[]}'
         exit 4
@@ -2514,6 +2533,7 @@ USAGE
     result_json=$(jq -n '{status:null, consensus_verdict:null, reviewers:{}, aggregated_findings:[], parse_errors:[]}')
 
     local parse_error_count=0
+    local has_pass=0
     local has_fail=0
     local has_needs=0
 
@@ -2630,24 +2650,14 @@ USAGE
             '.aggregated_findings += ($findings | map(. + {reviewer:$reviewer}))')
 
         case "$verdict" in
-            FAIL) has_fail=1 ;;
-            NEEDS_WORK) has_needs=1 ;;
+            PASS) has_pass=$((has_pass + 1)) ;;
+            FAIL) has_fail=$((has_fail + 1)) ;;
+            NEEDS_WORK) has_needs=$((has_needs + 1)) ;;
         esac
     done
 
     # Count valid verdicts (PASS, FAIL, NEEDS_WORK) - needed for both consensus and exit code
-    local valid_verdict_count=$((has_fail + has_needs))
-    # Check if we have at least one PASS (need to count separately since has_pass isn't tracked)
-    local has_pass=0
-    for reviewer in $reviewers; do
-        local v
-        v=$(echo "$result_json" | jq -r --arg r "$reviewer" '.reviewers[$r].verdict // ""')
-        if [[ "$v" == "PASS" ]]; then
-            has_pass=1
-            valid_verdict_count=$((valid_verdict_count + 1))
-            break
-        fi
-    done
+    local valid_verdict_count=$((has_pass + has_fail + has_needs))
 
     local status consensus_verdict=""
     if [[ "$timed_out" == "true" ]]; then
@@ -2655,8 +2665,8 @@ USAGE
         consensus_verdict=""
     else
         status="complete"
-        # Only treat as ERROR if ALL reviewers failed to produce valid verdicts
-        if [[ "$valid_verdict_count" -eq 0 && "$parse_error_count" -gt 0 ]]; then
+        # Treat as ERROR if no valid verdicts (regardless of parse errors)
+        if [[ "$valid_verdict_count" -eq 0 ]]; then
             consensus_verdict="ERROR"
         else
             # Use valid verdicts for consensus (most severe wins)
@@ -2679,13 +2689,13 @@ USAGE
 
     echo "$result_json"
 
+    # Clear error trap before explicit exits
+    trap - ERR
+
     if [[ "$status" == "timeout" ]]; then
         exit 3
     fi
-    # Only exit 2 (parse error) if ALL reviewers failed - otherwise use consensus
-    if [[ "$valid_verdict_count" -eq 0 && "$parse_error_count" -gt 0 ]]; then
-        exit 2
-    fi
+
     case "$consensus_verdict" in
         PASS)
             exit 0
@@ -2693,7 +2703,11 @@ USAGE
         FAIL|NEEDS_WORK)
             exit 1
             ;;
+        ERROR)
+            exit 2
+            ;;
         *)
+            # Unknown verdict (shouldn't happen) - treat as error
             exit 2
             ;;
     esac

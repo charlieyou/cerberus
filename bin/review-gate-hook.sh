@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Hook-specific logic for review-gate.
 review_gate_check() {
+    # Defensive error handling: on unexpected errors, allow stop to avoid blocking forever
+    # The hook must either output valid JSON or output nothing (allow)
+    _check_error_handler() {
+        local exit_code=$?
+        local line_no="${1:-unknown}"
+        # Log the error if possible, then allow stop to avoid deadlock
+        echo "[review-gate] INTERNAL ERROR at line $line_no (exit $exit_code) - allowing stop" >&2
+        exit 0  # Allow stop on error (fail-open to avoid blocking)
+    }
+    trap '_check_error_handler $LINENO' ERR
+
     MAX_ITERATIONS_DEFAULT=3
     MAX_ITERATIONS="${REVIEW_GATE_MAX_ROUNDS:-$MAX_ITERATIONS_DEFAULT}"
     MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
@@ -55,6 +66,7 @@ review_gate_check() {
     output_block() {
         local reason="$1"
         log "review-gate: blocking stop: ${reason:0:200}"
+        trap - ERR  # Clear error trap before explicit exit
         jq -n --arg reason "$reason" '{"decision": "block", "reason": $reason}'
         exit 0
     }
@@ -62,6 +74,7 @@ review_gate_check() {
     # --- Helper: Output allow (exit 0 with no output) ---
     output_allow() {
         log "review-gate: allowing stop"
+        trap - ERR  # Clear error trap before explicit exit
         exit 0
     }
 
@@ -683,15 +696,10 @@ review_gate_check() {
             ((reviewer_count++)) || true
         done
 
-        # Need at least 1 reviewer
-        if [[ $reviewer_count -lt 1 ]]; then
-            echo "requires_decision"
-            return
-        fi
-
-        # Strict: any invalid/malformed reviewer output → requires_decision
-        if [[ $other_count -gt 0 ]]; then
-            log "review-gate: consensus=requires_decision (invalid/malformed reviewer output detected)"
+        # Need at least 1 valid reviewer (not errored)
+        local valid_count=$((pass_count + fail_count + needs_work_count))
+        if [[ $valid_count -lt 1 ]]; then
+            log "review-gate: consensus=requires_decision (no valid reviewers)"
             echo "requires_decision"
             return
         fi
@@ -718,8 +726,11 @@ review_gate_check() {
             return
         fi
 
-        # All reviewers PASS → auto-approve
-        if [[ $pass_count -eq $reviewer_count ]]; then
+        # All valid reviewers PASS → auto-approve (ignore errored reviewers)
+        if [[ $pass_count -eq $valid_count ]]; then
+            if [[ $other_count -gt 0 ]]; then
+                log "review-gate: consensus=auto_approve (all valid reviewers PASS, $other_count errored)"
+            fi
             echo "auto_approve"
             return
         fi
@@ -735,7 +746,7 @@ review_gate_check() {
         # No P0/P1, split opinion but not enough PASS votes → still requires_decision
         # Log that there are no P0/P1 findings
         if [[ "$max_priority" -ge 2 ]]; then
-            log "review-gate: consensus=requires_decision (no P0/P1 findings, split votes: pass=$pass_count needs_work=$needs_work_count)"
+            log "review-gate: consensus=requires_decision (no P0/P1 findings, split votes: pass=$pass_count needs_work=$needs_work_count other=$other_count)"
         fi
 
         echo "requires_decision"
