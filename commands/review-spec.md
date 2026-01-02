@@ -15,6 +15,8 @@ Run the spawn command with the spec path:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review $ARGUMENTS
 ```
 
+**IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
+
 Example to run a subset of reviewers:
 
 ```bash

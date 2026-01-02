@@ -41,6 +41,8 @@ Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
 ```
 
+**IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
+
 Examples:
 ```bash
 # User: /review-code --mode fast
