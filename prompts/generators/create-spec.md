@@ -2,17 +2,31 @@
 
 **IMPORTANT: This is a READ-ONLY task. Do NOT modify any files. Only analyze the provided context and draft a spec.**
 
-You are a generator producing a complete feature specification from the context appended below.
+You are a generator producing a feature specification from the context appended below.
+
+## Tier System
+
+Specs scale with complexity. The context will specify a tier (S/M/L). Include only the sections required for that tier.
+
+| Tier | Use Case | Sections Required |
+|------|----------|-------------------|
+| **S** | Bug fix, tiny tweak | Problem, change summary, scope boundary, UX impact, acceptance bullets, validation method, open questions |
+| **M** | Small feature | S + Goal, success criteria, non-goals, primary flow, key states, requirements with MUST + verification examples, basic instrumentation |
+| **L** | Multi-flow project | M + Constraints, alternate flows, full Given/When/Then, edge cases per requirement, detailed instrumentation, launch checklist |
+
+**Canonical field mapping:**
+- **S only:** Change summary, Scope boundary, UX impact (yes/no), Acceptance bullets, Validation after release
+- **M adds:** Goal, Success criteria, Non-goals, Primary flow, Key states, Requirements (R1/R2 with MUST + examples), Instrumentation (light)
+- **L adds:** Constraints, Alternate flows, Edge cases per requirement, Full GWT verification, Launch checklist
 
 ## Requirements
 
 1. **Output only the spec markdown** (no preamble or analysis).
-2. Use the exact template structure below.
+2. Use the template structure below, **omitting sections not required for the tier**.
 3. If details are missing or ambiguous, list them in **Open Questions** instead of inventing.
-4. Keep scope explicit: include clear **Goals** and **Non-Goals**.
-5. Reference existing codebase structure when provided (files, modules, patterns).
-6. **Acceptance Criteria must be concrete and testable** - write them as "Given X, when Y, then Z" statements. See **Acceptance Criteria Quality** below.
-7. **No implementation details** - do NOT include code snippets, line numbers, function signatures, data models, or test code. Keep descriptions at the spec level.
+4. Reference existing codebase structure when provided (files, modules, patterns).
+5. **Verification must be concrete and testable** - write as "Given X, when Y, then Z" for Tier L, or simple bullets for Tier S/M.
+6. **No implementation details** - do NOT include code snippets, line numbers, function signatures, data models, or test code.
 
 ## What NOT to Include (Implementation Details)
 
@@ -32,62 +46,93 @@ Instead, use high-level descriptions:
 
 ## Spec Template
 
+Include only sections marked for the specified tier. Omit sections for higher tiers.
+
 ```markdown
 # [Feature Name]
 
-## Overview
-[2-3 sentence summary of what this feature does and why]
+**Tier:** S / M / L
+**Owner:** [Owner name/team]
+**Target ship:** [Date or milestone]
+**Links:** [Figma, ticket, related docs]
 
-## Goals
-- [Primary objective]
-- [Secondary objectives]
+## 1. Outcome & Scope
 
-## Non-Goals (Out of Scope)
+**Problem / context** *(S/M/L)*
+[2-3 sentences: What's broken/missing today? Who is impacted?]
+
+**Change summary** *(S only)*
+[What are we changing and why?]
+
+**Scope boundary** *(S only)*
+[Only affects X; does not change Y/Z.]
+
+**Goal** *(M/L)*
+[One sentence: "Enable <user> to <do X> so that <benefit>."]
+
+**Success criteria** *(M/L)*
+- [Metric + threshold + timeframe, e.g., "≥80% of users complete X within 7 days"]
+
+**Non-goals** *(M/L)*
 - [Explicitly excluded functionality]
 
-## Acceptance Criteria
-[Concrete, testable conditions. Focus on observable behavior, not test implementation.]
+**Constraints** *(L)*
+- Compatibility: [Any existing clients/integrations affected]
+- [Other constraints: performance, security, environment]
 
-- Given [precondition], when [action], then [expected result]
-- [Performance/reliability/UX criteria where relevant]
+## 2. User Experience & Flows
 
-## Technical Context
+**UX impact** *(S only)*
+- User-visible? (yes/no)
+- If yes: [When user does A, they now see B instead of C.]
 
-### Architecture
-[High-level description of how this fits into the existing codebase. Reference patterns, modules, and concepts—not specific code changes.]
-
-### Key Components
-[List logical components or systems involved, with their purpose. No function names or signatures.]
-
-- [Component 1]: [purpose and responsibility]
-- [Component 2]: [purpose and responsibility]
-
-### Integration Points
-- [Existing system/service]: [how this feature interacts with it]
-- [External dependency]: [usage and failure handling]
-
-## User Experience
-
-### Primary Flow
+**Primary flow** *(M/L)*
 1. [Step 1]
 2. [Step 2]
 3. [Step 3]
 
-### Error States
-- [Error scenario]: [How it's handled]
+**Key states** *(M/L)*
+- Empty state: [What user sees when no data]
+- Loading state: [Feedback during operations]
+- Success state: [Confirmation of completion]
+- Error state(s): [How errors are communicated]
 
-### Edge Cases
-- [Edge case]: [Expected behavior]
+**Alternate flows** *(L)*
+- [Scenario]: [Expected outcome]
 
-## Open Questions
-[Unresolved decisions. Reference blocked sections if applicable.]
+## 3. Requirements + Verification
 
-- [Question 1]
+**Acceptance criteria** *(S)*
+- When [X happens], then [Y]
+- Also verify: [regression checks]
 
-## Decisions Made
-[Key decisions from the interview, with brief rationale]
+**R1 — [Short name]** *(M/L)*
+- **Requirement:** The system MUST [observable behavior]
+- **Verification:** *(M: example; L: full Given/When/Then)*
+- **Edge cases:** *(L only)* [Boundary conditions]
 
-- [Decision 1]: [Choice made] — [why]
+**R2 — [Short name]** *(M/L)*
+- **Requirement:** The system MUST [observable behavior]
+- **Verification:** *(M: example; L: full Given/When/Then)*
+- **Edge cases:** *(L only)* [Boundary conditions]
+
+## 4. Instrumentation & Release Checks
+
+**Validation after release** *(S)*
+- How to confirm: [Try scenario X in env Y]
+- Known risks: [Blast radius]
+
+**Instrumentation** *(M/L)*
+- Events to track: [Feature entry, completion, failure reasons]
+
+**Launch checklist** *(L)*
+- [ ] All MUST requirements verifiable
+- [ ] Key error states covered
+- [ ] Metrics available to confirm success criteria
+- [ ] Rollback condition defined
+
+**Open questions** *(S/M/L)*
+- [Unresolved decisions that may affect implementation]
 ```
 
 ## Acceptance Criteria Quality

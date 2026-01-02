@@ -47,17 +47,51 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --mode max path/to/spec.
 
 3. Fix issues in the spec file based on reviewer feedback, then the review automatically re-runs.
 
-## Review Criteria
+## Tier System
 
-Reviewers evaluate the spec for:
+Specs are tiered by complexity. **Reviewers must respect the stated tier** and only require sections appropriate for that tier.
 
-- **Clarity of Goals** - Is it clear what problem this solves?
-- **Scope Definition** - Are boundaries explicit?
-- **Technical Feasibility** - Are proposed components realistic?
-- **Implementation Completeness** - Does it cover all necessary steps?
-- **Edge Cases** - Are error paths addressed?
-- **Testability** - Is there a clear testing strategy?
-- **Actionability** - Could a developer implement without further clarification?
+| Tier | Use Case | Required Sections |
+|------|----------|-------------------|
+| **S** | Bug fix, tiny tweak | Problem, change summary, scope boundary, UX impact, acceptance bullets, validation method |
+| **M** | Small feature | S + Goal, success criteria, non-goals, primary flow, key states, requirements with MUST + examples, basic instrumentation |
+| **L** | Multi-flow project | M + Constraints, alternate flows, full GWT, edge cases per requirement, detailed instrumentation, launch checklist |
+
+**Tier mismatch handling:**
+- Do NOT fail a Tier S spec for missing M/L sections (goal, success criteria, etc.)
+- If you believe the tier is dangerously low for the complexity, flag as **P1 recommendation to upgrade tier**, not a spec failure
+- Record tier concerns in your review, but respect the author's tier choice
+
+## Review Criteria by Tier
+
+### Tier S (Bug fix / tiny tweak)
+- [ ] Problem/context is clear (what's broken?)
+- [ ] Change summary explains what's changing
+- [ ] Scope boundary is explicit (only affects X, not Y)
+- [ ] UX impact stated (yes/no + description if yes)
+- [ ] 2-5 acceptance bullets are testable
+- [ ] Validation method defined (how to confirm in prod)
+
+### Tier M (add to S checks)
+- [ ] Goal is a single actionable sentence
+- [ ] Success criteria are measurable (metric + threshold + timeframe)
+- [ ] Non-goals are explicit
+- [ ] Primary flow is complete (numbered steps)
+- [ ] Key states defined (empty, loading, success, error)
+- [ ] 3-7 requirements with MUST statements + verification examples
+- [ ] Basic instrumentation defined
+
+### Tier L (add to M checks)
+- [ ] Constraints addressed (compatibility, performance, security)
+- [ ] Alternate flows covered
+- [ ] Each requirement has full Given/When/Then verification
+- [ ] Edge cases listed per requirement
+- [ ] Detailed instrumentation with events/dimensions
+- [ ] Launch checklist complete with rollback condition
+
+### All Tiers
+- [ ] Could a developer implement without further clarification?
+- [ ] Open questions are genuine unknowns, not gaps in the spec
 
 ## Iteration Loop
 

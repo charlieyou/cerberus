@@ -7,20 +7,64 @@ argument-hint: [--mode <fast|smart|max>] <feature description>
 
 Transform a vague feature idea into a complete, reviewable specification by combining codebase research, a targeted interview, multi-model generation, and a spec review gate.
 
+## Spec Tiers (Progressive Disclosure)
+
+Specs scale with complexity. Start minimal and expand as signals emerge.
+
+| Tier | Use Case | What's Required |
+|------|----------|-----------------|
+| **S** | Bug fix, tiny tweak | Problem, change summary, scope boundary, UX impact, 2-5 acceptance bullets, validation method, open questions |
+| **M** | Small feature, single flow | S + Goal, success criteria, non-goals, primary flow, key states, 3-7 requirements with MUST + verification examples, basic instrumentation |
+| **L** | Multi-flow, high-risk project | M + Constraints, alternate flows, full Given/When/Then, edge cases per requirement, detailed instrumentation, launch checklist |
+
+**Canonical field mapping:**
+- **S only:** Change summary, Scope boundary, UX impact (yes/no), Acceptance bullets, Validation after release
+- **M adds:** Goal, Success criteria, Non-goals, Primary flow, Key states, Requirements (R1/R2 with MUST + examples), Instrumentation (light)
+- **L adds:** Constraints, Alternate flows, Edge cases per requirement, Full GWT verification, Launch checklist
+
+### Complexity Signals (auto-detect tier)
+
+Score these signals during the interview. Suggest tier upgrade if score exceeds threshold.
+
+| Signal | Points |
+|--------|--------|
+| New user-facing flow or screen | +2 |
+| Changes to data model / schema | +2 |
+| Involves auth, security, payments, compliance | +2 |
+| Impacts multiple user flows or personas | +2 |
+| Integrates with external or multiple internal services | +1 |
+| Needs new analytics or A/B experiment | +1 |
+| Requires feature flags or data migration | +1 |
+| Multiple teams or owners involved | +1 |
+
+**Score → Tier:** 0-1 = S, 2-4 = M, 5+ = L
+
+If detected tier differs from apparent scope, confirm with user:
+> "This looks like it touches multiple flows and data models. Should we expand to a fuller spec? (yes/no)"
+
+### Tier Disagreement Handling
+
+**If user declines an upgrade:**
+- Respect their choice, but record the override in Open Questions: "Tier kept at [S/M] despite complexity signals suggesting [M/L]. Signals: [list]. Risk: [potential gaps]."
+- For S specs with score ≥2, still ask about backwards compatibility and basic error handling even if not filling full M template.
+
+**If user requests a downgrade:**
+- Confirm explicitly: "Downgrading to [tier] means we won't cover [list of omitted sections]. OK to proceed?"
+- If confirmed, record in Open Questions: "Tier downgraded to [S/M] per user request. Omitted: [sections]."
+
+**Reviewers and tier overrides:**
+- Reviewers should respect the stated tier and not fail for missing higher-tier sections.
+- If a reviewer believes the tier is dangerously low, they should flag it as a P1 recommendation to upgrade, not a spec failure.
+
 ## Mode Behavior
 
-Modes control depth and rigor. Use soft budgets—exit early when quality is sufficient.
+Modes control interview depth and review rigor (orthogonal to tier).
 
 | Mode | Interview Depth | Review Rounds | Extras |
 |------|-----------------|---------------|--------|
 | fast | Until essentials filled (~60%) | 1 max | minimal |
 | smart | Until ~80% filled | up to 2 | standard |
 | max | Until ~95% filled + proactive probing | up to 3 | alternatives + risk analysis |
-
-**Soft budget rules:**
-- Stop interviewing when skeleton is sufficiently filled and essentials (Ownership, Acceptance Criteria, Backwards Compatibility) are covered
-- In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
-- In `max`, actively probe for edge cases, alternatives, and risks even if user doesn't raise them
 
 ## Input
 
@@ -44,72 +88,105 @@ Document findings internally—these inform the skeleton and your questions.
 
 ### Phase 1b: Draft Spec Skeleton
 
-Create a skeleton of the spec with placeholders based on your research. This drives targeted interviewing.
+Create a skeleton based on your research. Start with Tier S fields; expand as complexity signals emerge.
 
 ```markdown
 # [Feature Name]
 
-## Overview
-[TBD: 2-3 sentence summary]
+**Tier:** S / M / L (auto-detected, confirm with user)
+**Owner:** [TBD or pre-fill from research]
+**Target ship:** [TBD]
+**Links:** [Figma, ticket, related docs]
 
-## Goals
-- [TBD: Primary objective]
+## 1. Outcome & Scope
 
-## Non-Goals (Out of Scope)
+**Problem / context** *(S/M/L)*
+[TBD: What's broken/missing today? Who is impacted?]
+
+**Change summary** *(S only — omit for M/L)*
+[TBD: What are we changing and why?]
+
+**Goal** *(M/L)*
+[TBD: "Enable <user> to <do X> so that <benefit>."]
+
+**Success criteria** *(M/L)*
+- [TBD: Metric + threshold + timeframe]
+
+**Non-goals** *(M/L)*
 - [TBD or inferred from research]
 
-## Ownership
-- Key code areas: [Pre-fill from research if known]
+**Constraints** *(L only)*
+- Compatibility: [TBD: Any existing clients/integrations affected?]
+- [Other constraints: performance, security, environment]
 
-## User Stories
-- [TBD]
+**Scope boundary** *(S only — omit for M/L)*
+[TBD: "Only affects X; does not change Y/Z."]
 
-## Acceptance Criteria
-- [TBD: Concrete conditions]
+## 2. User Experience & Flows
 
-## Technical Design
+**UX impact** *(S only)*
+- User-visible? (yes/no): [TBD]
+- If yes: [TBD: "When user does A, they now see B instead of C."]
 
-### Architecture
-[Pre-fill with relevant files/patterns found in research, mark gaps as TBD]
+**Primary flow** *(M/L)*
+1. [TBD]
+2. [TBD]
+3. [TBD]
 
-### Key Components
-- [TBD or pre-fill from research]
+**Key states** *(M/L)*
+- Empty state: [TBD]
+- Loading state: [TBD]
+- Success state: [TBD]
+- Error state(s): [TBD]
 
-### Integration Points
-- [Pre-fill known integrations from research]
+**Alternate flows** *(L only)*
+- [TBD: What if user cancels? Lacks permission? Partial completion?]
 
-### Data Model
-[TBD or "Not applicable"]
+## 3. Requirements + Verification
 
-### API Design
-[TBD or "Not applicable"]
+*(Tier S: Use simple acceptance bullets)*
+*(Tier M/L: Use numbered requirements with MUST statements)*
 
-### Backwards Compatibility
-- Existing behaviors affected: [TBD]
-- Impact on clients/integrations: [TBD]
+**Acceptance criteria** *(S)*
+- [TBD: When user does X in situation Y, Z happens]
+- [TBD: Also verify these still work: ...]
 
-## User Experience
+**R1 — [Short name]** *(M/L)*
+- **Requirement:** The system MUST [TBD]
+- **Verification:** *(M: example or single GWT; L: full GWT)*
+  - Given [TBD], When [TBD], Then [TBD]
+- **Edge cases:** *(L only)* [TBD]
 
-### Primary Flow
-[TBD]
+**R2 — [Short name]** *(M/L)*
+- **Requirement:** The system MUST [TBD]
+- **Verification:**
+  - Given [TBD], When [TBD], Then [TBD]
+- **Edge cases:** *(L only)* [TBD]
 
-### Error States
-[TBD]
+## 4. Instrumentation & Release Checks
 
-### Edge Cases
-[TBD]
+**Validation after release** *(S)*
+- How to confirm this worked: [TBD: "Try scenario X in env Y"]
+- Known risks / blast radius: [TBD]
 
-## Open Questions
+**Instrumentation** *(M/L)*
+- Events to track: [TBD: feature entry, completion, failure reasons]
+
+**Launch checklist** *(L only)*
+- [ ] All MUST requirements verifiable
+- [ ] Key error states covered
+- [ ] Metrics available to confirm success criteria
+- [ ] Rollback condition defined
+
+**Open questions** *(S/M/L)*
 - [List unknowns from research]
-
-## Decisions Made
-- [Record any obvious decisions from codebase conventions]
 ```
 
 **Skeleton rules:**
+- Start with Tier S fields; add M/L fields as complexity signals accumulate
 - Pre-fill anything you can confidently infer from research
 - Mark unknowns explicitly as `[TBD]` or `[TBD: hint about what's needed]`
-- The skeleton drives Phase 2 questions—every TBD is a potential question
+- When outputting final spec, omit sections marked for other tiers
 
 ### Phase 2: Strategic Interviewing
 
@@ -130,57 +207,59 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 7. **Iterate until complete** — Don't stop after one batch; continue asking until all TBDs are addressed
 8. **Handle halted interviews** — If the user stops responding or declines further questions, mark remaining TBDs as Open Questions with your best guess or "needs product decision"
 
-**Minimum Question Coverage** — You MUST ask about these areas (unless already answered by codebase research):
+**Progressive Question Coverage by Tier:**
 
-- [ ] Ownership: Which code areas/modules will this touch?
-- [ ] Scope: What's MVP vs. nice-to-have? What's explicitly out of scope?
-- [ ] Acceptance criteria: What are the concrete "done" conditions?
-- [ ] User context: Who uses this and in what scenario?
-- [ ] Primary flow: What's the happy path step-by-step?
-- [ ] Error handling: What happens when X fails?
-- [ ] Backwards compatibility: Any existing clients/integrations affected?
-- [ ] Edge cases: At least 2-3 specific edge cases for this feature
+**Tier S (always ask):**
+- [ ] Problem: What's broken/missing?
+- [ ] Change summary: What are we changing and why?
+- [ ] Scope boundary: What does this affect? What's untouched?
+- [ ] UX impact: Is this user-visible? If so, what changes?
+- [ ] Acceptance: 2-5 bullets of "when X, then Y"
+- [ ] Validation: How do we confirm this worked after release?
 
-**Mode-specific coverage:**
-- `fast`: At minimum, cover Ownership, Acceptance Criteria, Backwards Compatibility. Mark remaining unknowns as Open Questions.
-- `smart`: Aim to cover all items; only leave as Open Questions if the user cannot answer.
-- `max`: Fully clear all items; actively probe for edge cases even if user doesn't raise them.
+**Tier M (add if score 2-4):**
+- [ ] Goal: One-sentence goal ("Enable <user> to <do X> so that <benefit>")
+- [ ] Success criteria: Metric + threshold + timeframe
+- [ ] Non-goals: What's explicitly out of scope?
+- [ ] Constraints: Compatibility, performance, security?
+- [ ] Primary flow: Happy path step-by-step
+- [ ] Key states: Empty/loading/success/error
+- [ ] Requirements: 3-7 MUST statements with examples
+
+**Tier L (add if score 5+):**
+- [ ] Alternate flows: Cancel, retry, permission denied, partial completion
+- [ ] Edge cases: Per-requirement boundary conditions
+- [ ] Instrumentation: Events/metrics to track
+- [ ] Launch checklist: Rollback conditions, verification steps
+
+**Tier upgrade prompt:** When signals accumulate, ask:
+> "This is touching [signals]. Want to expand the spec to cover [additional fields]?"
 
 **Question Categories** (adapt order based on context):
 
-#### Scope & Ownership
-- What's the MVP vs. nice-to-have?
+#### Outcome & Scope (Section 1)
+- What problem are we solving? Who's impacted?
+- What's the one-sentence goal?
+- How will we measure success? (metric + threshold + timeframe)
 - What's explicitly out of scope?
-- Which existing modules will this live in or extend?
+- Any constraints? (compatibility, performance, security, environment)
 
-#### Acceptance Criteria
-- What are the concrete conditions for "done"? (Given X, when Y, then Z)
-- What would a failed acceptance look like?
-
-#### User Experience
-- Who uses this and in what context?
+#### User Experience & Flows (Section 2)
 - What's the primary workflow/happy path?
-- What feedback does the user need? (loading states, confirmations, errors)
+- What are the key states? (empty, loading, success, error)
+- What alternate flows matter? (cancel, retry, permission denied)
+- What feedback does the user need?
 
-#### Technical Implementation
-- Preferences on specific libraries, patterns, or approaches?
-- Data storage/persistence needs?
-- API design preferences (if applicable)?
+#### Requirements + Verification (Section 3)
+- What MUST the system do? (help derive R1, R2, R3...)
+- For each requirement: what's the Given/When/Then?
+- What are the edge cases and boundaries?
+- Any non-functional requirements? (performance, accessibility)
 
-#### Backwards Compatibility
-- Are there existing clients/integrations that depend on affected code?
-- Any data migrations required?
-
-#### Edge Cases & Error Handling
-- What happens when X fails?
-- How should conflicts/race conditions be handled?
-- What are the validation rules?
-- Recovery and retry behavior?
-
-#### Integration & Dependencies
-- How does this interact with [existing system you found]?
-- Does this affect [related feature you discovered]?
-- Any external services or third-party APIs involved?
+#### Instrumentation & Release (Section 4)
+- What events/metrics do we need to track?
+- How do we know this is working in production?
+- What would trigger a rollback?
 
 **Handling Common Responses**
 
@@ -203,12 +282,33 @@ Create a compact context block for generators, including the skeleton:
 - Decisions made + rationale
 - Remaining open questions
 
-**Context Checklist** — Ensure skeleton has:
-- [ ] Ownership (code areas/modules affected)
-- [ ] Acceptance criteria (concrete, testable)
-- [ ] Backwards compatibility stance
-- [ ] API/Data model needs (or explicit "not applicable")
-- [ ] Integration points
+**Context Checklist by Tier:**
+
+**Tier S:**
+- [ ] Problem / context
+- [ ] Change summary
+- [ ] Scope boundary
+- [ ] UX impact (yes/no + description)
+- [ ] Acceptance criteria (2-5 bullets)
+- [ ] Validation method
+- [ ] Open questions
+
+**Tier M (add to S):**
+- [ ] Goal (one-sentence)
+- [ ] Success criteria (measurable)
+- [ ] Non-goals
+- [ ] Primary flow (numbered steps)
+- [ ] Key states (empty/loading/success/error)
+- [ ] Requirements (R1, R2... with MUST + verification examples)
+- [ ] Instrumentation (basic events)
+
+**Tier L (add to M):**
+- [ ] Constraints (compatibility, performance, security)
+- [ ] Alternate flows
+- [ ] Edge cases per requirement
+- [ ] Full Given/When/Then verification
+- [ ] Detailed instrumentation
+- [ ] Launch checklist
 
 ### Phase 4: Run Multi-Model Generators
 
@@ -241,14 +341,17 @@ Wait for the generator output containing all drafts.
 
 ### Phase 5: Synthesize Drafts
 
-Merge generator drafts into the skeleton structure:
+Merge generator drafts into the 4-section structure:
 
 1. Use the skeleton as the canonical structure—don't invent new sections
-2. Identify common conclusions across drafts for each skeleton section
+2. Identify common conclusions across drafts for each section
 3. Resolve conflicts by checking the codebase and user answers
 4. Fill remaining TBDs with synthesized content or mark as Open Questions
-5. Ensure all required sections are present (Ownership, Acceptance Criteria, Backwards Compatibility)
-6. Mark API/Data Model as "Not applicable" if not needed (don't leave empty)
+5. Include only sections required for the tier (see Canonical field mapping above)
+6. **Tier-specific verification:**
+   - Tier S: Simple acceptance bullets, no formal requirements
+   - Tier M: Requirements with MUST + verification examples (GWT optional)
+   - Tier L: Requirements with MUST + full Given/When/Then + edge cases per requirement
 7. In `max` mode: include alternatives considered and risk analysis
 
 ### Phase 6: Write the Spec File
