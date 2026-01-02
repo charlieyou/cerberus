@@ -62,20 +62,21 @@ resolve_intelligence_mode() {
         fast)
             CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-medium}"
             CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-medium}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-flash-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-sonnet}"
+            # Mode determines model - only respect env override if explicitly set
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-flash-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-sonnet}"
             ;;
         smart)
             CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-high}"
             CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-high}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-pro-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-opus}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-pro-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-opus}"
             ;;
         max)
             CODEX_REVIEW_REASONING_EFFORT="${CODEX_REVIEW_REASONING_EFFORT:-xhigh}"
             CODEX_GENERATE_REASONING_EFFORT="${CODEX_GENERATE_REASONING_EFFORT:-xhigh}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL:-gemini-3-pro-preview}"
-            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL:-opus}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-gemini-3-pro-preview}"
+            CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-opus}"
             PROMPT_ULTRATHINK="true"
             ;;
     esac
