@@ -59,8 +59,7 @@ The generator requires an output directory as the first argument, then accepts `
 If you skip the analysis step, omit `--analysis-file`.
 
 ```bash
-OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)" --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
 ```
 
 Examples:

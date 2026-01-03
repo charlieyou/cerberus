@@ -17,8 +17,7 @@ Use the Bash tool to run the generator command. This spawns all available genera
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
 ```bash
-OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck $ARGUMENTS
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)" --type=healthcheck $ARGUMENTS
 ```
 
 Examples:

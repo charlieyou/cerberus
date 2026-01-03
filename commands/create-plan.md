@@ -344,10 +344,7 @@ Spawn generators with the mode flag. The generate script requires an output dire
 - `max`: ~15 minutes
 
 ```bash
-# MODE is extracted from --mode argument, defaults to smart
-MODE="${MODE:-smart}"
-OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-plan --mode "$MODE" --prompt-file "$PROMPT_TMP"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generate script will output paths to the draft files:

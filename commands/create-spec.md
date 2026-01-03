@@ -334,10 +334,7 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 The generator requires an output directory as the first argument:
 
 ```bash
-# MODE is extracted from --mode argument, defaults to smart
-MODE="${MODE:-smart}"
-OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/spec-drafts" || mktemp -d)
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-spec --mode "$MODE" --prompt-file "$PROMPT_TMP"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/spec-drafts" || mktemp -d)" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generator writes drafts to the output directory and returns their paths:
