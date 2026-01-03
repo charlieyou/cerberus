@@ -45,13 +45,16 @@ The user provides either:
 3. **Plan completeness check**:
    - If plan contains `[TBD]` in Technical Design, Testing Strategy, or Rollback Strategy:
      - **Warn** the user that plan is incomplete
-     - Either (a) abort and recommend running `/create-plan` review gate, or
-     - (b) create a preliminary "Clarify design gaps" task before implementation tasks
+     - **Default**: Abort and recommend running `/create-plan` review gate
+     - **Override** (only if user explicitly requests): Create a preliminary "Clarify design gaps" task before implementation tasks
 
-4. **Load companion artifacts** (if referenced in plan):
-   - Spec file (for user stories, priorities, AC)
-   - Data model (for entity tasks)
-   - Contracts (for API tasks)
+4. **Extract artifact references** (do not load yet):
+   - Note paths to referenced artifacts:
+     - Spec file (for user stories, priorities, AC)
+     - Data model (for entity tasks)
+     - Contracts (for API tasks)
+     - Any other docs referenced by path
+   - These will be verified in Phase 2 before loading
 
 ### Phase 2: File Existence Verification
 
@@ -73,9 +76,21 @@ Before generating tasks, verify all referenced files:
     - tests/auth/session.test.ts — New (test file)
     ```
 
-4. **Handle ambiguous paths**:
+4. **Missing referenced artifact gate**:
+   - If the plan references any spec/doc/contract/data-model by path and it does not exist:
+     - If listed as `New` in plan: Create a prerequisite "Author `<artifact>`" task; downstream tasks that need it must depend on this task; use plan-only decomposition until artifact exists
+     - If not listed as `New`: **abort**: "Missing referenced artifact: `<path>`. Provide it or update the plan."
+   - This prevents plans from diverging from implementation by ensuring all referenced design docs are available for review.
+
+5. **Handle ambiguous paths**:
    - If any paths remain "Ambiguous", create a dedicated "Clarify file locations" task
    - All tasks depending on those files must block on the clarification task
+
+6. **Load verified artifacts**:
+   - Now load companion artifacts that passed verification (spec, data model, contracts)
+   - Extract user stories, priorities, AC from spec
+   - Extract entity definitions from data model
+   - Extract API signatures from contracts
 
 ### Phase 3: Task Decomposition
 
@@ -86,7 +101,7 @@ Generate tasks following these rules:
 - **Setup/Foundation phases**: Derive from `Prerequisites` and infra/config items in `High-Level Approach`
 - **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3)
 - **File assignments**: Use `File Impact Summary` to assign `Primary Files` to each task
-- **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has at least one task
+- **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has exactly one primary owner task (supporting tasks may reference ACs but must not claim ownership)
 - **Rollback per task**: Derive from plan's `Rollback Strategy` section
 
 #### Sizing Rules
@@ -145,15 +160,54 @@ Generate tasks following these rules:
 2. Rollout/monitor
 3. Flag removal/cleanup (optional, can be deferred)
 
-#### Parallelization
+#### Wiring & Propagation Rules
+
+These rules prevent cross-layer gaps where changes are made in one layer but wiring in composition roots, adapters, or DI builders is never updated.
+
+**Identifying wiring files**: Look for these patterns to find the "composition root" / wiring layer:
+- Entry points: `main.py`, `main.ts`, `app.py`, `index.ts`, CLI entrypoints
+- Factory functions: `create_app()`, `build_container()`, `configure_services()`
+- DI/wiring modules: `*_wiring.py`, `container.ts`, `di.py`, `providers.ts`
+- Adapter layers: `*_adapter.py`, files that import from multiple domains
+
+**End-to-end wiring checkpoint**:
+- For any new data, config, or templates, include a flow map: `Origin → transport → consumption`
+- Ensure tasks cover each hop, including composition root / orchestration wiring / DI builders
+- If any hop is unclear, create a blocking "wire the path" task
+- Example: `config.yaml → OrchestratorConfig → AgentSessionConfig → SessionRunner`
+
+**Adapter/bridge coverage**:
+- When fields are added, renamed, removed, or semantically changed in shared objects/DTOs/config structs, tasks MUST update all adapters/mappers/constructors/DI builders that bridge layers
+- **Enumerate all provider implementations**: If multiple implementations exist (e.g., `DomainPromptProvider` and `PipelinePromptProvider`), explicitly list how each handles the change:
+  - Maps the field (task covers it)
+  - Explicitly unsupported (raises error)
+  - Deliberately ignored (with test proving this is intentional)
+- List the mapping sites explicitly in `Changes` (e.g., "Update `orchestration_wiring.py` to map new prompt fields")
+- This prevents "field exists but never wired" bugs
+
+**Template lifecycle**:
+- For new template/resource files, tasks MUST cover all three stages:
+  1. **Load**: File exists and parser can read it
+  2. **Pass through**: Wired into runtime (injected, passed to consumers)
+  3. **Used**: Consumed in actual behavior (rendered, executed)
+- Missing any stage becomes a dedicated task
+
+#### Parallelization & Dependencies
+
+**Dependency notation**: `T002 → T001` means "T002 depends on T001" (T001 must complete before T002 can start). This matches `bd dep add T002 T001`.
+
 - **File overlap = dependency** — tasks touching same file cannot parallelize
 - **Err toward more dependencies** — safer than too few
+- **Chain length limit (4)** is a heuristic; prefer restructuring (shared foundation task, re-slicing) over dropping uncertain deps
 
-#### Structure
-- **Phase 1**: Setup (project init, dependencies)
-- **Phase 2**: Foundation (blocking prerequisites)
-- **Phase 3+**: User Stories (in priority order P1, P2, P3...)
-- **Final Phase**: Polish & cross-cutting
+#### Execution Phases (in generated output)
+
+These describe the structure of the *generated tasks*, not the workflow phases above:
+
+- **Setup**: Project init, dependencies
+- **Foundation**: Blocking prerequisites
+- **User Stories**: In priority order (P1, P2, P3...)
+- **Polish**: Cross-cutting cleanup
 
 ### Phase 4: Generate Task Specs
 
@@ -184,6 +238,10 @@ What this task accomplishes (1-2 sentences)
 - `path/to/file.ts` — [Exists|New] — what to do
 - `path/to/other.ts` — [Exists|New] — what to do
 
+**Wiring Map** (required when introducing new data/config/templates):
+- `<origin> → <transport> → <consumption>` (one line per new field/config/template)
+- Example: `idle_timeout config → OrchestratorConfig → AgentSessionConfig.idle_timeout → SessionRunner`
+
 **Acceptance Criteria**:
 - Observable outcome 1
 - Observable outcome 2
@@ -191,6 +249,13 @@ What this task accomplishes (1-2 sentences)
 **Verification**:
 - How to verify this task is complete
 - Test commands to run
+- **Config override test** (required for new configurable values): At least one test proving a non-default override reaches runtime via the normal load/construction path (not by constructing config objects directly in the test)
+
+**Integration Path Test** (per-feature, not per-task):
+- At least one task per feature must include a test exercising the top-level construction path
+- Examples: `main.py` → full app, `create_app()` factory, CLI entrypoint, DI container resolution
+- Mark that task with `[integration-path-test]` so validation can verify coverage
+- Other tasks may depend on this task or include it in final verification
 
 **Rollback**:
 - How to undo if needed
@@ -227,11 +292,39 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 5. **Dependencies**: T002, T003 → T001 (backend must exist first)
 6. **Re-check**: All tasks in 3-5 files, 8-15 edits — within standard range ✓
 
-### Phase 5: Output Generation
+### Phase 5: Validation (Gating)
+
+**This is a gate, not advisory.** If any check fails, you MUST adjust tasks (merge/split/add deps) and re-run the checklist before proceeding to output.
+
+| Check | Gate | Rule | Fix |
+|-------|------|------|-----|
+| **File overlap** | Hard | No two parallel tasks share files | Add dependency |
+| **AC coverage** | Hard | Every spec AC maps to exactly one primary task | Add task or reassign |
+| **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary | Reassign ownership |
+| **Dependencies complete** | Hard | When uncertain, add the dep | Add dependency |
+| **One outcome per task** | Hard | No bundled multi-behavior tasks | Split task |
+| **Sizing: minimum** | Advisory | Task under 2 files / 5 edits | Consider merging |
+| **Sizing: maximum** | Hard | No task over 18 files / 55 edits | MUST split |
+| **No micro-tasks** | Advisory | Single-file fixes batched | Merge related fixes |
+| **No vague tasks** | Hard | Every task has concrete files + ACs | Rewrite or delete |
+| **End-to-end wiring** | Hard | New data/config/templates have wiring maps; tasks cover each hop | Add wiring map + missing tasks/deps |
+| **Adapter/bridge coverage** | Hard | Field changes mapped across all adapters/mappers/DI builders | Add/update adapter tasks |
+| **Config override test** | Hard | New config values have override tests reaching runtime | Add override test |
+| **Template lifecycle** | Hard | New templates are loaded, passed through, and used | Add missing lifecycle steps |
+| **Missing referenced artifacts** | Hard | Plan-referenced docs/specs exist (or declared `New` with prereq task) | Abort or add prereq task |
+| **Integration path test** | Hard | At least one task marked `[integration-path-test]` per feature | Add integration test task |
+
+**Hard gates** block output. **Advisory** checks are recommendations only.
+
+**Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
+
+### Phase 6: Output Generation
+
+Only proceed here after Phase 5 validation passes.
 
 #### If `--beads` flag is set:
 
-Use the **beads skill** to create issues. Follow bd-breakdown patterns:
+Use the **beads skill** to create issues. Follow these patterns:
 
 ##### Type & Priority Mapping
 
@@ -242,7 +335,7 @@ Use the **beads skill** to create issues. Follow bd-breakdown patterns:
 | Bug fix from risks section | bug | P1 |
 | Infrastructure/setup | task | P1 |
 | Documentation/polish | chore | P3 |
-| Spans 3+ files/large scope | epic | P1 |
+| Parent grouping (3+ child tasks) | epic | P1 |
 | Cleanup/tech debt | chore | P3-P4 |
 
 ##### Issue Creation Flow
@@ -276,7 +369,11 @@ Use the **beads skill** to create issues. Follow bd-breakdown patterns:
 
 #### If no `--beads` flag (default):
 
-Generate `TODO.md` in the same directory as the plan, using the schema from `templates/tasks-template.md`.
+Generate `TODO.md` in the same directory as the plan.
+
+Use `templates/tasks-template.md` if it exists; otherwise use the following fallback structure.
+
+**TODO.md format**: Embed full task specs (from Phase 4) in collapsible `<details>` blocks under each checklist item, so agents have complete context without needing separate files.
 
 Key sections to include:
 - **Header**: Feature name, generated date, links to plan/spec
@@ -285,24 +382,6 @@ Key sections to include:
 - **Per-task format**: `- [ ] **T00X** [P] [USn] Description` with Files/Depends/Verify
 - **Dependencies Graph**: ASCII visualization of task ordering
 - **AC Coverage table**: Map spec acceptance criteria to tasks
-
-### Phase 6: Validation (Gating)
-
-**This is a gate, not advisory.** If any check fails, you MUST adjust tasks (merge/split/add deps) and re-run the checklist before emitting output.
-
-| Check | Rule | Fix |
-|-------|------|-----|
-| **File overlap** | No two parallel tasks share files | Add dependency |
-| **AC coverage** | Every spec AC maps to exactly one primary task | Add task or reassign |
-| **No orphan ACs** | No AC claimed by multiple tasks as primary | Reassign ownership |
-| **Dependencies complete** | When uncertain, add the dep | Add dependency |
-| **One outcome per task** | No bundled multi-behavior tasks | Split task |
-| **Sizing: minimum** | Task under 2 files / 5 edits | Consider merging (optional) |
-| **Sizing: maximum** | No task over 18 files / 55 edits | MUST split |
-| **No micro-tasks** | Single-file fixes batched | Merge related fixes |
-| **No vague tasks** | Every task has concrete files + ACs | Rewrite or delete |
-
-**Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
 
 ### Phase 7: Report
 
@@ -333,7 +412,7 @@ Output summary:
 Run `/implement` to begin execution, or review TODO.md first.
 ```
 
-## Quality Checks (from bd-breakdown)
+## Quality Checks
 
 Apply the **malicious compliance test** to all acceptance criteria:
 1. Can this be satisfied while missing the point? → Rewrite
@@ -348,8 +427,9 @@ Apply the **malicious compliance test** to all acceptance criteria:
 - **Plan missing AC Coverage table**: Derive acceptance criteria from Context & Goals and spec user stories; mark coverage as "derived"
 
 ### Missing Artifacts
-- **No spec file**: Generate tasks from plan only, mark AC coverage as "N/A - no spec"
-- **No data model/contracts**: Generate tasks from High-Level Approach + Technical Design only
+- **No spec file** (not referenced): Generate tasks from plan only, mark AC coverage as "N/A - no spec"
+- **No data model/contracts** (not referenced): Generate tasks from High-Level Approach + Technical Design only
+- **Referenced artifact missing**: If the plan explicitly references a doc/spec/contract by path and it doesn't exist, **abort** with "Missing referenced artifact: `<path>`" — do not proceed with task creation until the artifact is provided or the plan is updated to remove the reference
 
 ### Output Issues
 - **Beads not available**: Fall back to TODO.md with warning
