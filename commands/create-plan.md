@@ -1,11 +1,13 @@
 ---
-description: Interview the user to produce an implementation plan, then run multi-model generator and plan review gate
+description: Interview the user to produce a technical implementation plan (design-focused), then run multi-model generator and plan review gate
 argument-hint: [--mode <fast|smart|max>] [--from-spec <path/to/spec.md>] <feature or plan summary>
 ---
 
 # Create Plan (Interview + Multi-Model Generator)
 
-Turn a spec or vague feature idea into a concrete, executable implementation plan by combining codebase research (including file existence checks), a targeted implementation-focused interview, multi-model generation, and a plan review gate.
+Turn a spec or vague feature idea into a **design-focused implementation plan** by combining codebase research (including file existence checks), a targeted implementation-focused interview, multi-model generation, and a plan review gate.
+
+> **Note**: This command produces a **design plan** (architecture, constraints, approach). Task breakdown is handled separately by `/create-tasks`, which reads this plan and outputs to Beads issues (`--beads`) or TODO.md.
 
 ## Execution Contract (MANDATORY)
 
@@ -51,7 +53,7 @@ Modes control depth and rigor. Use soft budgets—exit early when quality is suf
 | max | Until ~95% filled + proactive probing | up to 3 | alternatives + detailed risk register |
 
 **Soft budget rules:**
-- Stop interviewing when skeleton is sufficiently filled and essentials (Prerequisites, Detailed Plan tasks, Testing strategy) are covered
+- Stop interviewing when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
 - In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
 - In `max`, actively probe for edge cases, failure modes, and rollback scenarios even if user doesn't raise them
 
@@ -163,41 +165,57 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 - [ ] [TBD: access, approvals, infra]
 
 ## High-Level Approach
-[TBD: 1-2 paragraphs or ordered list]
+[TBD: 1-2 paragraphs describing the technical approach, phases, and key decisions]
 
-## Detailed Plan
+## Technical Design
 
-### Task 1: [TBD]
-- **Goal**: [TBD]
-- **Covers**: [Map to spec AC if available]
-- **Depends on**: [TBD]
-- **Changes**: [Pre-fill with verified files from Phase 1b]
-- **Verification**: [TBD]
-- **Rollback**: [TBD]
+### Architecture
+[TBD: How components fit together, data flow, key boundaries]
 
-[Add more task skeletons as needed based on spec/research]
+### Data Model
+[TBD: Entities, relationships, state transitions — or "N/A" if not applicable]
+
+### API/Interface Design
+[TBD: Key interfaces, contracts, protocols — or "N/A" if not applicable]
+
+### File Impact Summary
+[Pre-fill from Phase 1b verification table]
+```
+- src/auth/middleware.ts — Exists (modify)
+- src/auth/session.ts — New (create)
+- tests/auth/session.test.ts — New (create)
+```
 
 ## Risks, Edge Cases & Breaking Changes
 - [TBD or pre-fill from spec Edge Cases]
+- Backwards compatibility concerns: [TBD]
 
-## Testing & Validation
-- [TBD]
+## Testing & Validation Strategy
+- [TBD: Types of tests needed (unit, integration, e2e)]
+- [TBD: Coverage requirements]
+- [TBD: Manual validation steps]
 
 ### Acceptance Criteria Coverage
-| Spec AC | Covered By |
-|---------|------------|
-| [Pre-fill from spec if available] | [TBD] |
+| Spec AC | Approach |
+|---------|----------|
+| [Pre-fill from spec if available] | [How this plan addresses it] |
 
-## Rollback Strategy (Plan-Level)
-- [TBD]
+## Rollback Strategy
+- [TBD: How to revert if deployment fails]
+- [TBD: Feature flag strategy if applicable]
 
 ## Open Questions
 - [List unknowns from research]
+
+## Next Steps
+After this plan is approved, run `/create-tasks` to generate:
+- `--beads` → Beads issues with dependencies for multi-agent execution
+- (default) → TODO.md checklist for simpler tracking
 ```
 
 **Skeleton rules:**
 - Pre-fill from spec: Goals, Non-Goals, Acceptance Criteria, Edge Cases, Backwards Compatibility
-- Embed file existence table from Phase 1b into task Changes sections
+- Embed file existence table from Phase 1b into File Impact Summary
 - Mark unknowns as `[TBD]` or `[TBD: hint]`
 - The skeleton drives Phase 2 questions—every TBD is a potential question
 
@@ -212,10 +230,10 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 **Phase 2 Rules:**
 - You may only ask questions that directly correspond to existing `[TBD]` placeholders in the skeleton
 - After each user answer, mentally note which `[TBD]` it resolves (you'll update the skeleton context in Phase 3)
-- Continue interviewing until Prerequisites, Detailed Plan tasks, and Testing sections have minimal TBDs
+- Continue interviewing until Technical Design, Testing Strategy, and Rollback sections have minimal TBDs
 - Explicitly declare "Phase 2 complete" before proceeding to Phase 3
 
-**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "Task 2 needs a rollback strategy—options: [A] feature flag disable, [B] revert migration, [C] you decide. Which?"
+**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Architecture section needs clarity on data flow—options: [A] sync via API, [B] event-driven, [C] you decide. Which?"
 
 **Interview Principles**
 
@@ -295,11 +313,13 @@ Create a compact context block for generators, including the skeleton:
 **Context Checklist** — Ensure skeleton has:
 - [ ] Clear target (spec/feature) + links/paths
 - [ ] Scope (MVP vs follow-ups) and Non-Goals
+- [ ] Technical Design (architecture, data model, interfaces)
 - [ ] Verified file/module list (exists vs New vs ambiguous)
 - [ ] Dependencies and rollout strategy
 - [ ] Implementation constraints (architectural, areas to avoid)
-- [ ] Testing & verification expectations (coverage, quality gates)
-- [ ] Mapping from spec Acceptance Criteria to planned tasks/tests
+- [ ] Testing & verification strategy (coverage, quality gates)
+- [ ] Mapping from spec Acceptance Criteria to design approach
+- [ ] Rollback strategy
 - [ ] Risk/rollback expectations
 
 ### Phase 4: Run Multi-Model Generators
@@ -362,7 +382,7 @@ Synthesis rules:
 6. Respect file existence: label new files as "New: path/to/file"
 7. Ensure all template sections are complete:
    - Context & Goals, Scope & Non-Goals, Assumptions & Constraints
-   - Prerequisites, High-Level Approach, Detailed Plan (with verification/rollback)
+   - Prerequisites, High-Level Approach, Technical Design (architecture/data/interfaces)
    - Risks/Edge Cases, Testing & Validation, Rollback Strategy, Open Questions
 
 Write the synthesized plan to: docs/YYYY-MM-DD-FEATURE-plan.md
@@ -414,5 +434,7 @@ If reviewers find issues:
 ## Done
 
 When the plan passes review:
-- Summarize key phases/tasks, major risks, and rollout strategy
-- Offer to proceed with implementation
+- Summarize key design decisions, major risks, and rollout strategy
+- Offer next step: **Run `/create-tasks`** to generate execution artifacts:
+  - `--beads` → Create Beads issues with dependencies for multi-agent parallelization
+  - (default) → Generate TODO.md checklist for simpler tracking
