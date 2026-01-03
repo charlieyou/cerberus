@@ -67,11 +67,15 @@ Before generating tasks, verify all referenced files:
    - **Ambiguous**: Unclear reference
 
 3. **Build verification table**:
-   ```
-   - src/auth/middleware.ts — Exists
-   - src/auth/session.ts — New (to be created)
-   - tests/auth/session.test.ts — New (test file)
-   ```
+    ```
+    - src/auth/middleware.ts — Exists
+    - src/auth/session.ts — New (to be created)
+    - tests/auth/session.test.ts — New (test file)
+    ```
+
+4. **Handle ambiguous paths**:
+   - If any paths remain "Ambiguous", create a dedicated "Clarify file locations" task
+   - All tasks depending on those files must block on the clarification task
 
 ### Phase 3: Task Decomposition
 
@@ -85,22 +89,91 @@ Generate tasks following these rules:
 - **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has at least one task
 - **Rollback per task**: Derive from plan's `Rollback Strategy` section
 
-#### Sizing Rules (from bd-breakdown)
-- Each task completable within **140k tokens**
-- Touch **2-3 primary files** per task
-- If 4+ files, split into parent + children
-- **Prefer fewer, larger tasks** over many small ones
+#### Sizing Rules
+
+Agents can spawn subagents to handle larger tasks. Size based on expected scope:
+
+| Task Scope | Files | Edits | Execution | Success |
+|------------|-------|-------|-----------|---------|
+| **Standard** | 2-8 | 5-25 | Single agent | 93% |
+| **Large** | 9-12 | 26-35 | 2-3 subagents | 85-90% |
+| **Split required** | 13+ | 36+ | Too big | <80% |
+
+**Estimating files and edits from the plan:**
+- Count files from `File Impact Summary` + any mentioned in Technical Design
+- When ambiguous: ~1-2 files per component mentioned, ~1 file per test suite
+- Estimate edits: 3-5 per file for local changes, 6-10 for refactors or new files
+- Test files count in the budget (impl + tests for same feature = single task if within bounds)
+
+**Sizing algorithm** — for each candidate task:
+1. Estimate `files_touched` and `edits` using the rules above
+2. If `files < 2` AND `edits < 5` → merge with neighboring task in same phase/story
+3. If `files > 12` OR `edits > 35` → split along module, story, or phase boundaries
+4. Re-estimate until all tasks are within 2-12 files and 5-35 edits
+
+**Context-usage proxy**: If a task's description references 3+ major plan sections (Context, Technical Design, Risks, AC table), it likely exceeds 40% context — attempt a split.
+
+**Right-sized task indicators:**
+- 2-8 files, 3-6 acceptance criteria
+- Summarizable in one sentence without "and"
+- Would take 15-45 minutes of focused work
+
+**Too small (batch together):**
+- Single-file fix, <5 edits
+- Description under 10 lines
+- Would take <10 minutes
+
+**Too large (split required):**
+- 13+ files or 36+ edits
+- 7+ acceptance criteria
+- Contains "then", "after that", "finally" (multiple phases)
+- Description has subsections or its own TOC
+
+**Red flag phrases requiring split:**
+- "Central integration point" or "ties everything together"
+- "Largest migration" or "significant refactor"
+- Cannot describe goal without "and" or bullet lists
+
+**Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-20 tasks per feature/epic. If <5, check for oversized tasks; if >25, aggressively merge.
 
 #### Scope Atomicity
 - **One outcome per task** — single verifiable "done" state
-- **Don't mix modify + add** — separate issues for existing vs new code
+- **Don't mix modify + add** — separate new files from modifications, unless combined task stays within size bounds and describes a single outcome
 - **Phase boundaries** — each execution phase is a separate task
+
+#### Decomposition Anti-Patterns
+
+**Avoid horizontal/layer-based splits:**
+- ❌ Separate "Backend", "Frontend", "Tests" tasks for same feature
+- ✅ Vertical slices: one task per user story or behavior, including all layers
+
+**Avoid long dependency chains:**
+- Maximum chain length: 4 tasks
+- If T001 → T002 → T003 → T004 → T005, merge or restructure to allow parallelism
+
+**Avoid vague polish/cleanup tasks:**
+- ❌ "Polish auth flow" with no concrete changes
+- ✅ Specific improvements: "Add error messages for auth failures" with testable ACs
+
+**Avoid overlapping AC ownership:**
+- Each AC is the primary responsibility of exactly one task
+- Supporting tasks may reference ACs but must not claim full ownership
+
+**Cross-cutting changes** (same pattern across many files):
+1. One design/POC task in a small slice
+2. 1-2 rollout tasks grouped by subsystem
+3. Optional cleanup/flag-removal task
+
+**Feature flags**: When flags are involved, create three tasks:
+1. Add flag + guarded implementation
+2. Rollout/monitor
+3. Flag removal/cleanup (optional, can be deferred)
 
 #### Parallelization
 - **File overlap = dependency** — tasks touching same file cannot parallelize
 - **Err toward more dependencies** — safer than too few
 
-#### Structure (Spec Kit inspired)
+#### Structure
 - **Phase 1**: Setup (project init, dependencies)
 - **Phase 2**: Foundation (blocking prerequisites)
 - **Phase 3+**: User Stories (in priority order P1, P2, P3...)
@@ -150,6 +223,34 @@ What this task accomplishes (1-2 sentences)
 - Edge cases, gotchas, constraints
 ```
 
+### Phase 4b: Sizing Verification
+
+After generating task specs, produce a **sizing summary table** and verify all tasks are within bounds:
+
+```markdown
+| Task | Files | Edits | Size Class | Action |
+|------|-------|-------|------------|--------|
+| T001 | 4 | 14 | OK | — |
+| T002 | 11 | 30 | Large | Verify subagent-suitable |
+| T003 | 16 | 50 | Over | MUST split |
+```
+
+**Gating rule**: No tasks marked "Over" may proceed to output. Split and re-estimate until all pass.
+
+#### Worked Example
+
+Plan proposes: "Implement full password reset flow (backend + email + UI)"
+
+1. **Initial candidate**: T001 – Implement password reset flow
+2. **Estimate**: 9 files, ~28 edits → Large but acceptable
+3. **Check**: Can it be summarized without "and"? No: "backend AND email AND UI"
+4. **Split by user-visible outcome**:
+   - T001 – Backend endpoints + token model (5 files, ~15 edits) → OK
+   - T002 – Email template + sending integration (3 files, ~8 edits) → OK  
+   - T003 – UI pages + routing (4 files, ~12 edits) → OK
+5. **Dependencies**: T002, T003 → T001 (backend must exist first)
+6. **Re-check**: All tasks in 3-5 files, 8-15 edits — within standard range ✓
+
 ### Phase 5: Output Generation
 
 #### If `--beads` flag is set:
@@ -193,6 +294,8 @@ Use the **beads skill** to create issues. Follow bd-breakdown patterns:
    ```bash
    bd dep add <blocked-task> <blocker-task>
    ```
+   
+   **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
 
 5. **Add labels**:
    ```bash
@@ -211,15 +314,25 @@ Key sections to include:
 - **Dependencies Graph**: ASCII visualization of task ordering
 - **AC Coverage table**: Map spec acceptance criteria to tasks
 
-### Phase 6: Validation
+### Phase 6: Validation (Gating)
 
-Before finalizing, verify:
+**This is a gate, not advisory.** If any check fails, you MUST adjust tasks (merge/split/add deps) and re-run the checklist before emitting output.
 
-- [ ] **No file overlap without dependency** — scan Primary Files, ensure no two parallel tasks share files
-- [ ] **AC coverage complete** — every spec AC maps to at least one task
-- [ ] **Dependencies are complete** — when uncertain, add the dependency
-- [ ] **Each task has one outcome** — no bundled multi-behavior tasks
-- [ ] **Sizing is reasonable** — no task exceeds 140k token estimate
+| Check | Rule | Fix |
+|-------|------|-----|
+| **File overlap** | No two parallel tasks share files | Add dependency |
+| **AC coverage** | Every spec AC maps to exactly one primary task | Add task or reassign |
+| **No orphan ACs** | No AC claimed by multiple tasks as primary | Reassign ownership |
+| **Dependencies complete** | When uncertain, add the dep | Add dependency |
+| **One outcome per task** | No bundled multi-behavior tasks | Split task |
+| **Sizing: minimum** | No task under 2 files / 5 edits | Merge with neighbor |
+| **Sizing: maximum** | No task over 12 files / 35 edits | Split task |
+| **No micro-tasks** | Single-file fixes batched | Merge related fixes |
+| **Chain length** | No dep chain > 4 tasks | Restructure for parallelism |
+| **Task count** | 5-20 tasks per epic | Merge if >25, split if <5 |
+| **No vague tasks** | Every task has concrete files + ACs | Rewrite or delete |
+
+**Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
 
 ### Phase 7: Report
 
