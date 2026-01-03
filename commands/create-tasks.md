@@ -201,69 +201,15 @@ Use the **beads skill** to create issues. Follow bd-breakdown patterns:
 
 #### If no `--beads` flag (default):
 
-Generate `TODO.md` in the same directory as the plan:
+Generate `TODO.md` in the same directory as the plan, using the schema from `templates/tasks-template.md`.
 
-```markdown
-# TODO: [Feature Name]
-
-**Generated**: YYYY-MM-DD
-**Plan**: [link to plan.md]
-**Spec**: [link to spec.md if exists]
-
-## Overview
-
-[1-2 sentence summary from plan]
-
-## Task Summary
-
-| Phase | Tasks | Parallel | Dependencies |
-|-------|-------|----------|--------------|
-| Setup | 2 | 0 | — |
-| Foundation | 3 | 2 | Setup |
-| US1: [Name] | 5 | 3 | Foundation |
-| Polish | 2 | 1 | US1 |
-
-## Phase 1: Setup
-
-- [ ] **T001** Create project structure per plan
-  - Files: `src/`, `tests/`
-  - Verify: Directory structure exists
-
-- [ ] **T002** Install dependencies
-  - Files: `package.json`
-  - Verify: `npm install` succeeds
-
-## Phase 2: Foundation
-
-- [ ] **T003** [P] Implement base types
-  - Files: `src/types/index.ts` (New)
-  - Depends: T001
-  - Verify: Types compile
-
-[... continue for all phases ...]
-
-## Dependencies Graph
-
-```
-T001 → T002 → T003
-            ↘ T004 [P]
-       T003 → T005
-       T004 → T005
-```
-
-## Acceptance Criteria Coverage
-
-| Spec AC | Covered By |
-|---------|------------|
-| AC1: User can login | T005, T006 |
-| AC2: Session persists | T007 |
-
-## Notes
-
-- Total tasks: N
-- Parallelizable: M
-- Estimated phases: X
-```
+Key sections to include:
+- **Header**: Feature name, generated date, links to plan/spec
+- **Task Summary table**: Phase, task count, parallel count, dependencies
+- **Phase sections**: Setup → Foundation → US1/US2/USn → Polish
+- **Per-task format**: `- [ ] **T00X** [P] [USn] Description` with Files/Depends/Verify
+- **Dependencies Graph**: ASCII visualization of task ordering
+- **AC Coverage table**: Map spec acceptance criteria to tasks
 
 ### Phase 6: Validation
 
