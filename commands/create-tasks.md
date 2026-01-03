@@ -272,10 +272,6 @@ Use the **beads skill** to create issues. Follow bd-breakdown patterns:
    ```
    
    **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
-
-5. **Add labels**:
-   ```bash
-   bd label add <task-id> backend,auth
    ```
 
 #### If no `--beads` flag (default):
@@ -304,8 +300,6 @@ Key sections to include:
 | **Sizing: minimum** | Task under 2 files / 5 edits | Consider merging (optional) |
 | **Sizing: maximum** | No task over 18 files / 55 edits | MUST split |
 | **No micro-tasks** | Single-file fixes batched | Merge related fixes |
-| **Chain length** | No dep chain > 4 tasks | Restructure for parallelism |
-| **Task count** | 5-20 tasks per epic | Merge if >25, split if <5 |
 | **No vague tasks** | Every task has concrete files + ACs | Rewrite or delete |
 
 **Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
