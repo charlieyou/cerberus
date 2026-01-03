@@ -91,50 +91,26 @@ Generate tasks following these rules:
 
 #### Sizing Rules
 
-Agents can spawn subagents to handle larger tasks. Size based on expected scope:
+**Acceptable range**: 2-18 files, 5-55 edits per task.
 
-| Task Scope | Files | Edits | Execution | Success |
-|------------|-------|-------|-----------|---------|
-| **Standard** | 2-8 | 5-25 | Single agent | 93% |
-| **Large** | 9-12 | 26-35 | 2-3 subagents | 85-90% |
-| **Split required** | 13+ | 36+ | Too big | <80% |
-
-**Estimating files and edits from the plan:**
-- Count files from `File Impact Summary` + any mentioned in Technical Design
-- When ambiguous: ~1-2 files per component mentioned, ~1 file per test suite
-- Estimate edits: 3-5 per file for local changes, 6-10 for refactors or new files
-- Test files count in the budget (impl + tests for same feature = single task if within bounds)
-
-**Sizing algorithm** — for each candidate task:
-1. Estimate `files_touched` and `edits` using the rules above
-2. If `files < 2` AND `edits < 5` → merge with neighboring task in same phase/story
-3. If `files > 12` OR `edits > 35` → split along module, story, or phase boundaries
-4. Re-estimate until all tasks are within 2-12 files and 5-35 edits
-
-**Context-usage proxy**: If a task's description references 3+ major plan sections (Context, Technical Design, Risks, AC table), it likely exceeds 40% context — attempt a split.
-
-**Right-sized task indicators:**
-- 2-8 files, 3-6 acceptance criteria
-- Summarizable in one sentence without "and"
-- Would take 15-45 minutes of focused work
-
-**Too small (batch together):**
-- Single-file fix, <5 edits
+**Too small** → consider merging (optional):
+- < 2 files or < 5 edits
 - Description under 10 lines
 - Would take <10 minutes
 
-**Too large (split required):**
-- 13+ files or 36+ edits
+**Too large** → MUST split along module/story/phase boundaries:
+- 19+ files or 56+ edits
 - 7+ acceptance criteria
 - Contains "then", "after that", "finally" (multiple phases)
 - Description has subsections or its own TOC
+- Red flags: "central integration point", "ties everything together", "largest migration"
 
-**Red flag phrases requiring split:**
-- "Central integration point" or "ties everything together"
-- "Largest migration" or "significant refactor"
-- Cannot describe goal without "and" or bullet lists
+**Estimating files and edits:**
+- Count files from `File Impact Summary` + Technical Design mentions
+- ~1-2 files per component, ~1 file per test suite when ambiguous
+- Edits: 3-5 per file for local changes, 6-10 for refactors or new files
 
-**Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-20 tasks per feature/epic. If <5, check for oversized tasks; if >25, aggressively merge.
+**Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-20 tasks per feature/epic.
 
 #### Scope Atomicity
 - **One outcome per task** — single verifiable "done" state
@@ -228,14 +204,14 @@ What this task accomplishes (1-2 sentences)
 After generating task specs, produce a **sizing summary table** and verify all tasks are within bounds:
 
 ```markdown
-| Task | Files | Edits | Size Class | Action |
-|------|-------|-------|------------|--------|
+| Task | Files | Edits | Status | Action |
+|------|-------|-------|--------|--------|
 | T001 | 4 | 14 | OK | — |
-| T002 | 11 | 30 | Large | Verify subagent-suitable |
-| T003 | 16 | 50 | Over | MUST split |
+| T002 | 16 | 45 | OK | — |
+| T003 | 22 | 70 | Over | MUST split |
 ```
 
-**Gating rule**: No tasks marked "Over" may proceed to output. Split and re-estimate until all pass.
+**Gating rule**: No tasks marked "Over" (19+ files or 56+ edits) may proceed. Split and re-estimate until all pass.
 
 #### Worked Example
 
@@ -325,8 +301,8 @@ Key sections to include:
 | **No orphan ACs** | No AC claimed by multiple tasks as primary | Reassign ownership |
 | **Dependencies complete** | When uncertain, add the dep | Add dependency |
 | **One outcome per task** | No bundled multi-behavior tasks | Split task |
-| **Sizing: minimum** | No task under 2 files / 5 edits | Merge with neighbor |
-| **Sizing: maximum** | No task over 12 files / 35 edits | Split task |
+| **Sizing: minimum** | Task under 2 files / 5 edits | Consider merging (optional) |
+| **Sizing: maximum** | No task over 18 files / 55 edits | MUST split |
 | **No micro-tasks** | Single-file fixes batched | Merge related fixes |
 | **Chain length** | No dep chain > 4 tasks | Restructure for parallelism |
 | **Task count** | 5-20 tasks per epic | Merge if >25, split if <5 |
