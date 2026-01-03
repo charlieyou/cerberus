@@ -324,19 +324,27 @@ Create a compact context block for generators, including the skeleton:
 
 ### Phase 4: Run Multi-Model Generators
 
-Spawn generators with the mode flag. The generate script enforces timeouts internally:
+Create a temporary prompt file:
+
+```bash
+PROMPT_TMP=$(mktemp /tmp/create-plan-prompt-XXXX.md)
+cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-plan.md" > "$PROMPT_TMP"
+cat >> "$PROMPT_TMP" <<'EOF'
+
+## Context
+
+EOF
+```
+
+Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
+
+Spawn generators with the mode flag. The generate script requires an output directory as the first argument and writes drafts to files, returning their paths:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-The generator automatically loads the base prompt from `prompts/generators/create-plan.md`. Pass your Phase 3 context (skeleton + findings + answers) via stdin:
-
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/plan-drafts" --type create-plan --mode "${MODE:-smart}" <<CONTEXT
-## Context
-
-[Insert skeleton + findings + answers here]
-CONTEXT
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generate script will output paths to the draft files:

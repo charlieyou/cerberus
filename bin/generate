@@ -18,17 +18,19 @@ source "$SCRIPT_DIR/review-gate-models.sh"
 
 usage() {
     cat <<'USAGE'
-Usage: generate <output-dir> [options] [< context.md]
+Usage: generate <output-dir> [options]
 
 Arguments:
   <output-dir>            Required. Directory to write draft files to
 
-Automatically loads the base prompt from prompts/generators/<type>.md.
-Optional stdin provides additional context (analysis output, focus area, etc).
-
 Options:
   --type <type>         Named preset: healthcheck, architecture-review, create-spec, create-plan (default: healthcheck)
   --mode <level>        Intelligence mode: fast, smart, max
+  --prompt-file <path>  Path to custom prompt file
+  --prompt <text>       Inline prompt text (replaces base prompt)
+  --focus <text>        Focus area to append to base prompt
+  --analysis-file <path>  Append analysis output from a file (repeatable)
+  [--] <focus>          Optional focus text (or trailing text; -- forces focus)
 USAGE
 }
 
@@ -41,8 +43,13 @@ die() {
 
 review_gate_generate() {
     local review_type="healthcheck"
+    local prompt_file=""
+    local prompt_inline=""
+    local focus_area=""
     local mode=""
     local output_dir=""
+    local -a extra_args=()
+    local -a analysis_files=()
 
     # First positional argument is required output directory
     if [[ $# -eq 0 ]]; then
@@ -72,8 +79,7 @@ review_gate_generate() {
                 shift
                 ;;
             --type)
-                [[ -z "${2:-}" ]] && die "--type requires an argument"
-                review_type="$2"
+                review_type="${2:-healthcheck}"
                 shift 2
                 ;;
             --mode=*)
@@ -84,24 +90,65 @@ review_gate_generate() {
                 mode="${2:-}"
                 shift 2
                 ;;
+            --prompt-file=*)
+                prompt_file="${1#*=}"
+                shift
+                ;;
+            --prompt-file)
+                prompt_file="${2:-}"
+                shift 2
+                ;;
+            --prompt=*)
+                prompt_inline="${1#*=}"
+                shift
+                ;;
+            --prompt)
+                prompt_inline="${2:-}"
+                shift 2
+                ;;
+            --focus=*)
+                focus_area="${1#*=}"
+                shift
+                ;;
+            --focus)
+                focus_area="${2:-}"
+                shift 2
+                ;;
+            --analysis-file=*)
+                analysis_files+=("${1#*=}")
+                shift
+                ;;
+            --analysis-file)
+                analysis_files+=("${2:-}")
+                shift 2
+                ;;
             -h|--help)
                 usage
                 return 0
+                ;;
+            --)
+                shift
+                if [[ $# -gt 0 ]]; then
+                    extra_args+=("$@")
+                fi
+                break
                 ;;
             -*)
                 die "Unknown option '$1'"
                 ;;
             *)
-                die "Unexpected argument '$1'"
+                extra_args+=("$1")
+                shift
                 ;;
         esac
     done
 
-    # Validate review_type against allowlist
-    case "$review_type" in
-        healthcheck|architecture-review|create-spec|create-plan) ;;
-        *) die "Unknown type '$review_type'. Valid types: healthcheck, architecture-review, create-spec, create-plan" ;;
-    esac
+    if [[ ${#extra_args[@]} -gt 0 ]]; then
+        if [[ -n "$focus_area" ]]; then
+            die "Focus provided both via --focus and positional arguments"
+        fi
+        focus_area="${extra_args[*]}"
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -110,25 +157,61 @@ review_gate_generate() {
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Load base prompt from type-specific file
-    local base_prompt_file="$PLUGIN_ROOT/prompts/generators/${review_type}.md"
-    local base_prompt=""
-    if [[ -f "$base_prompt_file" ]]; then
-        base_prompt=$(cat "$base_prompt_file")
+    # Resolve prompt content
+    local prompt_content=""
+
+    if [[ -n "$prompt_inline" ]]; then
+        prompt_content="$prompt_inline"
+    elif [[ -n "$prompt_file" ]]; then
+        if [[ ! -f "$prompt_file" ]]; then
+            die "Prompt file not found: $prompt_file"
+        fi
+        prompt_content=$(cat "$prompt_file")
     else
-        die "Prompt file not found for type '$review_type': $base_prompt_file"
+        local prompt_path="$PLUGIN_ROOT/prompts/generators/${review_type}.md"
+
+        if [[ -f "$prompt_path" ]]; then
+            prompt_content=$(cat "$prompt_path")
+        else
+            die "No prompt found for type '$review_type' at $prompt_path"
+        fi
     fi
 
-    # Read additional context from stdin (optional)
-    local stdin_content=""
-    if [[ ! -t 0 ]]; then
-        stdin_content=$(cat)
+    if [[ ${#analysis_files[@]} -gt 0 ]]; then
+        local analysis_block=$'## Pre-run Analysis Outputs\n'
+        for analysis_file in "${analysis_files[@]}"; do
+            if [[ -z "$analysis_file" ]]; then
+                die "Analysis file path cannot be empty"
+            fi
+            if [[ ! -f "$analysis_file" ]]; then
+                die "Analysis file not found: $analysis_file"
+            fi
+            analysis_block+=$'\n'"### $(basename "$analysis_file")"$'\n'
+            analysis_block+="$(cat "$analysis_file")"$'\n'
+        done
+        prompt_content+=$'\n\n'"$analysis_block"
     fi
 
-    # Combine base prompt with stdin context
-    local prompt_content="$base_prompt"
-    if [[ -n "${stdin_content//[[:space:]]/}" ]]; then
-        prompt_content="$base_prompt"$'\n\n'"$stdin_content"
+    # Inject focus area after ## Input section if provided
+    if [[ -n "$focus_area" ]]; then
+        if [[ "$prompt_content" == *"## Input"* ]]; then
+            # Insert after the ## Input section's content paragraph
+            prompt_content=$(echo "$prompt_content" | awk -v focus="$focus_area" '
+                /^## Input$/ { in_input=1 }
+                in_input && seen_text && /^$/ && !inserted {
+                    print "**User-specified focus**: " focus
+                    print
+                    inserted=1
+                    in_input=0
+                    next
+                }
+                in_input && !/^$/ && !/^## Input$/ { seen_text=1 }
+                { print }
+            ')
+        else
+            # Fallback: prepend as prominent instruction
+            prompt_content="**User-specified focus**: $focus_area"$'\n\n'"$prompt_content"
+        fi
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
@@ -208,7 +291,7 @@ review_gate_generate() {
         read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
         echo "Spawning Claude generator (model: $claude_model)..." >&2
         (
-            if printf '%s' "$prompt_content" | claude -p --model "$claude_model" \
+            if echo "$prompt_content" | claude -p --model "$claude_model" \
                 --allowedTools "${claude_allowed_tools[@]}" \
                 --disallowedTools "${claude_disallowed_tools[@]}" \
                 > "$claude_draft" 2>&1; then
