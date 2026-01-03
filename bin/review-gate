@@ -509,7 +509,8 @@ USAGE
             # Original scope: base..tip_sha (stable)
             diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             # Fix diff: tip_sha..HEAD (new commits since review started)
-            if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
+            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
+            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
                 fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
@@ -528,7 +529,8 @@ USAGE
                 fi
             done
             # Fix diff: tip_sha..HEAD (new commits since review started)
-            if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
+            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
+            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
                 fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
@@ -536,7 +538,8 @@ USAGE
             # Original scope: base..tip (using resolved SHAs for stability)
             diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             # Fix diff: tip_sha..HEAD (new commits since review started)
-            if [[ -n "$tip_sha" && "$tip_sha" != "$current_head" ]]; then
+            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
+            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
                 fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
             fi
             ;;
