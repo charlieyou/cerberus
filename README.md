@@ -2,17 +2,17 @@
 
 *Three-headed guardian of code quality.*
 
-Multi-model consensus review system that gates Claude Code session termination until code or plans are reviewed and approved. Like its mythological namesake, Cerberus uses three AI heads (Codex, Gemini, Claude) to guard the gates—nothing leaves until all three agree.
+Multi-model consensus review system that gates Claude Code session termination until code or plans are reviewed and approved. Like its mythological namesake, Cerberus uses three AI heads (Codex, Gemini, Claude) to guard the gates: nothing leaves until all three agree.
+
+![Cerberus](cerberus.png)
 
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
 - **Automatic iteration**: Reviews loop until unanimous approval (default 3 rounds, configurable via `--max-rounds`)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
-- **Plan review**: Review implementation plans before execution
-- **Spec review**: Review feature specifications before implementation
-- **Spec creation**: Interview + generator flow to draft specs before review
-- **Plan creation**: Interview + generator flow to draft implementation plans before review
+- **Plan & spec creation**: Interview + generator flow to draft plans or specs before review
+- **Plan & spec review**: Review implementation plans or feature specs before execution
 
 ## Installation
 
@@ -34,7 +34,7 @@ Verified CLI versions (January 1, 2026):
 | `gemini` | `0.22.4` |
 | `claude` | `2.0.76 (Claude Code)` |
 
-Missing reviewers are skipped with a warning—you can run with just one or two.
+Missing reviewers are skipped with a warning. You can run with just one or two.
 
 ### Install Plugin
 
@@ -172,8 +172,8 @@ All review and generator commands accept `--mode <fast|smart|max>` to trade off 
 
 | Mode | Codex reasoning | Gemini model | Claude model | Prompt |
 |------|-----------------|--------------|--------------|--------|
-| fast | medium | `gemini-3-flash-preview` | `sonnet` | — |
-| smart | high | `gemini-3-pro-preview` | `opus` | — |
+| fast | medium | `gemini-3-flash-preview` | `sonnet` | - |
+| smart | high | `gemini-3-pro-preview` | `opus` | - |
 | max | xhigh | `gemini-3-pro-preview` | `opus` | `ultrathink` |
 
 Examples:
