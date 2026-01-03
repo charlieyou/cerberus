@@ -329,16 +329,14 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-The generator reads the prompt from stdin. Use a heredoc to pass the base prompt plus your Phase 3 context (skeleton + findings + answers):
+The generator automatically loads the base prompt from `prompts/generators/create-plan.md`. Pass your Phase 3 context (skeleton + findings + answers) via stdin:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/plan-drafts" --type create-plan --mode "${MODE:-smart}" <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-plan.md")
-
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/plan-drafts" --type create-plan --mode "${MODE:-smart}" <<CONTEXT
 ## Context
 
 [Insert skeleton + findings + answers here]
-PROMPT
+CONTEXT
 ```
 
 The generate script will output paths to the draft files:

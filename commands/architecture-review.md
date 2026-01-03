@@ -22,24 +22,19 @@ Example (adjust paths/package names as needed):
 Run analysis tools and capture output in a variable:
 
 ```bash
-ANALYSIS=$(
-  echo "## lizard"
-  if command -v uvx >/dev/null 2>&1; then
-    uvx lizard -C 15 -L 80 -w src | head -n 50
-  else
-    echo "uvx not available (install uv to run lizard)"
-  fi
-  echo ""
-  echo "## grimp"
-  if [[ -x "$HOME/.claude/skills/grimp-architecture/.venv/bin/python" ]]; then
-    PKG="src"
-    PYTHONPATH="." \
-      $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
-      $HOME/.claude/skills/grimp-architecture/scripts/explore.py "$PKG" || true
-  else
-    echo "grimp not available"
-  fi
-)
+# Run lizard complexity analysis
+LIZARD_OUT=$(uvx lizard -C 15 -L 80 -w src 2>/dev/null | head -n 50 || echo "uvx/lizard not available")
+
+# Run grimp import graph analysis
+GRIMP_OUT=$($HOME/.claude/skills/grimp-architecture/.venv/bin/python \
+  $HOME/.claude/skills/grimp-architecture/scripts/explore.py src 2>/dev/null || echo "grimp not available")
+
+# Combine outputs
+ANALYSIS="## lizard
+$LIZARD_OUT
+
+## grimp
+$GRIMP_OUT"
 ```
 
 You can add more tools (e.g., jscpd) by appending sections.
@@ -51,12 +46,10 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-The generator reads the prompt from stdin. Use a heredoc to pass the base prompt plus analysis output and optional focus:
+The generator automatically loads the base prompt from `prompts/generators/architecture-review.md`. Pass additional context (analysis output, focus area) via stdin:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/architecture-drafts" --type architecture-review --mode "${MODE:-smart}" <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/architecture-review.md")
-
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/architecture-drafts" --type architecture-review --mode "${MODE:-smart}" <<CONTEXT
 ## Pre-run Analysis Outputs
 
 $ANALYSIS
@@ -64,7 +57,7 @@ $ANALYSIS
 ## Focus
 
 ${FOCUS:-General architecture review}
-PROMPT
+CONTEXT
 ```
 
 Defaults to `--mode smart` if not specified.

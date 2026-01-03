@@ -107,10 +107,10 @@ Interview the user, run multi-model generators, synthesize a spec, then run the 
 | smart | ~80% coverage | up to 2 |
 | max | ~95% + probing | up to 3 |
 
-You can also run the generator directly by piping a prompt via stdin:
+You can also run the generator directly (base prompt loaded automatically, stdin for context):
 
 ```bash
-cat path/to/prompt.md | ${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type create-spec --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type create-spec --mode smart < context.md
 ```
 
 ### Create Plan (Generator)
@@ -140,10 +140,10 @@ Interview the user, run multi-model generators, synthesize an implementation pla
 | smart | ~80% coverage | up to 2 |
 | max | ~95% + probing | up to 3 |
 
-You can also run the generator directly by piping a prompt via stdin:
+You can also run the generator directly (base prompt loaded automatically, stdin for context):
 
 ```bash
-cat path/to/prompt.md | ${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type create-plan --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type create-plan --mode smart < context.md
 ```
 
 ### Healthcheck & Architecture Review
@@ -155,11 +155,11 @@ Generate multi-model drafts (Codex/Gemini/Claude), then synthesize into a single
 /cerberus:architecture-review
 ```
 
-You can also run the generator directly by piping a prompt via stdin:
+You can also run the generator directly (base prompt loaded automatically, stdin for focus/context):
 
 ```bash
-cat path/to/prompt.md | ${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type healthcheck --mode smart
-cat path/to/prompt.md | ${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type architecture-review --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type healthcheck --mode smart
+${CLAUDE_PLUGIN_ROOT}/bin/generate output-dir --type architecture-review --mode smart < analysis.md
 ```
 
 ### Agent Selection

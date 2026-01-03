@@ -14,42 +14,34 @@ Use the Bash tool to run the generator command. This spawns all available genera
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-The generator reads the prompt from stdin. Use a heredoc to pass the base healthcheck prompt plus optional focus:
+The generator automatically loads the base prompt from `prompts/generators/healthcheck.md`. Pass optional focus via stdin:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/healthcheck-drafts" --type healthcheck --mode "${MODE:-smart}" <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
-
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/healthcheck-drafts" --type healthcheck --mode "${MODE:-smart}" <<CONTEXT
 ## Focus
 
 ${FOCUS:-General code health review}
-PROMPT
+CONTEXT
 ```
 
 Examples:
 ```bash
-# User: /healthcheck --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
-PROMPT
+# User: /healthcheck --mode fast (no focus)
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast
 
 # User: /healthcheck "focus on the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode smart <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
-
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode smart <<CONTEXT
 ## Focus
 
 focus on the API layer
-PROMPT
+CONTEXT
 
 # User: /healthcheck --mode max "review error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode max <<PROMPT
-$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
-
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode max <<CONTEXT
 ## Focus
 
 review error handling
-PROMPT
+CONTEXT
 ```
 
 Defaults to `--mode smart` if not specified.

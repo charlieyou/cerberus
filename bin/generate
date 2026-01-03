@@ -18,12 +18,13 @@ source "$SCRIPT_DIR/review-gate-models.sh"
 
 usage() {
     cat <<'USAGE'
-Usage: generate <output-dir> [options] < prompt.md
+Usage: generate <output-dir> [options] [< context.md]
 
 Arguments:
   <output-dir>            Required. Directory to write draft files to
 
-Reads prompt from stdin. Pipe or use heredoc.
+Automatically loads the base prompt from prompts/generators/<type>.md.
+Optional stdin provides additional context (analysis output, focus area, etc).
 
 Options:
   --type <type>         Named preset: healthcheck, architecture-review, create-spec, create-plan (default: healthcheck)
@@ -71,7 +72,8 @@ review_gate_generate() {
                 shift
                 ;;
             --type)
-                review_type="${2:-healthcheck}"
+                [[ -z "${2:-}" ]] && die "--type requires an argument"
+                review_type="$2"
                 shift 2
                 ;;
             --mode=*)
@@ -95,6 +97,12 @@ review_gate_generate() {
         esac
     done
 
+    # Validate review_type against allowlist
+    case "$review_type" in
+        healthcheck|architecture-review|create-spec|create-plan) ;;
+        *) die "Unknown type '$review_type'. Valid types: healthcheck, architecture-review, create-spec, create-plan" ;;
+    esac
+
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
         mode="smart"
@@ -102,19 +110,25 @@ review_gate_generate() {
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Check if stdin is a TTY (interactive terminal) - fail fast instead of hanging
-    if [[ -t 0 ]]; then
-        die "No prompt provided. Pipe a prompt via stdin or use a heredoc. Example:
-  cat prompt.md | $0 output-dir --type healthcheck
-  $0 output-dir --type healthcheck <<< 'Review this codebase'"
+    # Load base prompt from type-specific file
+    local base_prompt_file="$PLUGIN_ROOT/prompts/generators/${review_type}.md"
+    local base_prompt=""
+    if [[ -f "$base_prompt_file" ]]; then
+        base_prompt=$(cat "$base_prompt_file")
+    else
+        die "Prompt file not found for type '$review_type': $base_prompt_file"
     fi
 
-    # Read prompt from stdin
-    local prompt_content
-    prompt_content=$(cat)
+    # Read additional context from stdin (optional)
+    local stdin_content=""
+    if [[ ! -t 0 ]]; then
+        stdin_content=$(cat)
+    fi
 
-    if [[ -z "${prompt_content//[[:space:]]/}" ]]; then
-        die "No prompt provided on stdin"
+    # Combine base prompt with stdin context
+    local prompt_content="$base_prompt"
+    if [[ -n "${stdin_content//[[:space:]]/}" ]]; then
+        prompt_content="$base_prompt"$'\n\n'"$stdin_content"
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
