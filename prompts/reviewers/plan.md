@@ -14,13 +14,15 @@ ${PLAN_CONTENT}
    - Does the plan follow a clear structure with sections for:
      - Context/Goals
      - Scope/Non-Goals
+     - Assumptions & Constraints
      - Prerequisites
      - High-level Approach
-     - Detailed Tasks (with dependencies, verification, rollback)
+     - Technical Design (architecture, data model, interfaces, file impact summary)
      - Risks & Edge Cases / Breaking Changes
      - Testing & Validation
      - Rollback Strategy
      - Open Questions (if any)?
+   - Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) — that is handled separately by `/create-tasks`
    - If the structure differs, is it still easy to execute and review?
 
 2. **Completeness**
@@ -51,8 +53,8 @@ ${PLAN_CONTENT}
      - The feature level (how to back out the entire rollout)?
 
 7. **Testability & Verification**
-   - Does each significant task include concrete verification steps (tests to add/run, manual checks, metrics to watch)?
-   - Is there an overall testing strategy that maps back to goals/risks (unit, integration, regression, manual, monitoring)?
+   - Does the plan include a clear testing strategy that maps back to goals/risks (unit, integration, regression, manual, monitoring)?
+   - Are verification approaches described for key components and acceptance criteria?
 
 8. **Scope & Iteration Strategy**
    - Is the scope appropriate (not gold-plated, not under-specified)?
@@ -63,12 +65,14 @@ ${PLAN_CONTENT}
 
 A good implementation plan should:
 
-1. **Be executable end-to-end** — A competent engineer unfamiliar with the project should be able to follow it without major guesswork.
-2. **Make dependencies explicit** — Both between tasks and on external systems, teams, or environments.
-3. **Minimize risk** — Use flags, phased rollout, and clear rollback steps for risky changes.
+1. **Provide clear technical direction** — A competent engineer should understand the architecture, design choices, and constraints without major guesswork.
+2. **Make dependencies explicit** — On external systems, teams, prerequisites, or environments.
+3. **Minimize risk** — Use flags, phased rollout, and clear rollback strategies for risky changes.
 4. **Ground itself in reality** — Reference concrete files, modules, and systems, or explicitly mark new artifacts as "to be created".
-5. **Tie verification to work** — Every major task has clear, concrete verification steps.
+5. **Map to acceptance criteria** — Show how the design addresses each spec AC.
 6. **Respect scope** — Focus on what's needed to ship safely; defer nice-to-haves.
+
+Note: Plans focus on **design** (architecture, data model, interfaces, file impact). **Task breakdown** (Task 1, Task 2, dependencies, verification per task) is handled separately by `/create-tasks`.
 
 ### Guidelines for Flagging Issues
 

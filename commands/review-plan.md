@@ -58,14 +58,16 @@ If no path is provided, the most recent plan from `~/.claude/plans/` will be use
 
 Reviewers evaluate the plan for:
 
-- **Template & Structure** - Does it follow the standard implementation plan template (context, scope, prerequisites, detailed tasks with verification and rollback, risks, testing, rollback, open questions)?
-- **Completeness** - Does it cover all necessary changes, including migrations, config/env, rollout, rollback, monitoring, and documentation?
-- **Correctness** - Are the proposed modifications technically sound and grounded in the described codebase?
-- **Order of Operations & Dependencies** - Are steps sequenced correctly (prerequisites and safety work first)?
+- **Template & Structure** - Does it follow the standard implementation plan template (context, scope, assumptions/constraints, prerequisites, high-level approach, technical design, risks, testing, rollback, open questions)?
+- **Completeness** - Does it cover all necessary design decisions, including architecture, data model, interfaces, file impact, rollout, rollback, and monitoring?
+- **Correctness** - Are the proposed design choices technically sound and grounded in the described codebase?
+- **Prerequisites & Dependencies** - Are prerequisites called out explicitly (access, infra, flags)? Are external dependencies clear?
 - **Edge Cases & Risk** - Are error paths, fallbacks, and failure modes addressed?
 - **Breaking Changes & Rollout/Rollback** - Are compatibility risks identified, with clear rollout and rollback strategies?
-- **Testability & Verification** - Can the implementation be verified, with per-task verification steps and an overall testing strategy?
+- **Testability & Verification** - Is there a clear testing strategy that maps to acceptance criteria?
 - **Scope** - Is the plan appropriately scoped (MVP vs follow-ups, clear non-goals)?
+
+Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) — that is handled separately by `/create-tasks`.
 
 ## Iteration Loop
 

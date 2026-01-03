@@ -25,23 +25,21 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 1. **Output only the plan markdown** (no preamble or analysis), and only after either (a) you have asked clarifying questions and received answers, or (b) you have explicitly determined that no clarifications are needed.
 2. Use the exact template structure below.
 3. If details are missing or ambiguous, list them in **Open Questions** instead of inventing.
-4. Make dependencies explicit between tasks and on external prerequisites.
-5. **Prerequisites must be called out** before the detailed tasks.
-6. **Every significant task must include verification steps** (how to check that the work is correct).
-7. **Rollback must be covered**:
-   - At the task level (how to undo that task's changes).
-   - At the plan level (how to roll back the feature safely).
+4. Make external dependencies explicit (systems, teams, prerequisites).
+5. **Prerequisites must be called out** before the Technical Design.
+6. **Testing strategy must be included** (types of tests, verification approach).
+7. **Rollback must be covered** — how to roll back the feature safely if deployment fails.
 8. When referencing specific files/modules/config:
    - Prefer using paths and modules that appear in the provided context.
    - If you are introducing a new file/module, label it clearly as **New** (e.g., "New: `path/to/file.ts`").
    - Do **not** claim a file/module already exists unless the context strongly supports it.
 9. Keep scope explicit:
-   - Clearly distinguish MVP tasks from follow-up/nice-to-have tasks when relevant.
+   - Clearly distinguish MVP from follow-up/nice-to-have work when relevant.
    - Include clear **Non-Goals**.
-10. Keep the plan concrete and actionable:
-    - Steps should be small enough that an engineer can execute them without reinterpretation.
-    - Use the provided codebase context when deciding where to place changes.
-11. **Trace back to spec**: Reference which spec Acceptance Criteria or Edge Cases each task supports.
+10. Keep the plan concrete and design-focused:
+    - Focus on architecture, data model, interfaces, and file impact.
+    - Do NOT include detailed task breakdowns (Task 1, Task 2, etc.) — that is handled by `/create-tasks`.
+11. **Trace back to spec**: Reference which spec Acceptance Criteria are addressed by which parts of the design.
 12. **Include constraints**: Capture architectural and testing constraints that guide implementation.
 13. **Acceptance Criteria quality**: Ensure all AC describe observable outcomes, not proxy metrics. See **Acceptance Criteria Quality** below.
 
@@ -76,7 +74,7 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 - [Must-have regression coverage]
 
 ## Prerequisites
-[Checklist of things that must be true before starting the detailed tasks.]
+[Checklist of things that must be true before starting implementation.]
 
 - [ ] [Access, credentials, or approvals required]
 - [ ] [Feature flag framework or config mechanism available]
@@ -90,45 +88,26 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 2. [High-level step 2]
 3. [High-level step 3]
 
-## Detailed Plan
+## Technical Design
 
-[Each task should be small, ordered, and reference concrete files/modules where possible. Use dependencies to make ordering explicit. Reference which spec Acceptance Criteria or Edge Cases each task supports (e.g., "Covers AC #2").]
+### Architecture
+[How components fit together, data flow, key boundaries. Include diagrams if helpful.]
 
-### Task 1: [Short title]
-- **Goal**: [What this task accomplishes]
-- **Covers**: [Spec AC #N, Edge Case X, or "Implementation-only"]
-- **Depends on**: [Prerequisites or earlier tasks, e.g., "Prerequisites", "Task 2"] (or "None")
-- **Changes**:
-  - [Code/config changes, with file/module paths when known. Mark new artifacts as **New**: `path/to/file`.]
-- **Verification**:
-  - [Tests to add/run, commands, or manual checks]
-  - [How you confirm this task is correct and safe]
-- **Rollback**:
-  - [How to undo this task's changes only (e.g., revert commit, disable flag, remove config)]
+### Data Model
+[Entities, relationships, state transitions — or "N/A" if not applicable.]
 
-### Task 2: [Short title]
-- **Goal**: [...]
-- **Covers**: [...]
-- **Depends on**: [...]
-- **Changes**:
-  - [...]
-- **Verification**:
-  - [...]
-- **Rollback**:
-  - [...]
+### API/Interface Design
+[Key interfaces, contracts, protocols — or "N/A" if not applicable.]
 
-### Task 3: [Short title]
-- **Goal**: [...]
-- **Covers**: [...]
-- **Depends on**: [...]
-- **Changes**:
-  - [...]
-- **Verification**:
-  - [...]
-- **Rollback**:
-  - [...]
+### File Impact Summary
 
-[Add more tasks as needed. For follow-up or nice-to-have items, label them clearly (e.g., "Task N (follow-up)").]
+[Enumerate files that will be created or modified. Use the verification table from context.]
+
+| Path | Status | Description |
+|------|--------|-------------|
+| `src/module/file.ts` | Exists | Add new method/handler |
+| `src/module/new_file.ts` | **New** | New component for X |
+| `tests/module/file.test.ts` | **New** | Tests for new functionality |
 
 ## Risks, Edge Cases & Breaking Changes
 
@@ -149,7 +128,7 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 - **Rollout Strategy**:
   - [How the change will be rolled out: flag gating, staged rollout, canary, etc.]
 
-## Testing & Validation
+## Testing & Validation Strategy
 
 [Ensure all spec Acceptance Criteria are traceable to tests or manual checks listed here.]
 
@@ -167,12 +146,12 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 ### Acceptance Criteria Coverage
 | Spec AC | Covered By |
 |---------|------------|
-| AC #1: [summary] | Task N, Unit test X |
-| AC #2: [summary] | Task M, E2E test Y |
+| AC #1: [summary] | Technical Design section X, Unit tests |
+| AC #2: [summary] | Data Model, E2E tests |
 
-## Rollback Strategy (Plan-Level)
+## Rollback Strategy
 
-[How to roll back the entire change if needed, not just individual tasks.]
+[How to roll back the entire change if needed.]
 
 - [Steps to disable or revert the feature (e.g., disable flags, revert DB changes, rollback deployment)]
 - [How to verify rollback success]
@@ -180,10 +159,16 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 
 ## Open Questions
 
-[Unresolved decisions or areas where the implementer must follow up. Reference affected tasks.]
+[Unresolved decisions or areas where the implementer must follow up.]
 
-- [Question 1] — [Which task(s) or area it blocks]
+- [Question 1] — [Which area it affects]
 - [Question 2]
+
+## Next Steps
+
+After this plan is approved, run `/create-tasks` to generate:
+- `--beads` → Beads issues with dependencies for multi-agent execution
+- (default) → TODO.md checklist for simpler tracking
 ```
 
 ## Acceptance Criteria Quality

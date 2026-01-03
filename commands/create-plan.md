@@ -247,7 +247,7 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 
 #### Starting Point & Scope
 - Are we following a spec? Is it stable or are there known deviations?
-- Is this plan for MVP only, or should it include follow-up tasks?
+- Is this plan for MVP only, or should it include follow-up work?
 - What's explicitly excluded (Non-Goals)?
 
 #### Code Areas & File-Level Targets
