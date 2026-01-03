@@ -14,30 +14,36 @@ Use the Bash tool to run the generator command. This spawns all available genera
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-Pass `$ARGUMENTS` directly. The generator accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck $ARGUMENTS
+OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /healthcheck --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast
 
 # User: /healthcheck "focus on the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --focus "focus on the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --focus "focus on the API layer"
 
 # User: /healthcheck --mode max "review error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode max --focus "review error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode max --focus "review error handling"
 
 # User: /healthcheck --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=healthcheck --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
 
-This will output drafts from each available model. Wait for it to complete (may take several minutes).
+The generator writes drafts to the output directory and returns their paths:
+- `$OUTPUT_DIR/codex.md`
+- `$OUTPUT_DIR/gemini.md`
+- `$OUTPUT_DIR/claude.md`
+
+**IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
 ## Step 2: Synthesize the Drafts
 

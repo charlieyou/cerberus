@@ -331,13 +331,21 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
+The generator requires an output directory as the first argument:
+
 ```bash
 # MODE is extracted from --mode argument, defaults to smart
 MODE="${MODE:-smart}"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-spec --mode "$MODE" --prompt-file "$PROMPT_TMP"
+OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/spec-drafts" || mktemp -d)
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-spec --mode "$MODE" --prompt-file "$PROMPT_TMP"
 ```
 
-Wait for the generator output containing all drafts.
+The generator writes drafts to the output directory and returns their paths:
+- `$OUTPUT_DIR/codex.md`
+- `$OUTPUT_DIR/gemini.md`
+- `$OUTPUT_DIR/claude.md`
+
+**IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
 ### Phase 5: Synthesize Drafts
 

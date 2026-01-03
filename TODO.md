@@ -22,11 +22,23 @@
   - Categories: API/Interface, Data, UI/UX, Performance, Security, Integration, Ops/Infra, Migration, Testing, Compliance, Cost, Docs, Dependencies, Alternatives, Risks, Timeline
   - Interview asks which categories apply, then only shows relevant sections
 
-* allow more rounds of review after max iter is hit
 * run import-lint in architecture review
-* spawns should block?
-* code review flag to not fix the code, iterate on the review
-* dont pass a diff directly to the code review, agents should explore themselves
-* after pass, it should fix the non blocking issues
+
+## Spec/Plan Generation
+
 * separate templates from orchestration - users can choose their own template to use
+
+## All Reviews
+
+* after pass, it should fix the non blocking issues
+* allow more rounds of review after max iter is hit
 * strictness modes -- fail on any error, require 3, etc
+
+## Code Review
+
+* dont pass a diff directly to the code review, agents should explore themselves
+* code review flag to not fix the code, iterate on the review
+
+## BD Groom Command
+
+* Batch small issues

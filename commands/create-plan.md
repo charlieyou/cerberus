@@ -338,7 +338,7 @@ EOF
 
 Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
 
-Spawn generators with the mode flag. The generate script writes drafts to files and returns their paths:
+Spawn generators with the mode flag. The generate script requires an output directory as the first argument and writes drafts to files, returning their paths:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
@@ -346,8 +346,8 @@ Spawn generators with the mode flag. The generate script writes drafts to files 
 ```bash
 # MODE is extracted from --mode argument, defaults to smart
 MODE="${MODE:-smart}"
-OUTPUT_DIR="${REVIEW_DIR:-/tmp}/generator-drafts"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type create-plan --mode "$MODE" --prompt-file "$PROMPT_TMP" --output-dir "$OUTPUT_DIR"
+OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-plan --mode "$MODE" --prompt-file "$PROMPT_TMP"
 ```
 
 The generate script will output paths to the draft files:

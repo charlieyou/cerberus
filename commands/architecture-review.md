@@ -55,31 +55,37 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-Pass `$ARGUMENTS` directly. The generator accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 If you skip the analysis step, omit `--analysis-file`.
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
+OUTPUT_DIR=$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --focus "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode max --focus "review the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode max --focus "review the API layer"
 
 # User: /architecture-review --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
 
-This spawns all available generators to independently analyze the codebase. Wait for the command to complete and capture the output containing all drafts.
+The generator writes drafts to the output directory and returns their paths:
+- `$OUTPUT_DIR/codex.md`
+- `$OUTPUT_DIR/gemini.md`
+- `$OUTPUT_DIR/claude.md`
+
+**IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
 ### 3. Synthesize Drafts
 
