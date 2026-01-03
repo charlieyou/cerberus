@@ -15,14 +15,14 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 
 ### 1. Run Analysis Tools (Outside the Model)
 
-Run any analysis tooling directly in Bash, then pass the outputs into the generator via `--analysis-file`. This keeps the model read-only while still benefiting from tool data.
+Run any analysis tooling directly in Bash, then include the outputs in the prompt. This keeps the model read-only while still benefiting from tool data.
 
 Example (adjust paths/package names as needed):
 
-```bash
-ANALYSIS_TMP=$(mktemp)
+Run analysis tools and capture output in a variable:
 
-{
+```bash
+ANALYSIS=$(
   echo "## lizard"
   if command -v uvx >/dev/null 2>&1; then
     uvx lizard -C 15 -L 80 -w src | head -n 50
@@ -32,10 +32,6 @@ ANALYSIS_TMP=$(mktemp)
   echo ""
   echo "## grimp"
   if [[ -x "$HOME/.claude/skills/grimp-architecture/.venv/bin/python" ]]; then
-    # Adjust PKG and PYTHONPATH for your project layout:
-    # - Standard layout (mypackage/):     PKG=mypackage, PYTHONPATH=.
-    # - src layout (src/mypackage/):      PKG=mypackage, PYTHONPATH=src
-    # - Flat src layout (src/__init__.py): PKG=src, PYTHONPATH=.
     PKG="src"
     PYTHONPATH="." \
       $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
@@ -43,10 +39,10 @@ ANALYSIS_TMP=$(mktemp)
   else
     echo "grimp not available"
   fi
-} > "$ANALYSIS_TMP"
+)
 ```
 
-You can add more tools (e.g., jscpd) by appending sections to the same file.
+You can add more tools (e.g., jscpd) by appending sections.
 
 ### 2. Spawn Generators
 
@@ -55,26 +51,20 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
-If you skip the analysis step, omit `--analysis-file`.
+The generator reads the prompt from stdin. Use a heredoc to pass the base prompt plus analysis output and optional focus:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)" --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
-```
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/architecture-drafts" --type architecture-review --mode "${MODE:-smart}" <<PROMPT
+$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/architecture-review.md")
 
-Examples:
-```bash
-# User: /architecture-review --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast
+## Pre-run Analysis Outputs
 
-# User: /architecture-review "focus on error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --focus "focus on error handling"
+$ANALYSIS
 
-# User: /architecture-review --mode max "review the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode max --focus "review the API layer"
+## Focus
 
-# User: /architecture-review --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast focus on error handling
+${FOCUS:-General architecture review}
+PROMPT
 ```
 
 Defaults to `--mode smart` if not specified.

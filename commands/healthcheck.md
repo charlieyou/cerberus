@@ -14,25 +14,42 @@ Use the Bash tool to run the generator command. This spawns all available genera
 - `--mode smart`: 600000ms (10 minutes)
 - `--mode max`: 900000ms (15 minutes)
 
-The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+The generator reads the prompt from stdin. Use a heredoc to pass the base healthcheck prompt plus optional focus:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)" --type=healthcheck $ARGUMENTS
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR/healthcheck-drafts" --type healthcheck --mode "${MODE:-smart}" <<PROMPT
+$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
+
+## Focus
+
+${FOCUS:-General code health review}
+PROMPT
 ```
 
 Examples:
 ```bash
 # User: /healthcheck --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast <<PROMPT
+$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
+PROMPT
 
 # User: /healthcheck "focus on the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --focus "focus on the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode smart <<PROMPT
+$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
+
+## Focus
+
+focus on the API layer
+PROMPT
 
 # User: /healthcheck --mode max "review error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode max --focus "review error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode max <<PROMPT
+$(cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/healthcheck.md")
 
-# User: /healthcheck --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast focus on error handling
+## Focus
+
+review error handling
+PROMPT
 ```
 
 Defaults to `--mode smart` if not specified.

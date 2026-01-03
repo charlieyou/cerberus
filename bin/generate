@@ -18,19 +18,16 @@ source "$SCRIPT_DIR/review-gate-models.sh"
 
 usage() {
     cat <<'USAGE'
-Usage: generate <output-dir> [options]
+Usage: generate <output-dir> [options] < prompt.md
 
 Arguments:
   <output-dir>            Required. Directory to write draft files to
 
+Reads prompt from stdin. Pipe or use heredoc.
+
 Options:
   --type <type>         Named preset: healthcheck, architecture-review, create-spec, create-plan (default: healthcheck)
   --mode <level>        Intelligence mode: fast, smart, max
-  --prompt-file <path>  Path to custom prompt file
-  --prompt <text>       Inline prompt text (replaces base prompt)
-  --focus <text>        Focus area to append to base prompt
-  --analysis-file <path>  Append analysis output from a file (repeatable)
-  [--] <focus>          Optional focus text (or trailing text; -- forces focus)
 USAGE
 }
 
@@ -43,13 +40,8 @@ die() {
 
 review_gate_generate() {
     local review_type="healthcheck"
-    local prompt_file=""
-    local prompt_inline=""
-    local focus_area=""
     local mode=""
     local output_dir=""
-    local -a extra_args=()
-    local -a analysis_files=()
 
     # First positional argument is required output directory
     if [[ $# -eq 0 ]]; then
@@ -90,65 +82,18 @@ review_gate_generate() {
                 mode="${2:-}"
                 shift 2
                 ;;
-            --prompt-file=*)
-                prompt_file="${1#*=}"
-                shift
-                ;;
-            --prompt-file)
-                prompt_file="${2:-}"
-                shift 2
-                ;;
-            --prompt=*)
-                prompt_inline="${1#*=}"
-                shift
-                ;;
-            --prompt)
-                prompt_inline="${2:-}"
-                shift 2
-                ;;
-            --focus=*)
-                focus_area="${1#*=}"
-                shift
-                ;;
-            --focus)
-                focus_area="${2:-}"
-                shift 2
-                ;;
-            --analysis-file=*)
-                analysis_files+=("${1#*=}")
-                shift
-                ;;
-            --analysis-file)
-                analysis_files+=("${2:-}")
-                shift 2
-                ;;
             -h|--help)
                 usage
                 return 0
-                ;;
-            --)
-                shift
-                if [[ $# -gt 0 ]]; then
-                    extra_args+=("$@")
-                fi
-                break
                 ;;
             -*)
                 die "Unknown option '$1'"
                 ;;
             *)
-                extra_args+=("$1")
-                shift
+                die "Unexpected argument '$1'"
                 ;;
         esac
     done
-
-    if [[ ${#extra_args[@]} -gt 0 ]]; then
-        if [[ -n "$focus_area" ]]; then
-            die "Focus provided both via --focus and positional arguments"
-        fi
-        focus_area="${extra_args[*]}"
-    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -157,61 +102,19 @@ review_gate_generate() {
     validate_mode "$mode"
     resolve_intelligence_mode "$mode"
 
-    # Resolve prompt content
-    local prompt_content=""
-
-    if [[ -n "$prompt_inline" ]]; then
-        prompt_content="$prompt_inline"
-    elif [[ -n "$prompt_file" ]]; then
-        if [[ ! -f "$prompt_file" ]]; then
-            die "Prompt file not found: $prompt_file"
-        fi
-        prompt_content=$(cat "$prompt_file")
-    else
-        local prompt_path="$PLUGIN_ROOT/prompts/generators/${review_type}.md"
-
-        if [[ -f "$prompt_path" ]]; then
-            prompt_content=$(cat "$prompt_path")
-        else
-            die "No prompt found for type '$review_type' at $prompt_path"
-        fi
+    # Check if stdin is a TTY (interactive terminal) - fail fast instead of hanging
+    if [[ -t 0 ]]; then
+        die "No prompt provided. Pipe a prompt via stdin or use a heredoc. Example:
+  cat prompt.md | $0 output-dir --type healthcheck
+  $0 output-dir --type healthcheck <<< 'Review this codebase'"
     fi
 
-    if [[ ${#analysis_files[@]} -gt 0 ]]; then
-        local analysis_block=$'## Pre-run Analysis Outputs\n'
-        for analysis_file in "${analysis_files[@]}"; do
-            if [[ -z "$analysis_file" ]]; then
-                die "Analysis file path cannot be empty"
-            fi
-            if [[ ! -f "$analysis_file" ]]; then
-                die "Analysis file not found: $analysis_file"
-            fi
-            analysis_block+=$'\n'"### $(basename "$analysis_file")"$'\n'
-            analysis_block+="$(cat "$analysis_file")"$'\n'
-        done
-        prompt_content+=$'\n\n'"$analysis_block"
-    fi
+    # Read prompt from stdin
+    local prompt_content
+    prompt_content=$(cat)
 
-    # Inject focus area after ## Input section if provided
-    if [[ -n "$focus_area" ]]; then
-        if [[ "$prompt_content" == *"## Input"* ]]; then
-            # Insert after the ## Input section's content paragraph
-            prompt_content=$(echo "$prompt_content" | awk -v focus="$focus_area" '
-                /^## Input$/ { in_input=1 }
-                in_input && seen_text && /^$/ && !inserted {
-                    print "**User-specified focus**: " focus
-                    print
-                    inserted=1
-                    in_input=0
-                    next
-                }
-                in_input && !/^$/ && !/^## Input$/ { seen_text=1 }
-                { print }
-            ')
-        else
-            # Fallback: prepend as prominent instruction
-            prompt_content="**User-specified focus**: $focus_area"$'\n\n'"$prompt_content"
-        fi
+    if [[ -z "${prompt_content//[[:space:]]/}" ]]; then
+        die "No prompt provided on stdin"
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
@@ -291,7 +194,7 @@ review_gate_generate() {
         read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
         echo "Spawning Claude generator (model: $claude_model)..." >&2
         (
-            if echo "$prompt_content" | claude -p --model "$claude_model" \
+            if printf '%s' "$prompt_content" | claude -p --model "$claude_model" \
                 --allowedTools "${claude_allowed_tools[@]}" \
                 --disallowedTools "${claude_disallowed_tools[@]}" \
                 > "$claude_draft" 2>&1; then
