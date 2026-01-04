@@ -58,12 +58,11 @@ If no path is provided, the most recent plan from `~/.claude/plans/` will be use
 
 Reviewers evaluate the plan for:
 
-- **Template & Structure** - Does it follow the standard implementation plan template (context, scope, assumptions/constraints, prerequisites, high-level approach, technical design, risks, testing, rollback, open questions)?
-- **Completeness** - Does it cover all necessary design decisions, including architecture, data model, interfaces, file impact, rollout, rollback, and monitoring?
+- **Template & Structure** - Does it follow the standard implementation plan template (context, scope, assumptions/constraints, prerequisites, high-level approach, technical design, risks, testing, open questions)?
+- **Completeness** - Does it cover all necessary design decisions, including architecture, data model, interfaces, file impact, and monitoring?
 - **Correctness** - Are the proposed design choices technically sound and grounded in the described codebase?
 - **Prerequisites & Dependencies** - Are prerequisites called out explicitly (access, infra, flags)? Are external dependencies clear?
 - **Edge Cases & Risk** - Are error paths, fallbacks, and failure modes addressed?
-- **Breaking Changes & Rollout/Rollback** - Are compatibility risks identified, with clear rollout and rollback strategies?
 - **Testability & Verification** - Is there a clear testing strategy that maps to acceptance criteria?
 - **Scope** - Is the plan appropriately scoped (MVP vs follow-ups, clear non-goals)?
 
