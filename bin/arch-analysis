@@ -8,7 +8,7 @@
 set -euo pipefail
 
 GRIMP_VENV="$HOME/.agents/skills/grimp-architecture/.venv/bin/python"
-GRIMP_SCRIPT="$HOME/.agents/skills/grimp-architecture/scripts/grimp.py"
+GRIMP_SCRIPT="$HOME/.agents/skills/grimp-architecture/scripts/grimp_cli.py"
 
 # --- Tool Implementations ---
 
