@@ -333,7 +333,7 @@ Model override variables (override the mode-based defaults):
 
 | Variable | Description |
 |----------|-------------|
-| `CODEX_MODEL_OVERRIDE` | Override Codex model (default: `gpt-5.2-codex`) |
+| `CODEX_MODEL_OVERRIDE` | Override Codex model (default: `gpt-5.2`) |
 | `GEMINI_MODEL_OVERRIDE` | Override Gemini model (e.g., `gemini-2.5-pro`) |
 | `CLAUDE_MODEL_OVERRIDE` | Override Claude model (e.g., `sonnet`) |
 | `CODEX_REASONING_EFFORT_OVERRIDE` | Override Codex reasoning effort (`medium`/`high`/`xhigh`) |
