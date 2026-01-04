@@ -129,7 +129,7 @@ Interview the user, run multi-model generators, synthesize an implementation pla
 2. **Codebase research** - Identify files, patterns, and integration points
 3. **File verification** - Check which files exist vs need creation
 4. **Draft skeleton** - Create plan template with TBD placeholders
-5. **Implementation interview** - Ask about scope, constraints, rollout, testing
+5. **Implementation interview** - Ask about scope, constraints, and testing
 6. **Multi-model generation** - Codex, Gemini, and Claude generate draft plans
 7. **Subagent synthesis** - Merge drafts into coherent plan (preserves context)
 8. **Review gate** - Iterate until all reviewers pass
@@ -228,11 +228,11 @@ Examples:
 ### Plan Review
 
 - **Template & Structure** - Follows standard plan template with all required sections?
-- **Completeness** - Covers migrations, config, rollout, rollback, monitoring, docs?
+- **Completeness** - Covers migrations, config, monitoring, docs?
 - **Correctness** - Technically sound and grounded in the codebase?
 - **Order of Operations** - Dependencies sequenced correctly (prerequisites first)?
 - **Edge Cases & Risk** - Error paths, fallbacks, and failure modes addressed?
-- **Breaking Changes & Rollout/Rollback** - Compatibility risks identified with clear strategies?
+- **Breaking Changes & Compatibility** - Compatibility risks identified with clear strategies?
 - **Testability & Verification** - Per-task verification steps and overall testing strategy?
 - **Scope** - Appropriately scoped (MVP vs follow-ups, clear non-goals)?
 

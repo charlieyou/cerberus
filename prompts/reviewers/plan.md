@@ -20,14 +20,13 @@ ${PLAN_CONTENT}
      - Technical Design (architecture, data model, interfaces, file impact summary)
      - Risks & Edge Cases / Breaking Changes
      - Testing & Validation
-     - Rollback Strategy
      - Open Questions (if any)?
    - Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) — that is handled separately by `/create-tasks`
    - If the structure differs, is it still easy to execute and review?
 
 2. **Completeness**
    - Are all necessary steps included to ship safely?
-   - Look for missing migrations, config/env changes, rollout/rollback, monitoring, documentation, and testing.
+   - Look for missing migrations, config/env changes, monitoring, documentation, and testing.
    - Are prerequisites called out explicitly (e.g., access, infra, flags)?
 
 3. **Correctness**
@@ -37,20 +36,16 @@ ${PLAN_CONTENT}
 
 4. **Dependency Ordering**
    - Are tasks sequenced so that prerequisites are completed before dependent work?
-   - Are risky changes gated behind flags or safe rollout steps where appropriate?
+   - Are risky changes gated behind flags where appropriate?
    - Watch for circular dependencies or steps that assume work that hasn't happened yet.
 
 5. **Edge Cases & Risk**
    - Does the plan address error handling, fallbacks, and degraded modes?
-   - Are failure modes (e.g., partial rollout, external service downtime) considered?
+   - Are failure modes (e.g., external service downtime) considered?
    - Are monitoring/alerting needs called out for risky areas?
 
-6. **Breaking Changes, Rollout & Rollback**
+6. **Breaking Changes & Compatibility**
    - Are backwards compatibility risks identified and mitigated?
-   - Is there a coherent rollout strategy (flags, phased rollout, dark launch, etc.)?
-   - Is there a clear rollback strategy at both:
-     - The task level (how to undo a specific change)
-     - The feature level (how to back out the entire rollout)?
 
 7. **Testability & Verification**
    - Does the plan include a clear testing strategy that maps back to goals/risks (unit, integration, regression, manual, monitoring)?
@@ -67,7 +62,7 @@ A good implementation plan should:
 
 1. **Provide clear technical direction** — A competent engineer should understand the architecture, design choices, and constraints without major guesswork.
 2. **Make dependencies explicit** — On external systems, teams, prerequisites, or environments.
-3. **Minimize risk** — Use flags, phased rollout, and clear rollback strategies for risky changes.
+3. **Minimize risk** — Use flags for risky changes.
 4. **Ground itself in reality** — Reference concrete files, modules, and systems, or explicitly mark new artifacts as "to be created".
 5. **Map to acceptance criteria** — Show how the design addresses each spec AC.
 6. **Respect scope** — Focus on what's needed to ship safely; defer nice-to-haves.
@@ -99,10 +94,9 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 ### Red Flags
 
 - Plan references files/modules/functions as existing when they are clearly marked elsewhere as new, or contradict known context.
-- Steps that would overwrite or break existing functionality without mitigation or rollback.
+- Steps that would overwrite or break existing functionality without mitigation.
 - Missing migrations, config changes, or environment setup for data or behavioral changes.
 - Circular dependencies between steps or unclear ordering for risky operations.
-- No rollback strategy for risky changes (either per-task or for the overall rollout).
 - High-risk changes without any verification or monitoring plan.
 - **Gameable acceptance criteria** (see below)
 

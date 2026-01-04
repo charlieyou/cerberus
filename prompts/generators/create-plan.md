@@ -11,10 +11,10 @@ Before generating the plan, you MUST ask clarifying questions if ANY of the foll
 1. **Scope boundaries** - What's explicitly in vs out of scope?
 2. **Constraints** - Performance requirements, backwards compatibility needs, testing requirements?
 3. **Dependencies** - What must exist before this work can begin? What teams/systems need to be coordinated with?
-4. **Rollout strategy** - Feature flags? Phased rollout? Direct deployment?
+4. **Feature flags** - Should this be flag-gated for safer changes?
 5. **Risk tolerance** - How much testing/validation is expected before shipping?
 
-Base your questions on gaps or ambiguities in the provided spec/context; reference specific sections or assumptions when possible (e.g., "The spec does not mention rollout strategy…").
+Base your questions on gaps or ambiguities in the provided spec/context; reference specific sections or assumptions when possible.
 
 If the spec and context are clear and complete, you may skip questions and proceed directly to generating the plan. But if you're making assumptions that could affect the implementation, **ask first**. When in doubt about clarity on any of the above areas, err on the side of asking questions before proceeding.
 
@@ -28,20 +28,19 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 4. Make external dependencies explicit (systems, teams, prerequisites).
 5. **Prerequisites must be called out** before the Technical Design.
 6. **Testing strategy must be included** (types of tests, verification approach).
-7. **Rollback must be covered** — how to roll back the feature safely if deployment fails.
-8. When referencing specific files/modules/config:
+7. When referencing specific files/modules/config:
    - Prefer using paths and modules that appear in the provided context.
    - If you are introducing a new file/module, label it clearly as **New** (e.g., "New: `path/to/file.ts`").
    - Do **not** claim a file/module already exists unless the context strongly supports it.
-9. Keep scope explicit:
+8. Keep scope explicit:
    - Clearly distinguish MVP from follow-up/nice-to-have work when relevant.
    - Include clear **Non-Goals**.
-10. Keep the plan concrete and design-focused:
+9. Keep the plan concrete and design-focused:
     - Focus on architecture, data model, interfaces, and file impact.
     - Do NOT include detailed task breakdowns (Task 1, Task 2, etc.) — that is handled by `/create-tasks`.
-11. **Trace back to spec**: Reference which spec Acceptance Criteria are addressed by which parts of the design.
-12. **Include constraints**: Capture architectural and testing constraints that guide implementation.
-13. **Acceptance Criteria quality**: Ensure all AC describe observable outcomes, not proxy metrics. See **Acceptance Criteria Quality** below.
+10. **Trace back to spec**: Reference which spec Acceptance Criteria are addressed by which parts of the design.
+11. **Include constraints**: Capture architectural and testing constraints that guide implementation.
+12. **Acceptance Criteria quality**: Ensure all AC describe observable outcomes, not proxy metrics. See **Acceptance Criteria Quality** below.
 
 ## Plan Template
 
@@ -119,14 +118,12 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 - [External dependency failures]: [Timeouts, retries, circuit breakers, etc.]
 
 ### Breaking Changes & Compatibility
-[Implement the spec's Backwards Compatibility and Rollout requirements. If any requirement can't be met, list under Open Questions.]
+[Implement the spec's Backwards Compatibility requirements. If any requirement can't be met, list under Open Questions.]
 
 - **Potential Breaking Changes**:
   - [Describe any change that might affect existing clients or workflows]
 - **Mitigations**:
   - [Feature flags, dual-writing, versioned APIs, etc.]
-- **Rollout Strategy**:
-  - [How the change will be rolled out: flag gating, staged rollout, canary, etc.]
 
 ## Testing & Validation Strategy
 
@@ -141,21 +138,13 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 - **Manual Verification**
   - [Scenarios and environments for manual testing]
 - **Monitoring / Observability**
-  - [Metrics, logs, and alerts to watch during rollout]
+  - [Metrics, logs, and alerts to watch]
 
 ### Acceptance Criteria Coverage
 | Spec AC | Covered By |
 |---------|------------|
 | AC #1: [summary] | Technical Design section X, Unit tests |
 | AC #2: [summary] | Data Model, E2E tests |
-
-## Rollback Strategy
-
-[How to roll back the entire change if needed.]
-
-- [Steps to disable or revert the feature (e.g., disable flags, revert DB changes, rollback deployment)]
-- [How to verify rollback success]
-- [Any data repair or cleanup required]
 
 ## Open Questions
 

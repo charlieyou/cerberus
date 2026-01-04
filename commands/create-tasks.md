@@ -40,10 +40,9 @@ The user provides either:
    - Risks & Edge Cases
    - Testing & Validation Strategy
    - Acceptance Criteria Coverage table
-   - Rollback Strategy
 
 3. **Plan completeness check**:
-   - If plan contains `[TBD]` in Technical Design, Testing Strategy, or Rollback Strategy:
+   - If plan contains `[TBD]` in Technical Design or Testing Strategy:
      - **Warn** the user that plan is incomplete
      - **Default**: Abort and recommend running `/create-plan` review gate
      - **Override** (only if user explicitly requests): Create a preliminary "Clarify design gaps" task before implementation tasks
@@ -102,7 +101,6 @@ Generate tasks following these rules:
 - **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3)
 - **File assignments**: Use `File Impact Summary` to assign `Primary Files` to each task
 - **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has exactly one primary owner task (supporting tasks may reference ACs but must not claim ownership)
-- **Rollback per task**: Derive from plan's `Rollback Strategy` section
 
 #### Sizing Rules
 
@@ -152,12 +150,12 @@ Generate tasks following these rules:
 
 **Cross-cutting changes** (same pattern across many files):
 1. One design/POC task in a small slice
-2. 1-2 rollout tasks grouped by subsystem
+2. 1-2 implementation tasks grouped by subsystem
 3. Optional cleanup/flag-removal task
 
 **Feature flags**: When flags are involved, create three tasks:
 1. Add flag + guarded implementation
-2. Rollout/monitor
+2. Enable flag + verify
 3. Flag removal/cleanup (optional, can be deferred)
 
 #### Wiring & Propagation Rules
@@ -256,9 +254,6 @@ What this task accomplishes (1-2 sentences)
 - Examples: `main.py` → full app, `create_app()` factory, CLI entrypoint, DI container resolution
 - Mark that task with `[integration-path-test]` so validation can verify coverage
 - Other tasks may depend on this task or include it in final verification
-
-**Rollback**:
-- How to undo if needed
 
 **Notes for Agent**:
 - Edge cases, gotchas, constraints

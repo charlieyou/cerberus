@@ -55,7 +55,7 @@ Modes control depth and rigor. Use soft budgets—exit early when quality is suf
 **Soft budget rules:**
 - Stop interviewing when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
 - In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
-- In `max`, actively probe for edge cases, failure modes, and rollback scenarios even if user doesn't raise them
+- In `max`, actively probe for edge cases and failure modes even if user doesn't raise them
 
 ## Input
 
@@ -79,7 +79,7 @@ Before deep research, establish what you're planning against:
 
 2. **Ingest starting artifacts**:
    - If a spec is available, skim:
-     - Goals, Non-Goals, Acceptance Criteria, Technical Design, Backwards Compatibility (including rollout/rollback), and Edge Cases.
+     - Goals, Non-Goals, Acceptance Criteria, Technical Design, Backwards Compatibility, and Edge Cases.
 
 Document:
 - `spec_path` (if any)
@@ -200,10 +200,6 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 |---------|----------|
 | [Pre-fill from spec if available] | [How this plan addresses it] |
 
-## Rollback Strategy
-- [TBD: How to revert if deployment fails]
-- [TBD: Feature flag strategy if applicable]
-
 ## Open Questions
 - [List unknowns from research]
 
@@ -230,7 +226,7 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 **Phase 2 Rules:**
 - You may only ask questions that directly correspond to existing `[TBD]` placeholders in the skeleton
 - After each user answer, mentally note which `[TBD]` it resolves (you'll update the skeleton context in Phase 3)
-- Continue interviewing until Technical Design, Testing Strategy, and Rollback sections have minimal TBDs
+- Continue interviewing until Technical Design and Testing Strategy sections have minimal TBDs
 - Explicitly declare "Phase 2 complete" before proceeding to Phase 3
 
 **Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Architecture section needs clarity on data flow—options: [A] sync via API, [B] event-driven, [C] you decide. Which?"
@@ -255,15 +251,14 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 - Specific files/modules to avoid or refactor instead of extending?
 - Ownership boundaries to respect?
 
-#### Dependencies & Rollout Strategy
+#### Dependencies
 - Does this depend on other features, migrations, or infra work?
 - Should risky changes be flag-gated? Where are flags defined?
-- Rollout approach: flag-gated → canary → full, or "big bang"?
 
 #### Data, Migrations & Backwards Compatibility
 - Any schema or data shape changes?
 - Dual-read/dual-write or versioned payloads needed?
-- Compatibility with existing clients during rollout?
+- Compatibility with existing clients?
 
 #### Testing & Verification Strategy
 - What types of tests are required? (unit, integration, E2E)
@@ -315,12 +310,10 @@ Create a compact context block for generators:
 - [ ] Scope (MVP vs follow-ups) and Non-Goals
 - [ ] Technical Design (architecture, data model, interfaces)
 - [ ] Verified file/module list (exists vs New vs ambiguous)
-- [ ] Dependencies and rollout strategy
+- [ ] Dependencies
 - [ ] Implementation constraints (architectural, areas to avoid)
 - [ ] Testing & verification strategy (coverage, quality gates)
 - [ ] Mapping from spec Acceptance Criteria to design approach
-- [ ] Rollback strategy
-- [ ] Risk/rollback expectations
 
 ### Phase 4: Run Multi-Model Generators
 
@@ -386,7 +379,7 @@ Synthesis rules:
 7. Ensure all template sections are complete:
    - Context & Goals, Scope & Non-Goals, Assumptions & Constraints
    - Prerequisites, High-Level Approach, Technical Design (architecture/data/interfaces)
-   - Risks/Edge Cases, Testing & Validation, Rollback Strategy, Open Questions
+   - Risks/Edge Cases, Testing & Validation, Open Questions
 
 Update the plan file in place with the synthesized content.
 
@@ -427,7 +420,7 @@ If reviewers find issues:
 ## Done
 
 When the plan passes review:
-- Summarize key design decisions, major risks, and rollout strategy
+- Summarize key design decisions and major risks
 - Offer next step: **Run `/create-tasks`** to generate execution artifacts:
   - `--beads` → Create Beads issues with dependencies for multi-agent parallelization
   - (default) → Generate TODO.md checklist for simpler tracking

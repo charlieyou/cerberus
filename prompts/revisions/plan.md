@@ -14,10 +14,9 @@ While revising, ensure the plan follows the standard template structure:
 - Assumptions & Constraints
 - Prerequisites
 - High-Level Approach
-- Detailed Tasks (with explicit dependencies, concrete changes, per-task verification, and per-task rollback)
+- Detailed Tasks (with explicit dependencies, concrete changes, and per-task verification)
 - Risks, Edge Cases & Breaking Changes
 - Testing & Validation (including mapping to risky areas)
-- Plan-Level Rollback Strategy
 - Open Questions (if anything remains unclear)
 
 If the current plan is unstructured, first refactor it into this template, then apply the requested fixes.
@@ -28,7 +27,7 @@ If the current plan is unstructured, first refactor it into this template, then 
 - Reviewers flagged a **false positive** (decision is intentional or already documented)
 - A finding was **addressed this iteration** and you want to prevent re-flagging
 - There are **scope/constraint decisions** already discussed with the user
-- You have **questions for reviewers** ("should we include rollback for X given time constraints?")
+- You have **questions for reviewers** ("should we include X given time constraints?")
 
 **Do NOT use author-context instead of fixing** clear, correct issues you can resolve in the plan.
 
@@ -43,7 +42,7 @@ Keep it to a short summary (1-2 paragraphs max). Update each iteration to reflec
 After making your revisions:
 1. Re-read the updated plan sections
 2. Verify the fixes address the original issues
-3. Check for consistency across sections (dependencies, task ordering, rollback strategies)
+3. Check for consistency across sections (dependencies, task ordering)
 4. Set author-context if there are false positives or clarifications for reviewers
 5. Only then finalize and STOP
 
