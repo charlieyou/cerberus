@@ -92,9 +92,10 @@ Create a skeleton based on your research. Start with Tier S fields; expand as co
 
 **IMPORTANT: When you finish Phase 1b:**
 - Write the skeleton spec to a file (e.g., `docs/YYYY-MM-DD-FEATURE-spec.md`) — this becomes the canonical doc
-- The skeleton MUST contain `[TBD]` placeholders — do NOT fill them in yet
-- Present the skeleton and your first batch of interview questions to the user (this begins Phase 2)
-- **STOP and wait for user answers** before continuing with further questions or moving to Phase 3
+- The skeleton MUST contain `[TBD]` placeholders — fill them only after user answers in Phase 2
+- Present the skeleton and your first batch of interview questions via `AskUserQuestion`
+
+**PHASE 2 GATE**: After sending Interview Batch 1, end your turn immediately. Do not proceed to Phase 3+ until the user answers or issues a stop signal. This gate is mandatory.
 
 ```markdown
 # [Feature Name]
@@ -184,6 +185,9 @@ Create a skeleton based on your research. Start with Tier S fields; expand as co
 - [ ] Metrics available to confirm success criteria
 - [ ] Rollback condition defined
 
+**Decisions made** *(S/M/L)*
+- [Record "you decide" / "whatever's standard" resolutions here]
+
 **Open questions** *(S/M/L)*
 - [List unknowns from research]
 ```
@@ -194,88 +198,103 @@ Create a skeleton based on your research. Start with Tier S fields; expand as co
 - Mark unknowns explicitly as `[TBD]` or `[TBD: hint about what's needed]`
 - When outputting final spec, omit sections marked for other tiers
 
-### Phase 2: Strategic Interviewing
+### Phase 2: Prioritized BFS Interview
 
-**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Do NOT just print questions as text—the user cannot respond to printed text. Each question must be asked using the tool to get a response.
+**Load the interview engine:** Read `${CLAUDE_PLUGIN_ROOT}/prompts/interview-engine.md` for the full mechanism. Key principles below.
 
-Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot answer from the codebase.
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Put coverage + numbered questions + off-ramp in a single tool call. Plain text questions are not interactive.
 
-**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Acceptance Criteria section needs concrete conditions—what does 'done' look like for this feature?"
+#### Core Mechanism: Prioritized Breadth-First Search
 
-**Interview Principles**
+Ask questions in order of **priority** (P0-P3) and **depth** (L0-L3), with **breadth across topics before depth in any single topic**.
 
-1. **Be thorough, not brief** — Ask all relevant questions, even if it takes multiple rounds
-2. **Propose, don't probe** — Offer concrete options with tradeoffs instead of open-ended questions
-3. **Reference evidence** — "I see X in Y—should this follow the same approach?"
-4. **Decide when delegated** — If user says "you decide," make a sensible choice and record it
-5. **Cover gaps, not ground** — Skip questions the codebase already answers
-6. **Map to template** — Every answer should fill a specific spec section
-7. **Iterate until complete** — Don't stop after one batch; continue asking until all TBDs are addressed
-8. **Handle halted interviews** — If the user stops responding or declines further questions, mark remaining TBDs as Open Questions with your best guess or "needs product decision"
+| Priority | What | Examples |
+|----------|------|----------|
+| P0 | Blockers / correctness | Scope boundaries, acceptance criteria, backwards compatibility |
+| P1 | Major design | Primary flow, testing strategy, success criteria |
+| P2 | Edge cases | Alternate flows, failure modes, observability |
+| P3 | Polish | Ergonomics, minor UX improvements |
 
-**Progressive Question Coverage by Tier:**
+| Depth | Scope | Examples |
+|-------|-------|----------|
+| L0 | Vision / outcome | What problem? Who? Definition of done? |
+| L1 | Behavior / approach | Primary flow, key states, acceptance criteria shape |
+| L2 | Decomposition | Requirement breakdown, GWT examples, test layers |
+| L3 | Implementation details | Exact event schemas, precise error codes, rollout mechanics |
 
-**Tier S (always ask):**
-- [ ] Problem: What's broken/missing?
-- [ ] Change summary: What are we changing and why?
-- [ ] Scope boundary: What does this affect? What's untouched?
-- [ ] UX impact: Is this user-visible? If so, what changes?
-- [ ] Acceptance: 2-5 bullets of "when X, then Y"
-- [ ] Validation: How do we confirm this worked after release?
+**Anti-deep-dive rule:** Don't ask L2 for Topic A until all P0 topics have L1 coverage.
 
-**Tier M (add if score 2-4):**
-- [ ] Goal: One-sentence goal ("Enable <user> to <do X> so that <benefit>")
-- [ ] Success criteria: Metric + threshold + timeframe
-- [ ] Non-goals: What's explicitly out of scope?
-- [ ] Constraints: Compatibility, performance, security?
-- [ ] Primary flow: Happy path step-by-step
-- [ ] Key states: Empty/loading/success/error
-- [ ] Requirements: 3-7 MUST statements with examples
+#### Stop Signals (MUST HONOR IMMEDIATELY)
 
-**Tier L (add if score 5+):**
-- [ ] Alternate flows: Cancel, retry, permission denied, partial completion
-- [ ] Edge cases: Per-requirement boundary conditions
-- [ ] Instrumentation: Events/metrics to track
-- [ ] Launch checklist: Rollback conditions, verification steps
+| Signal Type | Trigger Phrases | Action |
+|-------------|-----------------|--------|
+| **Global stop** | "enough detail", "that's enough", "stop here", "we're good", "ship it" | End interview, remaining TBDs → Open Questions |
+| **Depth cap** | "keep it high-level", "stop at L1", "no deep dive", "details later" | Set max_depth, continue within cap |
+| **Priority cap** | "skip P2/P3", "just blockers", "P0/P1 only" | Set max_priority, lower items → Open Questions |
+| **Per-topic stop** | "enough about testing", "park observability", "skip auth" | Mark topic capped, continue others |
+| **Per-question skip** | "skip this one", "next question" | Mark TBD as Open Question, no follow-ups |
+| **Delegation** | "you decide", "whatever's standard" | Pick safe default, record in Decisions |
+| **Uncertainty** | "I don't know" | Offer 2-3 options; if declined → Open Question |
 
-**Tier upgrade prompt:** When signals accumulate, ask:
-> "This is touching [signals]. Want to expand the spec to cover [additional fields]?"
+#### Batch Presentation Format
 
-**Question Categories** (adapt order based on context):
+Present questions with context and an **explicit off-ramp**:
 
-#### Outcome & Scope (Section 1)
-- What problem are we solving? Who's impacted?
-- What's the one-sentence goal?
-- How will we measure success? (metric + threshold + timeframe)
-- What's explicitly out of scope?
-- Any constraints? (compatibility, performance, security, environment)
+```
+**Interview Batch [N]** (Priority: P0, Depth: L0)
 
-#### User Experience & Flows (Section 2)
-- What's the primary workflow/happy path?
-- What are the key states? (empty, loading, success, error)
-- What alternate flows matter? (cancel, retry, permission denied)
-- What feedback does the user need?
+Current coverage: [P0 in progress at L0]
 
-#### Requirements + Verification (Section 3)
-- What MUST the system do? (help derive R1, R2, R3...)
-- For each requirement: what's the Given/When/Then?
-- What are the edge cases and boundaries?
-- Any non-functional requirements? (performance, accessibility)
+Questions (answer any, skip any):
 
-#### Instrumentation & Release (Section 4)
-- What events/metrics do we need to track?
-- How do we know this is working in production?
-- What would trigger a rollback?
+1. [Topic: Scope] What's explicitly out of scope?
+   - Options: [A] Exclude X and Y, [B] Exclude only X, [C] You decide
+   
+2. [Topic: Requirements] What MUST the system guarantee?
+   - Evidence: Similar features use [pattern] — should we follow that?
 
-**Handling Common Responses**
+3. [Topic: Verification] How will we validate this works?
+   - Options: [A] Manual QA, [B] E2E tests, [C] Both
+
+---
+Reply using `1: <answer> 2: <answer>` format (skip numbers to leave as Open Questions).
+Or say "enough detail" to stop, "keep it high-level" to cap depth.
+```
+
+#### After Each Batch
+
+1. **Update skeleton immediately** — fill TBDs or mark as Open Questions
+2. **Check for stop signals** in the response
+3. **Ask one meta-question**: "Continue to L{k+1}, stop here, or drill deeper on a specific topic?"
+
+#### Progressive Coverage by Tier
+
+**Tier S (P0/L0-L1):**
+- Problem/context, change summary, scope boundary
+- UX impact, acceptance bullets, validation method
+
+**Tier M (add P1/L1-L2):**
+- Goal, success criteria, non-goals
+- Primary flow, key states
+- Requirements with MUST + examples
+
+**Tier L (add P2/L2-L3):**
+- Constraints, alternate flows
+- Edge cases per requirement
+- Full GWT, instrumentation, launch checklist
+
+**Tier upgrade prompt:** When complexity signals accumulate:
+> "This touches [signals]. Want to expand to Tier M/L for [additional coverage]?"
+
+#### Handling Responses
 
 | User says... | You should... |
 |--------------|---------------|
-| "You decide" | Make a reasonable choice, record in Decisions Made |
-| "I don't know" | Propose 2-3 options with tradeoffs, ask them to pick |
-| "Whatever's standard" | Check codebase conventions, propose the standard approach |
-| "Skip this" | Record as explicit Non-Goal or Open Question |
-| Vague answer | Rephrase as concrete acceptance criterion, confirm |
+| "You decide" | Pick safe default, record in Decisions, stop deeper |
+| "I don't know" | Offer 2-3 options with tradeoffs |
+| "Whatever's standard" | Use codebase conventions, record decision |
+| "Skip this" | Record as Non-Goal or Open Question |
+| Stop signal | End interview or cap depth immediately |
 
 ### Phase 3: Build Spec Context
 
@@ -393,13 +412,13 @@ The subagent will:
 4. Update the spec file in place
 5. Return a summary to you
 
-**Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
+**Delegate draft reading to the subagent** — reading drafts yourself would consume your context. The subagent reads drafts, synthesizes, and returns a summary.
 
 ### Phase 6: Verify Spec
 
 The subagent updated the spec file in Phase 5. Confirm the [TBD] placeholders have been filled.
 
-### Phase 7: Review Gate with Interactive Refinement
+### Phase 7: Review Gate with Prioritized BFS Refinement
 
 Spawn external reviewers on the spec file:
 
@@ -407,50 +426,66 @@ Spawn external reviewers on the spec file:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review docs/YYYY-MM-DD-FEATURE-spec.md
 ```
 
-**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Put findings + options in a single tool call. Plain text questions are not interactive.
 
-**Interactive Refinement Loop:**
+#### Prioritized BFS for Review Findings
 
-When reviewers find issues, DO NOT just fix them silently. Instead:
+Treat reviewer findings as a queue, just like interview questions. Process them in **priority-first, breadth-first order**:
 
-1. **Present findings to the user** — Show reviewer feedback grouped by priority (P0/P1 first)
-2. **Ask clarifying questions** — For each finding, ask the user:
-   - "Reviewer flagged [issue]. How would you like to address this?"
-   - "They suggest [X], but [Y] is also possible. Which approach?"
-   - "This seems like a scope decision—should we include [Z] or mark it out-of-scope?"
-3. **Propose solutions** — Offer 2-3 concrete options for resolving each issue
-4. **Record decisions** — Add resolutions to the Decisions Made section
-5. **Fix the spec** based on user input
-6. **Re-run the review gate** — Continue until all reviewers pass or mode's max rounds reached
+1. **Group findings by priority** — P0 across all sections, then P1, then P2, etc.
+2. **Address breadth before depth** — Surface all P0s before deep-diving into any; within a priority, ask L0 clarification questions first, then apply deeper rewrites (L1/L2)
+3. **Ask user to resolve ambiguous ones** — Don't silently fix substantive issues
 
-**Questions to ask during refinement:**
+**Priority definitions:**
+- **P0**: Blocking/incorrect — spec is fundamentally unclear or contradictory
+- **P1**: Major clarity issues — will cause implementation failures
+- **P2**: Should clarify before implementation
+- **P3**: Nits and minor improvements
 
-- "Reviewers noted [gap]. Can you clarify [specific detail]?"
-- "There's disagreement about [X]. Which interpretation is correct?"
-- "This edge case wasn't covered: [scenario]. What should happen?"
-- "Reviewer thinks [section] is too vague to implement. Can you be more specific about [detail]?"
+#### Batch Presentation Format for Findings
 
-**Priority definitions** (use reviewer's assigned severity, or these guidelines):
-- P0: Blocking/incorrect behavior — spec is fundamentally unclear or contradictory
-- P1: Major clarity/coverage issues — will cause implementation failures
-- P2: Should be clarified before implementation
-- P3: Nits and minor improvements
+```
+**Review Findings Batch [N]** (Priority: P0)
 
-**Do NOT:**
-- Silently fix substantive issues (scope, behavior, design) without consulting the user
-- Assume you know the right answer for ambiguous issues
-- Skip asking about P2/P3 issues (they often reveal important context)
+Reviewers found 2 P0 issues and 3 P1 issues. Let's address P0s first:
 
-**OK to silently fix:** Typos, formatting, and purely mechanical issues the reviewers flagged.
+1. [Section: Scope] Unclear what happens when user cancels mid-flow
+   - Options: [A] Rollback to last save, [B] Discard changes, [C] You decide
 
-**Handling unresolved disagreements:** If neither reviewers nor user can decide, record it as an Open Question or explicit tradeoff in Decisions Made, and ensure the spec clearly flags the ambiguity.
+2. [Section: Requirements] R2 has no verification method
+   - Options: [A] Add unit test, [B] Add E2E test, [C] Manual validation
 
-**After applying fixes:** Summarize changes back to the user in 2-3 bullets so they see how feedback was applied. If an issue changes behavior, update Acceptance Criteria and User Stories, not just Decisions Made.
+---
+Reply "enough detail" to stop drilling into fixes, or "skip P2/P3" to focus only on blockers.
+```
 
-**Round limits by mode:**
-- `fast`: 1 round max (P0/P1 issues only; leave other feedback as future improvements)
-- `smart`: up to 2 rounds (ask about P0-P2 issues)
-- `max`: up to 3 rounds (ask about all issues, probe for additional concerns)
+#### Stop Signals for Review
+
+| Signal | Action |
+|--------|--------|
+| "enough detail" / "that's good" | Stop asking about remaining issues, mark as Open Questions |
+| "skip P2/P3" / "just fix blockers" | Only address P0/P1, leave rest as future improvements |
+| "you decide" | Pick safe fix, record in Decisions Made |
+
+#### Refinement Rules
+
+**DO:**
+- Present all findings of current priority before asking about any
+- Offer 2-3 concrete options for resolving each ambiguous finding
+- Record decisions in Decisions Made section
+- After applying fixes, summarize changes in 2-3 bullets
+
+**Always ask for user input on:**
+- Substantive issues (scope, behavior, design) — present options before fixing
+- Ambiguous issues — offer 2-3 concrete choices
+- All findings at current priority level — address breadth before depth
+
+**OK to silently fix:** Typos, formatting, and purely mechanical issues.
+
+#### Round limits by mode:
+- `fast`: 1 round (P0/P1 only; leave rest as future improvements)
+- `smart`: up to 2 rounds (P0-P2)
+- `max`: up to 3 rounds (all priorities, probe for additional concerns)
 
 ## Done
 

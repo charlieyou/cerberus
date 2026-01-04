@@ -30,17 +30,17 @@ You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**:
 - Even if the user asks to "skip the interview" or "just generate the plan", you **MUST** still produce an initial plan with `[TBD]` and run at least one batch of questions
 - At the start of each major phase (0–7), explicitly state which phase you are in and what you will do next
 
-## Failure Modes to Avoid
+## Success Criteria (Mandatory)
 
-❌ **Jumping from Phase 1 research directly to a fully-filled Implementation Plan** — This is disallowed. You must show an initial plan with `[TBD]` and interview the user first.
+✅ **Produce skeleton with `[TBD]` placeholders in Phase 1c** — The initial plan file must contain unfilled placeholders, not completed content.
 
-❌ **Skipping the interview phase** — Even if the spec seems complete, you must run at least one batch of Phase 2 questions to confirm assumptions.
+✅ **Run at least one interview batch in Phase 2** — Use `AskUserQuestion` to confirm assumptions, even if the spec seems complete.
 
-❌ **Obeying user requests to skip phases** — If the user says "just generate the plan" or "skip the interview", politely explain you must follow the workflow and proceed with the initial plan + interview.
+✅ **Follow the workflow even when user asks to skip** — If user says "just generate the plan", explain the workflow and proceed with skeleton + interview.
 
-❌ **Outputting generator drafts inline** — Drafts are written to files; synthesis reads from those files.
+✅ **Write generator drafts to files** — Call the generate script which writes drafts to disk; pass file paths to the synthesis subagent.
 
-❌ **Synthesizing in your main context** — Synthesis MUST use a subagent to preserve your context.
+✅ **Delegate synthesis to a subagent** — Use the Task tool for synthesis to preserve your main context for the review gate.
 
 ## Mode Behavior
 
@@ -134,10 +134,10 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 **IMPORTANT: When you finish Phase 1c:**
 - Write the skeleton plan to a file (e.g., `docs/YYYY-MM-DD-FEATURE-plan.md`) — this becomes the canonical doc
-- The skeleton MUST contain `[TBD]` placeholders — do NOT fill them in yet
-- Present the skeleton and your first batch of interview questions to the user (this begins Phase 2)
-- **STOP and wait for user answers** before continuing with further questions or moving to Phase 3
-- Do NOT call generators or attempt to fully fill the plan yet
+- The skeleton MUST contain `[TBD]` placeholders — fill them only after user answers in Phase 2
+- Present the skeleton and your first batch of interview questions via `AskUserQuestion`
+
+**PHASE 2 GATE**: After sending Interview Batch 1, end your turn immediately. Do not proceed to Phase 3+ until the user answers or issues a stop signal. This gate is mandatory.
 
 ```markdown
 # Implementation Plan: [Short Name]
@@ -215,76 +215,111 @@ After this plan is approved, run `/create-tasks` to generate:
 - Mark unknowns as `[TBD]` or `[TBD: hint]`
 - The skeleton drives Phase 2 questions—every TBD is a potential question
 
-### Phase 2: Implementation-Focused Interviewing
+### Phase 2: Prioritized BFS Interview
 
 **Prerequisites:** Phase 1c skeleton MUST exist before starting Phase 2.
 
-**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Do NOT just print questions as text—the user cannot respond to printed text. Each question must be asked using the tool to get a response.
+**Load the interview engine:** Read `${CLAUDE_PLUGIN_ROOT}/prompts/interview-engine.md` for the full mechanism. Key principles below.
 
-Ask questions in batches, prioritized by importance. Put critical questions first so the user can stop answering when there's enough detail. Only ask what you cannot infer from the spec and codebase.
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Put coverage + numbered questions + off-ramp in a single tool call. Plain text questions are not interactive.
+
+#### Core Mechanism: Prioritized Breadth-First Search
+
+Ask questions in order of **priority** (P0-P3) and **depth** (L0-L3), with **breadth across topics before depth in any single topic**.
+
+| Priority | What | Examples |
+|----------|------|----------|
+| P0 | Blockers / correctness | Scope, backwards compatibility, data loss, testing baseline |
+| P1 | Major design | Architecture, API contracts, ownership, rollout strategy |
+| P2 | Edge cases | Failure modes, migrations, observability |
+| P3 | Polish | Optimizations, refactors, minor improvements |
+
+| Depth | Scope | Examples |
+|-------|-------|----------|
+| L0 | Vision / outcome | What spec? What MVP? What's excluded? |
+| L1 | Architecture | Boundaries, data flow, API direction, test strategy |
+| L2 | Components | File targets, endpoints, modules, test layers |
+| L3 | Implementation | Exact files, schemas, algorithms, test cases |
+
+**Anti-deep-dive rule:** Don't ask L2 for Topic A until all P0 topics have L1 coverage.
+
+#### Stop Signals (MUST HONOR IMMEDIATELY)
+
+| Signal Type | Trigger Phrases | Action |
+|-------------|-----------------|--------|
+| **Global stop** | "enough detail", "that's enough", "stop here", "we're good", "ship it" | End interview, remaining TBDs → Open Questions |
+| **Depth cap** | "keep it high-level", "stop at L1", "no deep dive", "details later" | Set max_depth, continue within cap |
+| **Priority cap** | "skip P2/P3", "just blockers", "P0/P1 only" | Set max_priority, lower items → Open Questions |
+| **Per-topic stop** | "enough about testing", "park observability", "skip migrations" | Mark topic capped, continue others |
+| **Per-question skip** | "skip this one", "next question" | Mark TBD as Open Question, no follow-ups |
+| **Delegation** | "you decide", "whatever's standard" | Pick safe default, record in Assumptions & Constraints |
+| **Uncertainty** | "I don't know" | Offer 2-3 options; if declined → Open Question |
+
+#### Batch Presentation Format
+
+Present questions with context and an **explicit off-ramp**:
+
+```
+**Interview Batch [N]** (Priority: P0, Depth: L1)
+
+Current coverage: [P0 complete through L0, now at L1]
+
+Questions (answer any, skip any):
+
+1. [Topic: Architecture] How should data flow between components?
+   - Options: [A] Sync via API, [B] Event-driven, [C] You decide
+   - Evidence: I see pub/sub in `services/events/` — should we use that?
+   
+2. [Topic: Testing] What test types are required?
+   - Options: [A] Unit only, [B] Unit + integration, [C] Full pyramid
+
+3. [Topic: Compatibility] Are there existing clients to maintain?
+   - Evidence: Found API v2 consumers in `clients/`
+
+---
+Reply using `1: <answer> 2: <answer>` format (skip numbers to leave as Open Questions).
+Or say "enough detail" to stop, "keep it high-level" to cap depth.
+```
+
+#### After Each Batch
+
+1. **Update skeleton immediately** — fill TBDs or mark as Open Questions
+2. **Check for stop signals** in the response
+3. **Ask one meta-question**: "Continue to L{k+1}, stop here, or drill deeper on a specific topic?"
 
 **Phase 2 Rules:**
-- You may only ask questions that directly correspond to existing `[TBD]` placeholders in the skeleton
-- After each user answer, mentally note which `[TBD]` it resolves (you'll update the skeleton context in Phase 3)
+- You may only ask questions that correspond to existing `[TBD]` placeholders in the skeleton
 - Continue interviewing until Technical Design and Testing Strategy sections have minimal TBDs
 - Explicitly declare "Phase 2 complete" before proceeding to Phase 3
 
-**Interview from the skeleton:** Frame questions around filling TBD placeholders. Example: "The Architecture section needs clarity on data flow—options: [A] sync via API, [B] event-driven, [C] you decide. Which?"
+#### Topic Coverage for Plans
 
-**Interview Principles**
+**P0/L0-L1 (always cover):**
+- Scope: spec reference, MVP vs follow-ups, non-goals
+- Architecture: high-level approach, boundaries, ownership
+- Compatibility: backwards compatibility, breaking changes
+- Testing: strategy, coverage requirements
 
-1. **Propose, don't probe** — Offer concrete implementation options and tradeoffs.
-2. **Reference evidence** — "I see feature flags in `config/features.ts`—should this be flag-gated?"
-3. **Decide when delegated** — If they say "you decide," choose a safe approach and record it.
-4. **Cover gaps, not ground** — Don't re-ask questions the spec or code already answers.
-5. **Map to plan template** — Every answer should map to plan sections.
+**P1/L1-L2 (cover in smart/max modes):**
+- Data: schema changes, migrations
+- API: interface contracts, versioning
+- Implementation: file targets, dependencies
+- Rollout: feature flags, monitoring
 
-**Question Categories** (adapt order to context):
+**P2/L2-L3 (cover in max mode):**
+- Failure modes, edge cases
+- Operational concerns (metrics, alerts)
+- Performance envelopes
 
-#### Starting Point & Scope
-- Are we following a spec? Is it stable or are there known deviations?
-- Is this plan for MVP only, or should it include follow-up work?
-- What's explicitly excluded (Non-Goals)?
-
-#### Code Areas & File-Level Targets
-- Which parts of the codebase are in scope? (API only vs API + UI + jobs)
-- Specific files/modules to avoid or refactor instead of extending?
-- Ownership boundaries to respect?
-
-#### Dependencies
-- Does this depend on other features, migrations, or infra work?
-- Should risky changes be flag-gated? Where are flags defined?
-
-#### Data, Migrations & Backwards Compatibility
-- Any schema or data shape changes?
-- Dual-read/dual-write or versioned payloads needed?
-- Compatibility with existing clients?
-
-#### Testing & Verification Strategy
-- What types of tests are required? (unit, integration, E2E)
-- Critical flows to explicitly cover?
-- Manual validation steps or environments required?
-
-#### Implementation & Testing Constraints
-- Any architectural constraints? (e.g., "extend module X, don't add new service")
-- Areas to avoid touching?
-- Required test coverage levels or quality gates?
-- Performance/load testing requirements?
-- Must-have regression coverage?
-
-#### Operational Concerns
-- What monitoring/observability signals matter? (metrics, logs, alerts)
-- SLO/SLA or performance envelope to respect?
-
-**Handling Common Responses**
+#### Handling Responses
 
 | User says... | You should... |
 |--------------|---------------|
 | "You decide" | Choose safe, conventional pattern; record in Assumptions & Constraints |
-| "I don't know" | Propose 2–3 concrete strategies with tradeoffs; ask them to choose |
+| "I don't know" | Propose 2–3 concrete strategies with tradeoffs |
 | "Whatever's standard" | Use existing codebase patterns; say so explicitly |
 | "Skip this" | Record under Non-Goals or Open Questions |
-| Vague answer | Rephrase as concrete task or verification step; confirm |
+| Stop signal | End interview or cap depth immediately |
 
 ### Phase 3: Build Plan Context
 
@@ -391,13 +426,13 @@ The subagent will:
 4. Update the plan file in place
 5. Return a summary to you
 
-**Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
+**Delegate draft reading to the subagent** — reading drafts yourself would consume your context. The subagent reads drafts, synthesizes, and returns a summary.
 
 ### Phase 6: Verify Plan
 
 The subagent updated the plan file in Phase 5. Confirm the [TBD] placeholders have been filled.
 
-### Phase 7: Review Gate (Iterative)
+### Phase 7: Review Gate with Prioritized BFS Refinement
 
 Spawn external reviewers on the plan file:
 
@@ -405,15 +440,66 @@ Spawn external reviewers on the plan file:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
-**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.
+**IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Put findings + options in a single tool call. Plain text questions are not interactive.
 
-If reviewers find issues:
-1. Fix the plan file
-2. Re-run the review gate command
-3. Iterate until all reviewers pass or mode's max rounds reached:
-   - `fast`: 1 round max
-   - `smart`: up to 2 rounds
-   - `max`: up to 3 rounds
+#### Prioritized BFS for Review Findings
+
+Treat reviewer findings as a queue. Process in **priority-first, breadth-first order**:
+
+1. **Group findings by priority** — P0 across all sections, then P1, then P2, etc.
+2. **Address breadth before depth** — Surface all P0s before deep-diving into any; within a priority, ask L0 clarification questions first, then apply deeper rewrites (L1/L2)
+3. **Ask user to resolve ambiguous ones** — Don't silently fix substantive design decisions
+
+**Priority definitions:**
+- **P0**: Blocking — plan is unclear, contradictory, or missing critical info
+- **P1**: Major issues — will cause implementation failures
+- **P2**: Should clarify before implementation
+- **P3**: Nits and improvements
+
+#### Batch Presentation Format for Findings
+
+```
+**Review Findings Batch [N]** (Priority: P0)
+
+Reviewers found 2 P0 issues and 4 P1 issues. Addressing P0s first:
+
+1. [Section: Architecture] Unclear ownership boundary between services
+   - Options: [A] Service A owns, [B] Service B owns, [C] Shared ownership
+
+2. [Section: Testing] No verification for backwards compatibility
+   - Options: [A] Add integration tests, [B] Manual verification, [C] Skip (accept risk)
+
+---
+Reply "enough detail" to stop, or "skip P2/P3" to focus only on blockers.
+```
+
+#### Stop Signals for Review
+
+| Signal | Action |
+|--------|--------|
+| "enough detail" / "that's good" | Stop asking, mark remaining as Open Questions |
+| "skip P2/P3" / "just fix blockers" | Only address P0/P1 |
+| "you decide" | Pick safe fix, record in Assumptions & Constraints |
+
+#### Refinement Rules
+
+**DO:**
+- Present all findings of current priority before asking about any
+- Offer 2-3 concrete options for resolving each ambiguous finding
+- Record decisions in Assumptions & Constraints section
+- After applying fixes, summarize changes in 2-3 bullets
+
+**Always ask for user input on:**
+- Substantive issues (architecture, ownership, design) — present options before fixing
+- Ambiguous issues — offer 2-3 concrete choices
+- All findings at current priority level — address breadth before depth
+
+**OK to silently fix:** Typos, formatting, and purely mechanical issues.
+
+#### Round limits by mode:
+- `fast`: 1 round (P0/P1 only)
+- `smart`: up to 2 rounds (P0-P2)
+- `max`: up to 3 rounds (all priorities)
 
 ## Done
 
