@@ -95,46 +95,96 @@ Before generating tasks, verify all referenced files:
 
 Generate tasks following these rules:
 
+#### TDD Task Ordering
+
+**Goal**: Produce tasks that enforce "red before green" and keep parallel work safe: (1) code compiles early, (2) end-to-end behavior is specified early via failing integration tests, (3) implementation tasks turn tests green with local unit tests.
+
+**Definitions**:
+- **Feature**: the user-visible capability being delivered (often 1 user story). If multiple user stories share one top-level execution path, treat them as one feature for integration-path coverage.
+- **Integration-path test**: an integration test that traverses the composition root / DI / container wiring path.
+- **Skeleton**: compile-ready stubs + wiring only (no real behavior).
+
+**Per-Feature Steps** — follow in order for each feature/user story:
+
+1. **Skeleton + Integration test task** (combined when creating new modules/classes)
+   - Outcome: project builds/compiles AND at least one integration test fails for the intended reason (behavior unimplemented), not because of missing imports/wiring.
+   - Skeleton work: define types/interfaces/signatures, exports, DI bindings, routes/handlers registration, and stub bodies. Stubs return empty/default or raise/throw `NotImplemented`.
+   - Integration test work: write failing integration test(s) that exercise the end-to-end behavior.
+   - Coverage: exactly one task per feature MUST include `[integration-path-test]` in the task title.
+   - Path: the tagged test MUST traverse the composition root/DI/container path (entrypoint/factory/container resolution).
+   - Note: Skeleton and integration test are combined because they're tightly coupled—you can't write the integration test without the skeleton, and a skeleton without tests provides no value.
+
+2. **Implementation tasks** (parallel where possible)
+   - Outcome: make the integration tests pass by implementing behavior with unit tests + production code in the same task.
+   - Dependency: every implementation task depends on the skeleton+integration task.
+   - Within-task TDD steps:
+     a. Write failing unit test(s)
+     b. Implement the smallest change to pass unit tests
+     c. Confirm integration test(s) pass
+   - Integration test stability: keep integration test files unchanged during implementation tasks. If integration tests must change, create a dedicated small task "Adjust integration tests" and add dependencies.
+
+**Bugfix Variant**:
+1. Create a failing regression test first (integration or unit).
+2. Fix in an implementation task that includes unit tests + code changes (same task).
+3. If the regression test is an integration-path test for that feature, tag it with `[integration-path-test]`.
+
+**Dependency Rules**:
+- Required order: Skeleton+Integration → Implementation.
+- Chain-length constraint: keep dependency chains ≤ 4 tasks by splitting implementation into parallel tasks that touch different files.
+- Clarification/gate tasks (e.g., "Clarify file locations") count as Foundation phase, not toward feature chain length.
+
+**Example** (new module):
+- T001 [integration-path-test] Skeleton + Integration: add `src/foo/service.ts` + DI registration (stubs) + failing end-to-end test via `create_app()`
+- T002 Implement behavior A (unit tests + code)
+  Dependencies: T002 → T001
+- T003 Implement behavior B (unit tests + code) [parallel if files don't overlap]
+  Dependencies: T003 → T001
+
 #### Plan → Task Mapping
 
 - **Setup/Foundation phases**: Derive from `Prerequisites` and infra/config items in `High-Level Approach`
-- **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3)
+- **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3), applying TDD ordering within each story
 - **File assignments**: Use `File Impact Summary` to assign `Primary Files` to each task
 - **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has exactly one primary owner task (supporting tasks may reference ACs but must not claim ownership)
 
 #### Sizing Rules
 
-**Acceptable range**: 2-18 files, 5-55 edits per task.
+Size tasks by **files touched** and **subsystems crossed** — these are the best observable proxies for context window consumption, the true limiting factor for LLM agents.
 
-**Too small** → consider merging (optional):
-- < 2 files or < 5 edits
-- Description under 10 lines
-- Would take <10 minutes
+**Target range**: 3-8 files, 1-2 subsystems per task.
 
-**Too large** → MUST split along module/story/phase boundaries:
-- 19+ files or 56+ edits
-- 7+ acceptance criteria
-- Contains "then", "after that", "finally" (multiple phases)
-- Description has subsections or its own TOC
-- Red flags: "central integration point", "ties everything together", "largest migration"
+**Hard limits**:
+- Maximum 12 files
+- Maximum 3 subsystems
+- Maximum 3 acceptance criteria
 
-**Estimating files and edits:**
-- Count files from `File Impact Summary` + Technical Design mentions
-- ~1-2 files per component, ~1 file per test suite when ambiguous
-- Edits: 3-5 per file for local changes, 6-10 for refactors or new files
+**Mechanical sweep exception** (same change across many files):
+- Up to 18 files allowed
+- Must stay within 1 subsystem
+- Requires grep-able pattern + scripted verification
+- Consider batching: POC in 2-3 files first, then rollout
 
-**Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-20 tasks per feature/epic.
+**Split triggers** — if any are true, task is too big:
+- Description contains "and then", "after that", "finally"
+- More than 3 acceptance criteria
+- Crosses 3+ subsystems (already at hard limit)
+- Contains "figure out", "investigate", or "determine where"
+- Red flags: "central integration point", "ties everything together"
+
+**Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-15 tasks per feature/epic.
+
+**Defining subsystems**: A subsystem is a distinct functional area of the codebase with its own responsibilities. Count subsystems by identifying the top-level domains or modules touched:
+- Examples: `auth`, `api`, `database`, `email`, `ui`, `config`, `cli`
+- Heuristic: first directory under `src/` or top-level package name
+- Wiring/DI files count toward the subsystem they configure, not as separate
+- If unsure, ask: "Would a different team own this?" — if yes, it's a different subsystem
 
 #### Scope Atomicity
 - **One outcome per task** — single verifiable "done" state
-- **Don't mix modify + add** — separate new files from modifications, unless combined task stays within size bounds and describes a single outcome
+- **Avoid mixing unrelated add + modify** — separate new files from modifications when they serve different outcomes. Exception: Skeleton tasks may add new module files AND update existing wiring/composition roots as a single "compile-ready wiring surface" outcome.
 - **Phase boundaries** — each execution phase is a separate task
 
 #### Decomposition Anti-Patterns
-
-**Avoid horizontal/layer-based splits:**
-- ❌ Separate "Backend", "Frontend", "Tests" tasks for same feature
-- ✅ Vertical slices: one task per user story or behavior, including all layers
 
 **Avoid long dependency chains:**
 - Maximum chain length: 4 tasks
@@ -195,6 +245,7 @@ These rules prevent cross-layer gaps where changes are made in one layer but wir
 **Dependency notation**: `T002 → T001` means "T002 depends on T001" (T001 must complete before T002 can start). This matches `bd dep add T002 T001`.
 
 - **File overlap = dependency** — tasks touching same file cannot parallelize
+- **Central file contention**: If many tasks overlap a central file (e.g., `main.py`, `container.ts`), create a dedicated "shared foundation" task for that file, then parallelize downstream tasks that no longer touch it
 - **Err toward more dependencies** — safer than too few
 - **Chain length limit (4)** is a heuristic; prefer restructuring (shared foundation task, re-slicing) over dropping uncertain deps
 
@@ -219,6 +270,7 @@ For each task, create a rich specification:
 **Story**: [US1] | [US2] | (none for setup/foundation)
 **Parallel**: [P] if parallelizable, blank if sequential
 **Primary Files**: path1.ts, path2.ts
+**Subsystems**: auth, api (list all subsystems touched)
 **Dependencies**: T000 (if any)
 
 **Goal**:
@@ -264,28 +316,34 @@ What this task accomplishes (1-2 sentences)
 After generating task specs, produce a **sizing summary table** and verify all tasks are within bounds:
 
 ```markdown
-| Task | Files | Edits | Status | Action |
-|------|-------|-------|--------|--------|
-| T001 | 4 | 14 | OK | — |
-| T002 | 16 | 45 | OK | — |
-| T003 | 22 | 70 | Over | MUST split |
+| Task | Files | Subsystems | ACs | Mechanical? | Status | Action |
+|------|-------|------------|-----|-------------|--------|--------|
+| T001 | 4 | 1 | 2 | No | OK | — |
+| T002 | 8 | 2 | 3 | No | OK | — |
+| T003 | 14 | 4 | 2 | No | Over | MUST split (>12 files, >3 subsystems) |
+| T004 | 16 | 1 | 1 | Yes | OK | Mechanical sweep allowed |
 ```
 
-**Gating rule**: No tasks marked "Over" (19+ files or 56+ edits) may proceed. Split and re-estimate until all pass.
+**Gating rule**: No tasks exceeding hard limits may proceed:
+- Standard tasks: 12 files, 3 subsystems, 3 ACs
+- Mechanical sweeps: 18 files, 1 subsystem, grep-able pattern required
+
+Split and re-estimate until all pass.
 
 #### Worked Example
 
 Plan proposes: "Implement full password reset flow (backend + email + UI)"
 
 1. **Initial candidate**: T001 – Implement password reset flow
-2. **Estimate**: 9 files, ~28 edits → Large but acceptable
+2. **Estimate**: 9 files, 3 subsystems (backend, email, UI) → at subsystem limit
 3. **Check**: Can it be summarized without "and"? No: "backend AND email AND UI"
-4. **Split by user-visible outcome**:
-   - T001 – Backend endpoints + token model (5 files, ~15 edits) → OK
-   - T002 – Email template + sending integration (3 files, ~8 edits) → OK  
-   - T003 – UI pages + routing (4 files, ~12 edits) → OK
-5. **Dependencies**: T002, T003 → T001 (backend must exist first)
-6. **Re-check**: All tasks in 3-5 files, 8-15 edits — within standard range ✓
+4. **Split by subsystem**:
+   - T001 – [integration-path-test] Skeleton + Integration: Backend endpoints + token model stubs + failing e2e test (5 files, 1 subsystem) → OK
+   - T002 – Implement backend logic (unit tests + code) (3 files, 1 subsystem) → OK
+   - T003 – Email template + sending (3 files, 1 subsystem) → OK  
+   - T004 – UI pages + routing (4 files, 1 subsystem) → OK
+5. **Dependencies**: T002, T003, T004 → T001 (skeleton+integration must exist first)
+6. **Re-check**: All tasks 3-5 files, 1 subsystem — within limits ✓
 
 ### Phase 5: Validation (Gating)
 
@@ -294,22 +352,22 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | Check | Gate | Rule | Fix |
 |-------|------|------|-----|
 | **File overlap** | Hard | No two parallel tasks share files | Add dependency |
-| **AC coverage** | Hard | Every spec AC maps to exactly one primary task | Add task or reassign |
-| **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary | Reassign ownership |
+| **AC coverage** | Hard | Every spec AC maps to exactly one primary task (if spec present) | Add task or reassign |
+| **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary (if spec present) | Reassign ownership |
 | **Dependencies complete** | Hard | When uncertain, add the dep | Add dependency |
 | **One outcome per task** | Hard | No bundled multi-behavior tasks | Split task |
-| **Sizing: minimum** | Advisory | Task under 2 files / 5 edits | Consider merging |
-| **Sizing: maximum** | Hard | No task over 18 files / 55 edits | MUST split |
-| **No micro-tasks** | Advisory | Single-file fixes batched | Merge related fixes |
-| **No vague tasks** | Hard | Every task has concrete files + ACs | Rewrite or delete |
+| **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 3 ACs | MUST split |
+| **Sizing: mechanical** | Hard | Mechanical sweeps: max 18 files, must be 1 subsystem, grep-able pattern | Split by subsystem or convert to standard |
+| **No vague tasks** | Hard | Every task has concrete files + verification steps | Rewrite or delete |
 | **End-to-end wiring** | Hard | New data/config/templates have wiring maps; tasks cover each hop | Add wiring map + missing tasks/deps |
 | **Adapter/bridge coverage** | Hard | Field changes mapped across all adapters/mappers/DI builders | Add/update adapter tasks |
 | **Config override test** | Hard | New config values have override tests reaching runtime | Add override test |
 | **Template lifecycle** | Hard | New templates are loaded, passed through, and used | Add missing lifecycle steps |
 | **Missing referenced artifacts** | Hard | Plan-referenced docs/specs exist (or declared `New` with prereq task) | Abort or add prereq task |
 | **Integration path test** | Hard | At least one task marked `[integration-path-test]` per feature | Add integration test task |
+| **Sizing: target** | Advisory | Aim for 3-8 files, 1-2 subsystems | Consider splitting if outside range |
 
-**Hard gates** block output. **Advisory** checks are recommendations only.
+**Hard gates** block output. **Advisory** checks are recommendations.
 
 **Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
 
@@ -422,9 +480,11 @@ Apply the **malicious compliance test** to all acceptance criteria:
 - **Plan missing AC Coverage table**: Derive acceptance criteria from Context & Goals and spec user stories; mark coverage as "derived"
 
 ### Missing Artifacts
-- **No spec file** (not referenced): Generate tasks from plan only, mark AC coverage as "N/A - no spec"
-- **No data model/contracts** (not referenced): Generate tasks from High-Level Approach + Technical Design only
-- **Referenced artifact missing**: If the plan explicitly references a doc/spec/contract by path and it doesn't exist, **abort** with "Missing referenced artifact: `<path>`" — do not proceed with task creation until the artifact is provided or the plan is updated to remove the reference
+
+Handled by Phase 2 "Missing referenced artifact gate". Summary:
+- **Not referenced in plan**: Generate tasks from plan only (no abort). Mark AC coverage as "N/A - no spec" if spec not referenced.
+- **Referenced and marked `New`**: Create prerequisite "Author `<artifact>`" task; downstream tasks depend on it.
+- **Referenced but missing and NOT marked `New`**: Abort with "Missing referenced artifact: `<path>`".
 
 ### Output Issues
 - **Beads not available**: Fall back to TODO.md with warning
