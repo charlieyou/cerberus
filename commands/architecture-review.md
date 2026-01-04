@@ -7,48 +7,13 @@ argument-hint: [--mode <fast|smart|max>] ["<focus area>"]
 
 Perform a **principal-engineer-level** architecture review using multiple AI models (Codex, Gemini, Claude if installed) in parallel to generate comprehensive analysis, then synthesize their findings into a single coherent review.
 
-> **Downstream**: This output feeds directly into `/bd-breakdown` for ticket creation.
+> **Downstream**: This output feeds directly into `/create-tasks` for ticket creation.
 
 ---
 
 ## Workflow
 
-### 1. Run Analysis Tools (Outside the Model)
-
-Run any analysis tooling directly in Bash, then pass the outputs into the generator via `--analysis-file`. This keeps the model read-only while still benefiting from tool data.
-
-Example (adjust paths/package names as needed):
-
-```bash
-ANALYSIS_TMP=$(mktemp)
-
-{
-  echo "## lizard"
-  if command -v uvx >/dev/null 2>&1; then
-    uvx lizard -C 15 -L 80 -w src | head -n 50
-  else
-    echo "uvx not available (install uv to run lizard)"
-  fi
-  echo ""
-  echo "## grimp"
-  if [[ -x "$HOME/.claude/skills/grimp-architecture/.venv/bin/python" ]]; then
-    # Adjust PKG and PYTHONPATH for your project layout:
-    # - Standard layout (mypackage/):     PKG=mypackage, PYTHONPATH=.
-    # - src layout (src/mypackage/):      PKG=mypackage, PYTHONPATH=src
-    # - Flat src layout (src/__init__.py): PKG=src, PYTHONPATH=.
-    PKG="src"
-    PYTHONPATH="." \
-      $HOME/.claude/skills/grimp-architecture/.venv/bin/python \
-      $HOME/.claude/skills/grimp-architecture/scripts/explore.py "$PKG" || true
-  else
-    echo "grimp not available"
-  fi
-} > "$ANALYSIS_TMP"
-```
-
-You can add more tools (e.g., jscpd) by appending sections to the same file.
-
-### 2. Spawn Generators
+### 1. Spawn Generators
 
 Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout based on mode:
 - `--mode fast`: 300000ms (5 minutes)
@@ -58,23 +23,29 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 If you skip the analysis step, omit `--analysis-file`.
 
+First, set the output directory:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)" --type architecture-review --analysis-file "$ANALYSIS_TMP" $ARGUMENTS
+OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/architecture-drafts" || mktemp -d)"
+```
+
+Then run the generator:
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --focus "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode max --focus "review the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode max --focus "review the API layer"
 
 # User: /architecture-review --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$ANALYSIS_TMP" --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
@@ -86,22 +57,61 @@ The generator writes drafts to the output directory and returns their paths:
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
-### 3. Synthesize Drafts
+### 3. Synthesize Drafts (SUBAGENT REQUIRED)
 
-The generator output contains drafts from multiple models. Synthesize them into a single coherent architecture review by:
+**You MUST use a subagent (Task tool) to synthesize drafts.** This preserves your main context for the review gate phase.
 
-1. **Identify common findings** across drafts - issues flagged by multiple models have higher confidence
-2. **Resolve conflicts** using your judgment - when models disagree, investigate the code to determine which is correct
-3. **Deduplicate similar issues** - merge overlapping findings into single well-documented issues
-4. **Calibrate severity** - adjust severity levels based on aggregate evidence
+Use the Task tool with a prompt like:
 
-### 4. Produce Final Review
+```
+Synthesize the following generator drafts into a single architecture review.
 
-Create a unified architecture review artifact following the output format below.
+Draft files to read:
+- $OUTPUT_DIR/codex.md
+- $OUTPUT_DIR/gemini.md  
+- $OUTPUT_DIR/claude.md
+
+Synthesis rules:
+1. Identify common findings across drafts - issues flagged by multiple models have higher confidence
+2. Resolve conflicts using your judgment - when models disagree, investigate the code to determine which is correct
+3. Deduplicate similar issues - merge overlapping findings into single well-documented issues
+4. Calibrate severity - adjust severity levels based on aggregate evidence
+
+Get the artifact path by running: ${CLAUDE_PLUGIN_ROOT}/bin/review-gate artifact-path
+
+Write the synthesized architecture review to that path.
+
+REQUIRED FORMAT - the artifact MUST:
+1. Start with: <!-- review-type: architecture-review -->
+2. Include a Method block (3-6 bullets): tools run, entry points, key files, assumptions
+3. List issues sorted by severity (Critical -> High -> Medium -> Low)
+4. Each issue must have: Primary files, Category, Type, Confidence, Source, Context, Fix, Acceptance Criteria, Test Plan
+
+Return the artifact path and a summary of key findings.
+```
+
+The subagent will:
+1. Read each draft file
+2. Get the artifact path from review-gate
+3. Synthesize into the final architecture review
+4. Write the review file
+5. Return the path and summary to you
+
+**Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
+
+### 4. Verify and Optionally Copy Artifact
+
+The subagent wrote the artifact. Confirm it exists at the returned path.
+
+Then ask the user: **"Architecture review written to `<artifact-path>`. Would you like to copy it somewhere else (e.g., `docs/`)? If so, provide the destination filename."**
+
+If the user provides a path, copy the artifact there.
 
 ---
 
 ## Output Format
+
+The subagent should follow this format when writing the artifact.
 
 Start the artifact with the review-type marker (required for review gate):
 ```
@@ -153,24 +163,6 @@ If no high-leverage issues are found, still provide the Method block and output:
 
 The architecture review found no issues meeting the severity threshold. [Brief note about what was checked and any positive observations about the codebase structure.]
 ```
-
----
-
-## Final Step
-
-After completing the review, use the Bash tool to get the session-scoped artifact path:
-
-```
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate artifact-path
-```
-
-Then use the Write tool to save this entire review output to that path (use the exact path returned):
-
-```
-Write the complete review above to <paste the path printed above>
-```
-
-This enables automatic Cerberus validation if configured.
 
 ---
 

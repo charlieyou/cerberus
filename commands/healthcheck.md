@@ -7,7 +7,7 @@ argument-hint: [--mode <fast|smart|max>] ["<focus area>"]
 
 This command runs a multi-model healthcheck where Codex, Gemini, and Claude (if installed) independently analyze the codebase, then you synthesize their findings into a single artifact.
 
-## Step 1: Run Generators
+### 1. Run Generators
 
 Use the Bash tool to run the generator command. This spawns all available generators in parallel. **IMPORTANT**: Set the Bash timeout based on mode:
 - `--mode fast`: 300000ms (5 minutes)
@@ -16,23 +16,29 @@ Use the Bash tool to run the generator command. This spawns all available genera
 
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
+First, set the output directory:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)" --type=healthcheck $ARGUMENTS
+OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)"
+```
+
+Then run the generator:
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /healthcheck --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast
 
 # User: /healthcheck "focus on the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --focus "focus on the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --focus "focus on the API layer"
 
 # User: /healthcheck --mode max "review error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode max --focus "review error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode max --focus "review error handling"
 
 # User: /healthcheck --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type=healthcheck --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
@@ -44,28 +50,59 @@ The generator writes drafts to the output directory and returns their paths:
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
-## Step 2: Synthesize the Drafts
+### 2. Synthesize Drafts (SUBAGENT REQUIRED)
 
-After receiving the generator output, synthesize the drafts into a single coherent healthcheck artifact:
+**You MUST use a subagent (Task tool) to synthesize drafts.** This preserves your main context for the review gate phase.
 
-1. **Identify common findings** - Issues flagged by both models are likely real
-2. **Resolve conflicts** - When models disagree, use your judgment to pick the correct assessment
-3. **Deduplicate** - Merge similar issues into single entries
-4. **Structure the output** - Follow the format below
+Use the Task tool with a prompt like:
 
-**You may ignore reviewer feedback that:**
-- Flags intentional breaking changes as bugs (API simplification is often deliberate)
-- Complains about removed options/parameters that had no functional difference
-- Treats consolidation of redundant code paths as a problem
+```
+Synthesize the following generator drafts into a single healthcheck artifact.
 
-## Step 3: Write the Artifact
+Draft files to read:
+- $OUTPUT_DIR/codex.md
+- $OUTPUT_DIR/gemini.md  
+- $OUTPUT_DIR/claude.md
 
-Get the artifact path:
-```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate artifact-path
+Synthesis rules:
+1. Identify common findings - Issues flagged by multiple models are likely real
+2. Resolve conflicts - When models disagree, use your judgment to pick the correct assessment
+3. Deduplicate - Merge similar issues into single entries
+
+You may ignore findings that:
+- Flag intentional breaking changes as bugs (API simplification is often deliberate)
+- Complain about removed options/parameters that had no functional difference
+- Treat consolidation of redundant code paths as a problem
+
+Get the artifact path by running: ${CLAUDE_PLUGIN_ROOT}/bin/review-gate artifact-path
+
+Write the synthesized healthcheck to that path.
+
+REQUIRED FORMAT - the artifact MUST:
+1. Start with: <!-- review-type: healthcheck -->
+2. Include a Method block (3-6 bullets) noting models used and approach
+3. List issues sorted by severity (Critical -> High -> Medium -> Low)
+4. Each issue must have: Primary files, Category, Type, Confidence, Context, Fix, Acceptance Criteria, Test Plan
+
+Return the artifact path and a summary of key findings.
 ```
 
-Then write the synthesized healthcheck to that path.
+The subagent will:
+1. Read each draft file
+2. Get the artifact path from review-gate
+3. Synthesize into the final healthcheck
+4. Write the healthcheck file
+5. Return the path and summary to you
+
+**Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
+
+### 3. Verify and Optionally Copy Artifact
+
+The subagent wrote the healthcheck file. Confirm it exists at the returned path.
+
+Then ask the user: **"Healthcheck written to `<artifact-path>`. Would you like to copy it somewhere else (e.g., `docs/`)? If so, provide the destination filename."**
+
+If the user provides a path, copy the artifact there.
 
 ---
 

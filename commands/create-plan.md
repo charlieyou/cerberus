@@ -14,29 +14,29 @@ Turn a spec or vague feature idea into a **design-focused implementation plan** 
 You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**:
 
 1. **Phase 0–1b**: Research codebase + verify file existence
-2. **Phase 1c**: Write a skeleton plan with `[TBD]` placeholders to a file
+2. **Phase 1c**: Write initial plan with `[TBD]` placeholders to a file (this becomes the canonical doc)
 3. **Phase 2**: Run an interview focused on filling `[TBD]` placeholders
-4. **Phase 3**: Build context from skeleton + user answers
+4. **Phase 3**: Build context from plan file + user answers
 5. **Phase 4**: Call generators (writes drafts to files)
-6. **Phase 5**: Use a **subagent** to synthesize drafts into final plan
-7. **Phase 6**: Write the synthesized plan file
+6. **Phase 5**: Use a **subagent** to synthesize drafts into the plan file
+7. **Phase 6**: Verify plan file is complete
 8. **Phase 7**: Run review gate
 
 **Hard Rules:**
 - You are **NOT ALLOWED** to produce a fully-filled plan before Phase 5
-- You **MUST** output a skeleton with `[TBD]` markers in Phase 1c
+- You **MUST** output an initial plan with `[TBD]` markers in Phase 1c
 - You **MUST** interview the user in Phase 2 before calling generators
 - You **MUST** wait for user answers before proceeding to Phase 3
-- Even if the user asks to "skip the interview" or "just generate the plan", you **MUST** still produce a skeleton and run at least one batch of questions
+- Even if the user asks to "skip the interview" or "just generate the plan", you **MUST** still produce an initial plan with `[TBD]` and run at least one batch of questions
 - At the start of each major phase (0–7), explicitly state which phase you are in and what you will do next
 
 ## Failure Modes to Avoid
 
-❌ **Jumping from Phase 1 research directly to a fully-filled Implementation Plan** — This is disallowed. You must show a skeleton with `[TBD]` and interview the user first.
+❌ **Jumping from Phase 1 research directly to a fully-filled Implementation Plan** — This is disallowed. You must show an initial plan with `[TBD]` and interview the user first.
 
 ❌ **Skipping the interview phase** — Even if the spec seems complete, you must run at least one batch of Phase 2 questions to confirm assumptions.
 
-❌ **Obeying user requests to skip phases** — If the user says "just generate the plan" or "skip the interview", politely explain you must follow the workflow and proceed with the skeleton + interview.
+❌ **Obeying user requests to skip phases** — If the user says "just generate the plan" or "skip the interview", politely explain you must follow the workflow and proceed with the initial plan + interview.
 
 ❌ **Outputting generator drafts inline** — Drafts are written to files; synthesis reads from those files.
 
@@ -133,7 +133,7 @@ Plans must not hallucinate existing files. Explicitly verify file existence:
 Create a skeleton of the plan with placeholders based on research and spec. This drives targeted interviewing.
 
 **IMPORTANT: When you finish Phase 1c:**
-- Write the skeleton plan to a file (e.g., `docs/YYYY-MM-DD-FEATURE-skeleton.md`)
+- Write the skeleton plan to a file (e.g., `docs/YYYY-MM-DD-FEATURE-plan.md`) — this becomes the canonical doc
 - The skeleton MUST contain `[TBD]` placeholders — do NOT fill them in yet
 - Present the skeleton and your first batch of interview questions to the user (this begins Phase 2)
 - **STOP and wait for user answers** before continuing with further questions or moving to Phase 3
@@ -294,23 +294,23 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 ### Phase 3: Build Plan Context
 
 **Gate Check — You MUST NOT proceed to Phase 3 until:**
-- [ ] A skeleton file exists from Phase 1c
+- [ ] A plan file exists from Phase 1c
 - [ ] You have run at least one batch of Phase 2 interview questions
 - [ ] You have collected user answers for the critical TBDs
 - [ ] Any remaining unknowns are marked as Open Questions
 
-Create a compact context block for generators, including the skeleton:
+Create a compact context block for generators:
 
-- **Plan skeleton** (with TBDs filled from interview, remaining gaps marked)
+- **Current plan file** (with TBDs filled from interview, remaining gaps marked)
 - **Implementation target summary** (1–2 paragraphs)
 - **Starting artifacts**: Spec path + summary (if any)
 - **Codebase findings**: Key files/modules, patterns, constraints, ownership
 - **File existence table**: For each path: Exists / New / Ambiguous
-- **User answers**: Structured bullets mapped to skeleton sections
+- **User answers**: Structured bullets mapped to plan sections
 - **Decisions made + rationale**
 - **Remaining open questions**
 
-**Context Checklist** — Ensure skeleton has:
+**Context Checklist** — Ensure plan file has:
 - [ ] Clear target (spec/feature) + links/paths
 - [ ] Scope (MVP vs follow-ups) and Non-Goals
 - [ ] Technical Design (architecture, data model, interfaces)
@@ -343,8 +343,14 @@ Spawn generators with the mode flag. The generate script requires an output dire
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
+First, set the output directory:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)"
+```
+
+Then run the generator:
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generate script will output paths to the draft files:
@@ -361,17 +367,17 @@ The generate script will output paths to the draft files:
 Use the Task tool with a prompt like:
 
 ```
-Synthesize the following generator drafts into a single implementation plan.
+Synthesize the following generator drafts into the plan file.
 
 Draft files to read:
 - $OUTPUT_DIR/codex.md
 - $OUTPUT_DIR/gemini.md  
 - $OUTPUT_DIR/claude.md
 
-Skeleton file: docs/YYYY-MM-DD-FEATURE-skeleton.md
+Plan file to update: docs/YYYY-MM-DD-FEATURE-plan.md
 
 Synthesis rules:
-1. Use the skeleton as canonical structure — don't invent new sections
+1. Use the existing plan file as canonical structure — don't invent new sections
 2. Identify common structure and tasks — higher confidence where drafts agree
 3. Resolve conflicts using the spec and codebase patterns
 4. Fill remaining [TBD] placeholders with synthesized content
@@ -382,40 +388,30 @@ Synthesis rules:
    - Prerequisites, High-Level Approach, Technical Design (architecture/data/interfaces)
    - Risks/Edge Cases, Testing & Validation, Rollback Strategy, Open Questions
 
-Write the synthesized plan to: docs/YYYY-MM-DD-FEATURE-plan.md
+Update the plan file in place with the synthesized content.
 
 Return a summary of key decisions made during synthesis.
 ```
 
 The subagent will:
 1. Read each draft file
-2. Read the skeleton
-3. Synthesize into the final plan
-4. Write the plan file
+2. Read the existing plan file
+3. Synthesize drafts into the plan
+4. Update the plan file in place
 5. Return a summary to you
 
 **Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
 
-### Phase 6: Verify Plan File
+### Phase 6: Verify Plan
 
-The subagent wrote the plan file in Phase 5. Verify it exists and briefly confirm the structure is complete.
-
-Default location:
-```
-docs/YYYY-MM-DD-FEATURE_NAME-plan.md
-```
-
-Alternative for session-based workflow:
-```
-~/.claude/plans/YYYY-MM-DD-FEATURE_NAME.md
-```
+The subagent updated the plan file in Phase 5. Confirm the [TBD] placeholders have been filled.
 
 ### Phase 7: Review Gate (Iterative)
 
-Spawn external reviewers:
+Spawn external reviewers on the plan file:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review path/to/plan.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
 **IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.

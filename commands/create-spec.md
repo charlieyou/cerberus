@@ -90,6 +90,12 @@ Document findings internally—these inform the skeleton and your questions.
 
 Create a skeleton based on your research. Start with Tier S fields; expand as complexity signals emerge.
 
+**IMPORTANT: When you finish Phase 1b:**
+- Write the skeleton spec to a file (e.g., `docs/YYYY-MM-DD-FEATURE-spec.md`) — this becomes the canonical doc
+- The skeleton MUST contain `[TBD]` placeholders — do NOT fill them in yet
+- Present the skeleton and your first batch of interview questions to the user (this begins Phase 2)
+- **STOP and wait for user answers** before continuing with further questions or moving to Phase 3
+
 ```markdown
 # [Feature Name]
 
@@ -273,12 +279,12 @@ Ask questions in batches, prioritized by importance. Put critical questions firs
 
 ### Phase 3: Build Spec Context
 
-Create a compact context block for generators, including the skeleton:
+Create a compact context block for generators:
 
-- **Spec skeleton** (with TBDs filled from interview, remaining gaps marked)
+- **Current spec file** (with TBDs filled from interview, remaining gaps marked)
 - Feature summary (1-2 paragraphs)
 - Codebase findings (key files, patterns, constraints)
-- User answers (structured bullets, mapped to skeleton sections)
+- User answers (structured bullets, mapped to spec sections)
 - Decisions made + rationale
 - Remaining open questions
 
@@ -331,10 +337,14 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-The generator requires an output directory as the first argument:
-
+First, set the output directory:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/spec-drafts" || mktemp -d)" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/spec-drafts" || mktemp -d)"
+```
+
+Then run the generator:
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generator writes drafts to the output directory and returns their paths:
@@ -344,37 +354,59 @@ The generator writes drafts to the output directory and returns their paths:
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
-### Phase 5: Synthesize Drafts
+### Phase 5: Synthesize Drafts (SUBAGENT REQUIRED)
 
-Merge generator drafts into the 4-section structure:
+**You MUST use a subagent (Task tool) to synthesize drafts.** This preserves your main context for the review gate phase.
 
-1. Use the skeleton as the canonical structure—don't invent new sections
+Use the Task tool with a prompt like:
+
+```
+Synthesize the following generator drafts into the spec file.
+
+Draft files to read:
+- $OUTPUT_DIR/codex.md
+- $OUTPUT_DIR/gemini.md  
+- $OUTPUT_DIR/claude.md
+
+Spec file to update: docs/YYYY-MM-DD-FEATURE-spec.md
+Tier: [S/M/L]
+
+Synthesis rules:
+1. Use the existing spec file as canonical structure — don't invent new sections
 2. Identify common conclusions across drafts for each section
 3. Resolve conflicts by checking the codebase and user answers
-4. Fill remaining TBDs with synthesized content or mark as Open Questions
-5. Include only sections required for the tier (see Canonical field mapping above)
-6. **Tier-specific verification:**
+4. Fill remaining [TBD] placeholders with synthesized content or mark as Open Questions
+5. Include only sections required for the tier (see tier requirements below)
+6. Tier-specific verification:
    - Tier S: Simple acceptance bullets, no formal requirements
    - Tier M: Requirements with MUST + verification examples (GWT optional)
    - Tier L: Requirements with MUST + full Given/When/Then + edge cases per requirement
-7. In `max` mode: include alternatives considered and risk analysis
+7. In max mode: include alternatives considered and risk analysis
 
-### Phase 6: Write the Spec File
+Update the spec file in place with the synthesized content.
 
-Ask the user where to save, or default to:
-
-```
-docs/YYYY-MM-DD-FEATURE_NAME-spec.md
+Return a summary of key decisions made during synthesis.
 ```
 
-Write the synthesized spec to the chosen path.
+The subagent will:
+1. Read each draft file
+2. Read the existing spec file
+3. Synthesize drafts into the spec
+4. Update the spec file in place
+5. Return a summary to you
+
+**Do NOT read the draft files yourself** — this would blow out your context. Let the subagent handle synthesis.
+
+### Phase 6: Verify Spec
+
+The subagent updated the spec file in Phase 5. Confirm the [TBD] placeholders have been filled.
 
 ### Phase 7: Review Gate with Interactive Refinement
 
-Spawn external reviewers to validate the spec:
+Spawn external reviewers on the spec file:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review path/to/spec.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review docs/YYYY-MM-DD-FEATURE-spec.md
 ```
 
 **IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Do NOT just print questions as text—the user cannot respond to printed text.

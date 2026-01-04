@@ -1964,7 +1964,7 @@ PROMPT
         case "$basename" in
             healthcheck*) echo "healthcheck" ;;
             architecture*) echo "architecture-review" ;;
-            breakdown*) echo "bd-breakdown" ;;
+            breakdown*) echo "create-tasks" ;;
             latest.md) echo "auto" ;;
             *) echo "manual" ;;
         esac
