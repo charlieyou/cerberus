@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# arch-analysis - Run analysis tools for architecture review
+#
+# To add a new tool: add a function and call it in run_tools()
+#
+# Writes output to a temp file and prints the path to stdout.
+
+set -euo pipefail
+
+GRIMP_VENV="$HOME/.agents/skills/grimp-architecture/.venv/bin/python"
+GRIMP_SCRIPT="$HOME/.agents/skills/grimp-architecture/scripts/grimp.py"
+
+# --- Tool Implementations ---
+
+lizard() {
+    if command -v uvx >/dev/null 2>&1; then
+        uvx lizard -C 15 -L 80 -w src 2>&1 | head -n 50
+    else
+        echo "uvx not available (install uv to run lizard)"
+    fi
+}
+
+grimp() {
+    if [[ -x "$GRIMP_VENV" && -f "$GRIMP_SCRIPT" ]]; then
+        # Adjust PKG for your project layout
+        local PKG="src"
+        PYTHONPATH="." "$GRIMP_VENV" "$GRIMP_SCRIPT" explore "$PKG" 2>&1 || true
+    else
+        echo "grimp not available (skill not installed)"
+    fi
+}
+
+# --- Add/remove tools here ---
+
+run_tools() {
+    echo "## lizard"
+    lizard
+    echo ""
+
+    echo "## grimp"
+    grimp
+    echo ""
+}
+
+# --- Runner ---
+
+main() {
+    local output_file
+    output_file=$(mktemp)
+    run_tools > "$output_file"
+    echo "$output_file"
+}
+
+main "$@"
