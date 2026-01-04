@@ -16,14 +16,10 @@ Use the Bash tool to run the generator command. This spawns all available genera
 
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
-First, set the output directory:
-```bash
-OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/healthcheck-drafts" || mktemp -d)"
-```
+**CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
-Then run the generator:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/healthcheck-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/healthcheck-drafts" --type healthcheck $ARGUMENTS
 ```
 
 Examples:

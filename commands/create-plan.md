@@ -319,15 +319,17 @@ Create a compact context block for generators:
 
 Create a temporary prompt file:
 
+**CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
+
 ```bash
-PROMPT_TMP=$(mktemp /tmp/create-plan-prompt-XXXX.md)
-cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-plan.md" > "$PROMPT_TMP"
-cat >> "$PROMPT_TMP" <<'EOF'
+cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-plan.md" > /tmp/create-plan-prompt.md && cat >> /tmp/create-plan-prompt.md <<'EOF'
 
 ## Context
 
 EOF
 ```
+
+Then set `PROMPT_TMP=/tmp/create-plan-prompt.md` for use in the generate command.
 
 Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
 
@@ -336,14 +338,10 @@ Spawn generators with the mode flag. The generate script requires an output dire
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-First, set the output directory:
-```bash
-OUTPUT_DIR="$([[ -n "${REVIEW_DIR:-}" ]] && echo "$REVIEW_DIR/plan-drafts" || mktemp -d)"
-```
+**CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
-Then run the generator:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+mkdir -p "${REVIEW_DIR:-/tmp}/plan-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/plan-drafts" --type create-plan --mode "${MODE:-smart}" --prompt-file /tmp/create-plan-prompt.md
 ```
 
 The generate script will output paths to the draft files:
