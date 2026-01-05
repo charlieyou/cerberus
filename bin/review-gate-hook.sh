@@ -1244,7 +1244,10 @@ INSTRUCTIONS
 
 $INFO_ITEMS
 
-Please provide a brief summary of the review outcome, mentioning any informational items the user should be aware of, then you may stop."
+These are non-blocking issues (P2/P3), but you **MUST** fix them before stopping. Please:
+1. Address each P2/P3 issue listed above
+2. Provide a brief summary of what you fixed
+3. Then you may stop"
         else
             SUMMARY_PROMPT+="
 
