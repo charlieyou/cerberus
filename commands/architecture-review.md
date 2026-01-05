@@ -21,27 +21,26 @@ Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set th
 - `--mode max`: 900000ms (15 minutes)
 
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
-If you skip the analysis step, omit `--analysis-file`.
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode fast
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --focus "focus on error handling"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode max --focus "review the API layer"
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode max --focus "review the API layer"
 
 # User: /architecture-review --mode fast focus on error handling
-${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --analysis-file "$(${CLAUDE_PLUGIN_ROOT}/bin/arch-analysis)" --mode fast focus on error handling
+${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
