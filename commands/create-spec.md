@@ -342,14 +342,18 @@ Create a temporary prompt file by concatenating the base prompt with your contex
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-spec.md" > /tmp/create-spec-prompt.md && cat >> /tmp/create-spec-prompt.md <<'EOF'
+mktemp /tmp/create-spec-prompt-XXXXXX.md
+```
+
+This creates a unique temp file like `/tmp/create-spec-prompt-abc123.md`. Set `PROMPT_TMP` to the output path, then populate it:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-spec.md" > "$PROMPT_TMP" && cat >> "$PROMPT_TMP" <<'EOF'
 
 ## Context
 
 EOF
 ```
-
-Then set `PROMPT_TMP=/tmp/create-spec-prompt.md` for use in the generate command.
 
 Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
 
@@ -361,7 +365,7 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/spec-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/spec-drafts" --type create-spec --mode "${MODE:-smart}" --prompt-file /tmp/create-spec-prompt.md
+mkdir -p "${REVIEW_DIR:-/tmp}/spec-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/spec-drafts" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
 The generator writes drafts to the output directory and returns their paths:
