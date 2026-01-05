@@ -122,6 +122,7 @@ Generate tasks following these rules:
      b. Implement the smallest change to pass unit tests
      c. Confirm integration test(s) pass
    - Integration test stability: keep integration test files unchanged during implementation tasks. If integration tests must change, create a dedicated small task "Adjust integration tests" and add dependencies.
+   - **Final implementation task verification**: The last implementation task in each feature must include verification that all tests pass (unit and integration). Do NOT create a separate "verify tests pass" or "run all tests" task—this verification must be part of the final implementation task's Verification section.
 
 **Bugfix Variant**:
 1. Create a failing regression test first (integration or unit).
