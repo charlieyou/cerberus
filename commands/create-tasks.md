@@ -407,11 +407,13 @@ Use the **beads skill** to create issues. Follow these patterns:
    # Returns EPIC-ID
    ```
 
-3. **Create tasks with --parent**:
+3. **Create tasks with --parent and --status blocked**:
    ```bash
-   bd create "[T001] Task title" -p 2 --type task --parent EPIC-ID --description "..."
+   bd create "[T001] Task title" -p 2 --type task --parent EPIC-ID --status blocked --description "..."
    # Returns TASK-ID
    ```
+   
+   **Important**: Always create tasks with `--status blocked` initially. This prevents mala from picking up tasks before all dependencies are configured. Tasks will be unblocked in Phase 6b after dependency setup is complete.
 
 4. **Add dependencies** (file overlap or logical order):
    ```bash
@@ -420,6 +422,13 @@ Use the **beads skill** to create issues. Follow these patterns:
    
    **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
    ```
+
+5. **Unblock tasks** (Phase 6b - after all dependencies are configured):
+   ```bash
+   bd update <TASK-ID> --status open
+   ```
+   
+   Only unblock tasks after ALL dependencies have been added. Unblock in dependency order (tasks with no dependencies first, then their dependents).
 
 #### If no `--beads` flag (default):
 
