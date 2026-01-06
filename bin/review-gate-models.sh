@@ -570,6 +570,7 @@ spawn_reviewer() {
                 echo "Skipping gemini: read-only settings missing" >&2
                 return 1
             fi
+            echo "Spawning gemini reviewer (model: $gemini_model)..." >&2
             GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
             REVIEW_OUT="$output_file" \
             REVIEW_DONE="$sentinel_file" \
@@ -585,6 +586,7 @@ spawn_reviewer() {
             ' >/dev/null 2>&1 &
             ;;
         codex)
+            echo "Spawning codex reviewer (model: $codex_model, reasoning: $codex_reasoning)..." >&2
             REVIEW_OUT="$output_file" \
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
@@ -600,6 +602,7 @@ spawn_reviewer() {
             ' >/dev/null 2>&1 &
             ;;
         claude)
+            echo "Spawning claude reviewer (model: $claude_model)..." >&2
             CLAUDE_ALLOWED_TOOLS="$CLAUDE_READONLY_ALLOWED_TOOLS" \
             CLAUDE_DISALLOWED_TOOLS="$CLAUDE_READONLY_DISALLOWED_TOOLS" \
             REVIEW_OUT="$output_file" \
