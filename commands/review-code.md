@@ -1,11 +1,11 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]
+argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]
 ---
 
 # Code Review (Iterative)
 
-Multi-model code review that automatically iterates until all reviewers pass. External reviewers (Codex, Gemini, Claude) evaluate the code diff directly, and you fix the code until unanimous pass.
+Multi-model code review that automatically iterates until consensus is reached. External reviewers (Codex, Gemini, Claude) evaluate the code diff directly, and you fix the code until the configured consensus threshold passes (default: majority).
 
 ## Usage
 
@@ -19,6 +19,8 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
 /cerberus:review-code --mode max         # Use max intelligence mode
+/cerberus:review-code --consensus any    # Pass if at least one reviewer approves
+/cerberus:review-code --consensus all    # Require unanimous approval
 /cerberus:review-code --exclude ':(exclude,glob)dist/**'  # Ignore files using git pathspec syntax
 /cerberus:review-code "focus on error handling"  # Focus review on specific area
 ```
@@ -29,13 +31,20 @@ Multi-model code review that automatically iterates until all reviewers pass. Ex
 2. **Reviewers Evaluate**: Codex, Gemini, and Claude analyze the diff in parallel
 3. **Fix Issues**: If reviewers find issues, fix the code
 4. **Re-review**: Reviews automatically re-run after you make changes
-5. **Pass**: When all reviewers agree (PASS), the gate resolves
+5. **Pass**: When consensus is reached (per `--consensus` mode), the gate resolves
 
 ## Run the Review
 
 Use the Bash tool to spawn the code review.
 
-Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--consensus` (majority/all/any), `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+
+**Consensus modes:**
+- `majority` (default): At least 2 reviewers PASS, or all valid reviewers PASS
+- `all`: All valid reviewers must PASS (errored reviewers are skipped)
+- `any`: At least one reviewer PASS
+
+Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review $ARGUMENTS
@@ -81,7 +90,7 @@ When reviewers don't all agree:
 
 ## Completion
 
-- **All reviewers PASS**: Auto-resolves and allows stop
+- **Consensus passes**: Auto-resolves and allows stop
 - **Max iterations reached**: Falls back to manual decision
 
 ## Manual Override

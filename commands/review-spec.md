@@ -1,15 +1,22 @@
 ---
 description: Iterative spec review with external reviewers
-argument-hint: [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] <path/to/spec.md>
+argument-hint: [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] <path/to/spec.md>
 ---
 
 # Spec Review (Iterative)
 
-Spawn external reviewers (Codex, Gemini, Claude) to evaluate a feature specification. Fix issues until all reviewers pass.
+Spawn external reviewers (Codex, Gemini, Claude) to evaluate a feature specification. Fix issues until consensus is reached (default: majority).
 
 ## Usage
 
-Run the spawn command with the spec path:
+Run the spawn command with the spec path. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--consensus` (majority/all/any), and a spec path.
+
+**Consensus modes:**
+- `majority` (default): At least 2 reviewers PASS, or all valid reviewers PASS
+- `all`: All valid reviewers must PASS (errored reviewers are skipped)
+- `any`: At least one reviewer PASS
+
+Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review $ARGUMENTS
@@ -35,6 +42,12 @@ Choose an intelligence mode:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --mode max path/to/spec.md
 ```
 
+Use a specific consensus mode:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --consensus any path/to/spec.md
+```
+
 ## How It Works
 
 1. External reviewers (Codex, Gemini, Claude) evaluate the spec for:
@@ -44,8 +57,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --mode max path/to/spec.
    - Actionability for implementation
 
 2. The Stop hook waits for reviewers and checks consensus:
-   - If all reviewers PASS: You may proceed
-   - If any reviewer finds issues: You must fix the spec and try again
+   - If consensus passes (per `--consensus` mode): You may proceed
+   - If any reviewer finds blocking issues (FAIL verdict or P0/P1 findings): You must fix the spec and try again
 
 3. Fix issues in the spec file based on reviewer feedback, then the review automatically re-runs.
 
@@ -98,6 +111,8 @@ Specs are tiered by complexity. **Reviewers must respect the stated tier** and o
 ## Iteration Loop
 
 The iterative review continues until:
-- All reviewers agree the spec passes (unanimous PASS)
+- Consensus is reached (per `--consensus` mode, default: majority)
 - Maximum iterations (default 3, configurable via --max-rounds) are reached
 - You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve`
+
+Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.

@@ -279,6 +279,14 @@ review_gate_check() {
             log "review-gate: using mode '$mode'"
         fi
 
+        local consensus_mode
+        consensus_mode=$(jq -r '.config.consensus_mode // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        local -a consensus_arg=()
+        if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+            consensus_arg=(--consensus "$consensus_mode")
+            log "review-gate: using consensus '$consensus_mode'"
+        fi
+
         # For code-review-iterative, re-fetch the diff to capture fixes
         if [[ "$detected_type" == "code-review-iterative" ]]; then
             local diff_args
@@ -307,7 +315,7 @@ review_gate_check() {
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_GATE_BASE_SHA="$base_sha" \
                REVIEW_GATE_TIP_SHA="$tip_sha" \
-               "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
+               "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         # For plan-review-iterative, re-read the plan file to capture edits
@@ -326,7 +334,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$plan_path" >/dev/null 2>&1; then
+                   "$0" spawn-plan-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$plan_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -336,7 +344,7 @@ review_gate_check() {
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -356,7 +364,7 @@ review_gate_check() {
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$spec_path" >/dev/null 2>&1; then
+                   "$0" spawn-spec-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$spec_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -366,7 +374,7 @@ review_gate_check() {
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -376,7 +384,7 @@ review_gate_check() {
                CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
-               "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
+               "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$ARTIFACT_FILE" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         fi
@@ -625,14 +633,24 @@ review_gate_check() {
         echo "$completed|$total|${running_list[*]}"
     }
 
-    # --- Calculate consensus (PRIORITY-BASED) ---
-    # P0/P1 anywhere → requires_decision (blocking)
-    # All PASS → auto_approve
-    # No P0/P1 + at least 2 PASS → auto_approve (P2/P3 advisory)
-    # Otherwise → requires_decision
+    # --- Calculate consensus (PRIORITY-BASED with configurable mode) ---
+    # Consensus modes:
+    #   all      - All reviewers must PASS (unanimous)
+    #   any      - At least one reviewer PASS (optimistic)
+    #   majority - Default. At least 2 PASS, or all valid PASS (priority-aware)
+    #
+    # P0/P1 findings always block regardless of mode
+    # FAIL verdict always blocks regardless of mode
     calculate_consensus() {
         local reviewers
         reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+
+        # Read consensus mode from state (default: majority)
+        local consensus_mode
+        consensus_mode=$(jq -r '.config.consensus_mode // "majority"' "$STATE_FILE" 2>/dev/null || echo "majority")
+        if [[ -z "$consensus_mode" || "$consensus_mode" == "null" ]]; then
+            consensus_mode="majority"
+        fi
 
         local pass_count=0
         local fail_count=0
@@ -706,50 +724,79 @@ review_gate_check() {
 
         # Strict: any FAIL verdict → requires_decision (even without P0 finding)
         if [[ $fail_count -gt 0 ]]; then
-            log "review-gate: consensus=requires_decision (FAIL verdict detected)"
+            log "review-gate: consensus=requires_decision (FAIL verdict detected, mode=$consensus_mode)"
             echo "requires_decision"
             return
         fi
 
-        # Priority-based consensus:
+        # Priority-based blocking (applies to all modes):
         # P0 anywhere → requires_decision (FAIL-level)
         if [[ "$max_priority" -eq 0 ]]; then
-            log "review-gate: consensus=requires_decision (P0 finding detected)"
+            log "review-gate: consensus=requires_decision (P0 finding detected, mode=$consensus_mode)"
             echo "requires_decision"
             return
         fi
 
         # P1 anywhere → requires_decision (must fix before proceeding)
         if [[ "$max_priority" -eq 1 ]]; then
-            log "review-gate: consensus=requires_decision (P1 finding detected)"
+            log "review-gate: consensus=requires_decision (P1 finding detected, mode=$consensus_mode)"
             echo "requires_decision"
             return
         fi
 
-        # All valid reviewers PASS → auto-approve (ignore errored reviewers)
-        if [[ $pass_count -eq $valid_count ]]; then
-            if [[ $other_count -gt 0 ]]; then
-                log "review-gate: consensus=auto_approve (all valid reviewers PASS, $other_count errored)"
-            fi
-            echo "auto_approve"
-            return
-        fi
+        # Apply consensus mode logic (no P0/P1 blocking issues at this point)
+        case "$consensus_mode" in
+            all)
+                # All valid reviewers must PASS
+                if [[ $pass_count -eq $valid_count ]]; then
+                    if [[ $other_count -gt 0 ]]; then
+                        log "review-gate: consensus=auto_approve (all valid reviewers PASS, $other_count errored, mode=all)"
+                    else
+                        log "review-gate: consensus=auto_approve (all reviewers PASS, mode=all)"
+                    fi
+                    echo "auto_approve"
+                    return
+                fi
+                log "review-gate: consensus=requires_decision (not all PASS: pass=$pass_count/$valid_count, mode=all)"
+                echo "requires_decision"
+                ;;
+            any)
+                # At least one PASS is sufficient
+                if [[ $pass_count -ge 1 ]]; then
+                    log "review-gate: consensus=auto_approve ($pass_count PASS, mode=any)"
+                    echo "auto_approve"
+                    return
+                fi
+                log "review-gate: consensus=requires_decision (no PASS verdicts, mode=any)"
+                echo "requires_decision"
+                ;;
+            majority|*)
+                # Default majority logic:
+                # All valid reviewers PASS → auto-approve (ignore errored reviewers)
+                if [[ $pass_count -eq $valid_count ]]; then
+                    if [[ $other_count -gt 0 ]]; then
+                        log "review-gate: consensus=auto_approve (all valid reviewers PASS, $other_count errored, mode=majority)"
+                    fi
+                    echo "auto_approve"
+                    return
+                fi
 
-        # No P0/P1, but some NEEDS_WORK votes with only P2/P3 findings:
-        # If at least 2 reviewers say PASS, treat as auto_approve (P2/P3 are advisory)
-        if [[ "$max_priority" -ge 2 ]] && [[ $pass_count -ge 2 ]]; then
-            log "review-gate: consensus=auto_approve (no P0/P1, at least 2 PASS, P2/P3 advisory)"
-            echo "auto_approve"
-            return
-        fi
+                # No P0/P1, but some NEEDS_WORK votes with only P2/P3 findings:
+                # If at least 2 reviewers say PASS, treat as auto_approve (P2/P3 are advisory)
+                if [[ "$max_priority" -ge 2 ]] && [[ $pass_count -ge 2 ]]; then
+                    log "review-gate: consensus=auto_approve (no P0/P1, $pass_count PASS, P2/P3 advisory, mode=majority)"
+                    echo "auto_approve"
+                    return
+                fi
 
-        # No P0/P1, split opinion but not enough PASS votes → still requires_decision
-        # Log that there are no P0/P1 findings
-        if [[ "$max_priority" -ge 2 ]]; then
-            log "review-gate: consensus=requires_decision (no P0/P1 findings, split votes: pass=$pass_count needs_work=$needs_work_count other=$other_count)"
-        fi
+                # No P0/P1, split opinion but not enough PASS votes → still requires_decision
+                if [[ "$max_priority" -ge 2 ]]; then
+                    log "review-gate: consensus=requires_decision (no P0/P1 findings, split votes: pass=$pass_count needs_work=$needs_work_count other=$other_count, mode=majority)"
+                fi
 
-        echo "requires_decision"
+                echo "requires_decision"
+                ;;
+        esac
     }
 
     # --- Format results table ---
@@ -1207,6 +1254,8 @@ INSTRUCTIONS
     # Get trigger source and mode info for revision messages
     TRIGGER_SOURCE=$(jq -r '.trigger_source // "artifact"' "$STATE_FILE" 2>/dev/null || echo "artifact")
     MODE_PLAN_PATH=$(jq -r '.mode.plan_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
+    CONSENSUS_MODE=$(jq -r '.config.consensus_mode // "majority"' "$STATE_FILE" 2>/dev/null || echo "majority")
+    [[ -z "$CONSENSUS_MODE" || "$CONSENSUS_MODE" == "null" ]] && CONSENSUS_MODE="majority"
 
     # Update state to awaiting_decision
     TEMP_FILE="${STATE_FILE}.tmp.$$"
@@ -1229,13 +1278,19 @@ INSTRUCTIONS
             "$0" resolve >&2 || true
         INFO_ITEMS=$(collect_informational_findings)
         # Prompt Claude for summary before allowing stop
+        local pass_msg
+        case "$CONSENSUS_MODE" in
+            all)  pass_msg="All valid reviewers passed (consensus=all)." ;;
+            any)  pass_msg="At least one reviewer passed (consensus=any)." ;;
+            *)    pass_msg="Review passed (consensus=majority)." ;;
+        esac
         SUMMARY_PROMPT="$RESULTS
 
 ---
 
 ## Review Complete
 
-**All reviewers agree (PASS).**"
+**$pass_msg**"
         if [[ $CURRENT_ITERATION -gt 1 ]]; then
             SUMMARY_PROMPT+=" (after $CURRENT_ITERATION iterations)"
         fi
@@ -1311,13 +1366,19 @@ Please summarize the review outcome, noting that max iterations was reached and 
         # Format type-specific revision instructions (using extracted paths/args)
         REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH" "$MODE_DIFF_ARGS")
 
+        local required_msg
+        case "$CONSENSUS_MODE" in
+            all)  required_msg="All reviewers must agree (PASS) before proceeding." ;;
+            any)  required_msg="At least one reviewer must pass, with no FAIL verdicts or P0/P1 findings blocking (consensus=any)." ;;
+            *)    required_msg="Majority of reviewers must pass before proceeding (consensus=majority)." ;;
+        esac
         REASON="$RESULTS
 
 ---
 
 ## Revision Required (Iteration $((CURRENT_ITERATION + 1))/$MAX_ITERATIONS)
 
-**All reviewers must agree (PASS) before proceeding.**
+**$required_msg**
 
 $REVISION_INSTRUCTIONS"
         if [[ -n "$INFO_ITEMS" ]]; then

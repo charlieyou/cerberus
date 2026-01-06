@@ -2,14 +2,14 @@
 
 *Three-headed guardian of code quality.*
 
-Multi-model consensus review system that gates Claude Code session termination until code or plans are reviewed and approved. Like its mythological namesake, Cerberus uses three AI heads (Codex, Gemini, Claude) to guard the gates: nothing leaves until all three agree.
+Multi-model consensus review system that gates Claude Code session termination until code or plans are reviewed and approved. Like its mythological namesake, Cerberus uses three AI heads (Codex, Gemini, Claude) to guard the gates—nothing leaves until consensus is reached.
 
 ![Cerberus](cerberus.png)
 
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
-- **Automatic iteration**: Reviews loop until unanimous approval (default 3 rounds, configurable via `--max-rounds`)
+- **Automatic iteration**: Reviews loop until consensus passes (default 3 rounds, configurable via `--max-rounds`)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan & spec creation**: Interview + generator flow to draft plans or specs before review
 - **Plan & spec review**: Review implementation plans or feature specs before execution
@@ -132,7 +132,7 @@ Interview the user, run multi-model generators, synthesize an implementation pla
 5. **Implementation interview** - Ask about scope, constraints, and testing
 6. **Multi-model generation** - Codex, Gemini, and Claude generate draft plans
 7. **Subagent synthesis** - Merge drafts into coherent plan (preserves context)
-8. **Review gate** - Iterate until all reviewers pass
+8. **Review gate** - Iterate until consensus passes
 
 | Mode | Interview Depth | Review Rounds |
 |------|-----------------|---------------|
@@ -196,7 +196,7 @@ Examples:
                                                           │
                                                           ▼
                                ┌──────────────────────────────────────┐
-                               │         All reviewers PASS?          │
+                               │       Consensus reached?             │
                                └──────────────────────────────────────┘
                                         │                    │
                                        YES                   NO
@@ -210,10 +210,10 @@ Examples:
 
 1. **Spawn**: Command triggers reviewer spawning
 2. **Evaluate**: All reviewers analyze in parallel
-3. **Consensus**: Stop hook checks for unanimous PASS
-4. **Iterate**: If not all PASS, presents issues and blocks for revision
+3. **Consensus**: Stop hook checks if consensus threshold is met (default: majority)
+4. **Iterate**: If consensus not reached or blocking issues found (FAIL/P0/P1), presents issues and blocks for revision
 5. **Repeat**: After changes, review automatically re-runs
-6. **Complete**: All PASS = session can stop; default 3 iterations = manual decision (configurable via `--max-rounds`)
+6. **Complete**: Consensus reached = session can stop; default 3 iterations = manual decision (configurable via `--max-rounds`)
 
 ## Review Criteria
 

@@ -47,24 +47,24 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] <artifact-path>
+  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
-    Spawn reviewers for code changes. Claude fixes code until all reviewers pass.
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
+    Spawn reviewers for code changes. Claude fixes code until consensus passes.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
       --commit <shas>     Review one or more commits (space or comma separated)
       --exclude <spec>    Exclude files matching pattern (auto-prefixed with :! for git)
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--focus <text>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
-    all reviewers pass.
+    consensus passes.
 
-  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] <spec-path>
-    Spawn reviewers for a spec file. Claude fixes spec until all reviewers pass.
+  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <spec-path>
+    Spawn reviewers for a spec file. Claude fixes spec until consensus passes.
 
   wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
@@ -97,6 +97,17 @@ validate_max_rounds() {
     if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
         die "Invalid --max-rounds '$value' (must be >= 1)"
     fi
+}
+
+validate_consensus_mode() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    case "$value" in
+        majority|all|any) return 0 ;;
+        *) die "Invalid --consensus '$value' (must be: majority, all, or any)" ;;
+    esac
 }
 
 # Read author context from a file (error on missing/empty).
@@ -203,6 +214,7 @@ review_gate_spawn_code_review() {
     local force_focus="false"
     local artifact_only="false"
     local -a exclude_pathspecs=()
+    local consensus_mode=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -256,6 +268,14 @@ review_gate_spawn_code_review() {
                 ;;
             --exclude)
                 exclude_pathspecs+=("${2:-}")
+                shift 2
+                ;;
+            --consensus=*)
+                consensus_mode="${1#*=}"
+                shift
+                ;;
+            --consensus)
+                consensus_mode="${2:-}"
                 shift 2
                 ;;
             --uncommitted)
@@ -319,6 +339,7 @@ Options:
   --agents <list>      Comma-separated subset of agents: codex,gemini,claude
   --max-rounds <n>     Maximum review iterations before manual resolution
   --mode <level>       Intelligence mode: fast, smart, max
+  --consensus <mode>   Consensus mode: majority (default), all, any
   --context-file <path> Inject author context from file into the prompt
   --focus <text>       Focus area to emphasize in the review
   --exclude <pathspec> Exclude files matching pattern (auto-prefixed with :! for git)
@@ -328,7 +349,14 @@ Options:
   <range>             Review a commit range (e.g., main..feature)
   [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
-Spawns reviewers to evaluate code changes. Claude fixes code until all reviewers pass.
+Consensus modes:
+  majority  At least 2 reviewers PASS, or all valid PASS (default)
+  all       All valid reviewers must PASS (errored reviewers skipped)
+  any       At least one reviewer PASS
+
+Note: FAIL verdicts and P0/P1 findings always block regardless of mode.
+
+Spawns reviewers to evaluate code changes. Claude fixes code until consensus passes.
 USAGE
                 return 0
                 ;;
@@ -412,6 +440,12 @@ USAGE
     fi
 
     validate_max_rounds "$max_rounds"
+
+    # Default consensus_mode: CLI flag > env var > hardcoded "majority"
+    if [[ -z "$consensus_mode" ]]; then
+        consensus_mode="${REVIEW_GATE_CONSENSUS:-majority}"
+    fi
+    validate_consensus_mode "$consensus_mode"
 
     if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
         local spec
@@ -816,11 +850,15 @@ USAGE
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
+    local -a consensus_arg=()
+    if [[ -n "$consensus_mode" ]]; then
+        consensus_arg=(--consensus "$consensus_mode")
+    fi
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 }
 
 review_gate_spawn_plan_review() {
@@ -832,6 +870,7 @@ review_gate_spawn_plan_review() {
     local focus_area=""
     local -a positionals=()
     local force_focus="false"
+    local consensus_mode=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -879,6 +918,14 @@ review_gate_spawn_plan_review() {
                 focus_area="${2:-}"
                 shift 2
                 ;;
+            --consensus=*)
+                consensus_mode="${1#*=}"
+                shift
+                ;;
+            --consensus)
+                consensus_mode="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -900,6 +947,7 @@ Options:
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
   --focus <text>            Focus area to emphasize in the review
+  --consensus <mode>        Consensus mode: majority (default), all, any
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
   [--] <focus>             Optional focus text (or trailing text; -- forces focus)
@@ -964,6 +1012,12 @@ USAGE
     fi
 
     validate_max_rounds "$max_rounds"
+
+    # Default consensus_mode: CLI flag > env var > hardcoded "majority"
+    if [[ -z "$consensus_mode" ]]; then
+        consensus_mode="${REVIEW_GATE_CONSENSUS:-majority}"
+    fi
+    validate_consensus_mode "$consensus_mode"
 
     # Find session plan if not specified
     if [[ -z "$plan_path" ]]; then
@@ -1139,11 +1193,15 @@ JSON only, no markdown code fences:
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
+    local -a consensus_arg=()
+    if [[ -n "$consensus_mode" ]]; then
+        consensus_arg=(--consensus "$consensus_mode")
+    fi
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="plan-review-iterative" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn --type="plan-review-iterative" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -1169,6 +1227,7 @@ review_gate_spawn_spec_review() {
     local max_rounds=""
     local mode=""
     local context_file=""
+    local consensus_mode=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -1208,6 +1267,14 @@ review_gate_spawn_spec_review() {
                 context_file="${2:-}"
                 shift 2
                 ;;
+            --consensus=*)
+                consensus_mode="${1#*=}"
+                shift
+                ;;
+            --consensus)
+                consensus_mode="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -1227,6 +1294,7 @@ Options:
   --max-rounds <n>          Maximum review iterations before manual resolution
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
+  --consensus <mode>        Consensus mode: majority (default), all, any
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -1266,6 +1334,12 @@ USAGE
     fi
 
     validate_max_rounds "$max_rounds"
+
+    # Default consensus_mode: CLI flag > env var > hardcoded "majority"
+    if [[ -z "$consensus_mode" ]]; then
+        consensus_mode="${REVIEW_GATE_CONSENSUS:-majority}"
+    fi
+    validate_consensus_mode "$consensus_mode"
 
     if [[ -z "$spec_path" ]]; then
         die "Spec path is required. Usage: ${CLI_CMD} spawn-spec-review <spec-path>"
@@ -1416,11 +1490,15 @@ JSON only, no markdown code fences:
     if [[ -n "$context_file" ]]; then
         context_file_arg=(--context-file "$context_file")
     fi
+    local -a consensus_arg=()
+    if [[ -n "$consensus_mode" ]]; then
+        consensus_arg=(--consensus "$consensus_mode")
+    fi
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="spec" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "$artifact_path"
+    "$0" spawn --type="spec" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 
     # Update state to include spec path in mode
     local state_file="$review_dir/gate-state.json"
@@ -1606,6 +1684,7 @@ review_gate_spawn() {
     local max_rounds=""
     local mode=""
     local context_file=""
+    local consensus_mode=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1641,6 +1720,14 @@ review_gate_spawn() {
                 context_file="${2:-}"
                 shift 2
                 ;;
+            --consensus=*)
+                consensus_mode="${1#*=}"
+                shift
+                ;;
+            --consensus)
+                consensus_mode="${2:-}"
+                shift 2
+                ;;
             --type=*)
                 REVIEW_TYPE="${1#*=}"
                 shift
@@ -1659,7 +1746,7 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 USAGE
                 return 0
                 ;;
@@ -1688,6 +1775,12 @@ USAGE
     fi
 
     validate_max_rounds "$max_rounds"
+
+    # Default consensus_mode: CLI flag > env var > hardcoded "majority"
+    if [[ -z "$consensus_mode" ]]; then
+        consensus_mode="${REVIEW_GATE_CONSENSUS:-majority}"
+    fi
+    validate_consensus_mode "$consensus_mode"
 
     if [[ -z "$OWNER_SESSION_ID" && -n "$OWNER_TRANSCRIPT_PATH" ]]; then
         OWNER_SESSION_ID="$(basename "$OWNER_TRANSCRIPT_PATH" .jsonl)"
@@ -2152,6 +2245,7 @@ SCHEMA
         --arg mode_plan_path "$mode_plan_path" \
         --arg mode "$mode" \
         --arg max_rounds "$max_rounds" \
+        --arg consensus_mode "$consensus_mode" \
         '{
             version: ($version | tonumber),
             status: $status,
@@ -2166,6 +2260,7 @@ SCHEMA
                 {}
                 | (if $max_rounds != "" then .max_rounds = ($max_rounds | tonumber) else . end)
                 | (if $mode != "" then .intelligence_mode = $mode else . end)
+                | (if $consensus_mode != "" then .consensus_mode = $consensus_mode else . end)
                 | if length == 0 then null else . end
             ),
             owner: (
