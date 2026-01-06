@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Test that --commit and range modes correctly track fix commits
+# Test that diffs are regenerated from current diff args
 #
 # These tests verify that:
-# 1. tip_sha is stored for --commit and range modes
-# 2. On re-spawn, fixes are included via tip_sha..HEAD diff
+# 1. base/tip metadata is not written into artifacts
+# 2. Re-spawn does not append fix commits unless diff args include them
+# 3. Symbolic ranges are re-evaluated on each spawn
 
 set -euo pipefail
 
@@ -43,6 +44,8 @@ setup_test_repo() {
     TEST_DIR=$(mktemp -d)
     TEST_DIRS+=("$TEST_DIR")
     cd "$TEST_DIR"
+    export HOME="$TEST_DIR/home"
+    mkdir -p "$HOME"
     git init -q
     git config user.email "test@test.com"
     git config user.name "Test User"
@@ -79,10 +82,10 @@ extract_metadata() {
     grep "<!-- ${field}:" "$artifact_path" 2>/dev/null | sed "s/<!-- ${field}: \(.*\) -->/\1/" || true
 }
 
-# Test 1: --commit mode stores tip_sha
-test_commit_mode_stores_tip_sha() {
+# Test 1: --commit mode does NOT store base/tip metadata
+test_commit_mode_no_tip_sha() {
     ((TESTS_RUN++)) || true || true
-    log_test "--commit mode stores tip_sha in artifact"
+    log_test "--commit mode does NOT store base/tip metadata"
     
     setup_test_repo
     
@@ -103,22 +106,23 @@ test_commit_mode_stores_tip_sha() {
     artifact_path=$(get_artifact_path "$output")
     
     if [[ -f "$artifact_path" ]]; then
-        local tip_sha
+        local tip_sha base_sha
         tip_sha=$(extract_metadata "$artifact_path" "tip-sha")
-        if [[ -n "$tip_sha" ]]; then
-            log_pass "tip_sha stored: $tip_sha"
+        base_sha=$(extract_metadata "$artifact_path" "base-sha")
+        if [[ -z "$tip_sha" && -z "$base_sha" ]]; then
+            log_pass "no base/tip metadata stored"
         else
-            log_fail "tip_sha not found in artifact"
+            log_fail "unexpected base/tip metadata (base=${base_sha:-<empty>} tip=${tip_sha:-<empty>})"
         fi
     else
         log_fail "artifact not created at $artifact_path"
     fi
 }
 
-# Test 2: --commit mode includes fix commits on re-spawn
-test_commit_mode_includes_fixes() {
+# Test 2: --commit mode does NOT include fix commits on re-spawn
+test_commit_mode_does_not_include_fixes() {
     ((TESTS_RUN++)) || true
-    log_test "--commit mode includes fix commits on re-spawn"
+    log_test "--commit mode does NOT include fix commits on re-spawn"
     
     setup_test_repo
     
@@ -151,21 +155,21 @@ test_commit_mode_includes_fixes() {
         local diff_content
         diff_content=$(extract_diff_from_artifact "$artifact_path")
         
-        # The expected behavior: shows both original AND fix
+        # The expected behavior: only original commit diff (no fix)
         if echo "$diff_content" | grep -q "fix1"; then
-            log_pass "fix commit included in diff"
+            log_fail "fix commit unexpectedly included in diff"
         else
-            log_fail "fix commit NOT included in diff (only original shown)"
+            log_pass "fix commit not included (diff regenerated from original args)"
         fi
     else
         log_fail "artifact not created at $artifact_path"
     fi
 }
 
-# Test 3: range mode stores resolved SHAs
-test_range_mode_stores_resolved_shas() {
+# Test 3: range mode does NOT store base/tip metadata
+test_range_mode_no_resolved_shas() {
     ((TESTS_RUN++)) || true
-    log_test "range mode stores resolved base_sha and tip_sha"
+    log_test "range mode does NOT store base/tip metadata"
     
     setup_test_repo
     
@@ -192,27 +196,27 @@ test_range_mode_stores_resolved_shas() {
     artifact_path=$(get_artifact_path "$output")
     
     if [[ -f "$artifact_path" ]]; then
-        local base_sha tip_sha
+        local base_sha tip_sha diff_content
         base_sha=$(extract_metadata "$artifact_path" "base-sha")
         tip_sha=$(extract_metadata "$artifact_path" "tip-sha")
-        
-        # Should be resolved to actual SHAs, not symbolic refs
-        if [[ "$base_sha" == "$first_sha" ]] && [[ "$tip_sha" == "$second_sha" ]]; then
-            log_pass "SHAs correctly resolved: base=$base_sha tip=$tip_sha"
-        elif [[ -n "$base_sha" ]] && [[ -n "$tip_sha" ]]; then
-            log_fail "SHAs stored but incorrect: expected base=$first_sha tip=$second_sha, got base=$base_sha tip=$tip_sha"
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if [[ -n "$base_sha" || -n "$tip_sha" ]]; then
+            log_fail "unexpected base/tip metadata (base=${base_sha:-<empty>} tip=${tip_sha:-<empty>})"
+        elif echo "$diff_content" | grep -q "change2"; then
+            log_pass "no base/tip metadata and range diff rendered"
         else
-            log_fail "tip_sha not stored (base_sha=${base_sha:-<empty>}, tip_sha=${tip_sha:-<empty>})"
+            log_fail "range diff missing expected content"
         fi
     else
         log_fail "artifact not created at $artifact_path"
     fi
 }
 
-# Test 4: range mode includes fixes without shifting range
-test_range_mode_includes_fixes_without_shift() {
+# Test 4: range mode re-evaluates symbolic range on re-spawn
+test_range_mode_re_evaluates_range() {
     ((TESTS_RUN++)) || true
-    log_test "range mode includes fixes without shifting original range"
+    log_test "range mode re-evaluates symbolic range on re-spawn"
     
     setup_test_repo
     
@@ -239,7 +243,7 @@ test_range_mode_includes_fixes_without_shift() {
     git add file.txt
     git commit -q -m "fix commit"
     
-    # Re-spawn - should use stored SHAs, not re-evaluate HEAD~1..HEAD
+    # Re-spawn - should re-evaluate HEAD~1..HEAD and pick up the new commit
     output=$("$REVIEW_GATE" spawn-code-review --artifact-only HEAD~1..HEAD 2>&1)
     artifact_path=$(get_artifact_path "$output")
     
@@ -247,35 +251,21 @@ test_range_mode_includes_fixes_without_shift() {
         local diff_content
         diff_content=$(extract_diff_from_artifact "$artifact_path")
         
-        # Should contain BOTH original changes AND fix
-        local has_original=false
-        local has_fix=false
-        
-        if echo "$diff_content" | grep -q "original"; then
-            has_original=true
-        fi
+        # Expect latest diff to reflect new HEAD (fix content present)
         if echo "$diff_content" | grep -q "fix content"; then
-            has_fix=true
-        fi
-        
-        if $has_original && $has_fix; then
-            log_pass "both original and fix content present"
-        elif $has_original && ! $has_fix; then
-            log_fail "fix content missing (original range not expanded)"
-        elif ! $has_original && $has_fix; then
-            log_fail "original content missing (range shifted instead of expanded)"
+            log_pass "range re-evaluated and includes fix content"
         else
-            log_fail "neither original nor fix content found"
+            log_fail "range did not re-evaluate to include fix content"
         fi
     else
         log_fail "artifact not created at $artifact_path"
     fi
 }
 
-# Test 5: multiple fix iterations accumulate correctly
-test_multiple_fix_iterations() {
+# Test 5: multiple fix iterations do NOT accumulate without updated diff args
+test_multiple_fix_iterations_do_not_accumulate() {
     ((TESTS_RUN++)) || true
-    log_test "multiple fix iterations accumulate correctly"
+    log_test "multiple fix iterations do NOT accumulate without updated diff args"
     
     setup_test_repo
     
@@ -313,11 +303,11 @@ test_multiple_fix_iterations() {
         local diff_content
         diff_content=$(extract_diff_from_artifact "$artifact_path")
         
-        # Should show fix2 (the latest state)
+        # Should NOT show fix2 when reusing the original commit diff args
         if echo "$diff_content" | grep -q "fix2"; then
-            log_pass "all fix iterations accumulated correctly"
+            log_fail "fix iterations unexpectedly accumulated"
         else
-            log_fail "fix iterations not accumulated"
+            log_pass "fix iterations not accumulated without updated diff args"
         fi
     else
         log_fail "artifact not created at $artifact_path"
@@ -362,10 +352,10 @@ test_exclude_uncommitted_filters_diff() {
     fi
 }
 
-# Test 7: --exclude filters commit and fix diffs
+# Test 7: --exclude filters commit diffs across re-spawn
 test_exclude_commit_and_fix() {
     ((TESTS_RUN++)) || true
-    log_test "--exclude filters commit and fix diffs"
+    log_test "--exclude filters commit diffs across re-spawn"
 
     setup_test_repo
 
@@ -414,13 +404,13 @@ test_exclude_commit_and_fix() {
     fi
 
     if $commit_ok && $fix_ok; then
-        log_pass "excluded paths omitted from commit and fix diffs"
+        log_pass "excluded paths omitted from commit diffs on re-spawn"
     else
         if ! $commit_ok; then
             log_fail "excluded paths present in commit diff"
         fi
         if ! $fix_ok; then
-            log_fail "excluded paths present in fix diff"
+            log_fail "excluded paths present in re-spawn diff"
         fi
     fi
 }
@@ -432,11 +422,11 @@ main() {
     echo "========================================"
     echo ""
     
-    test_commit_mode_stores_tip_sha
-    test_commit_mode_includes_fixes
-    test_range_mode_stores_resolved_shas
-    test_range_mode_includes_fixes_without_shift
-    test_multiple_fix_iterations
+    test_commit_mode_no_tip_sha
+    test_commit_mode_does_not_include_fixes
+    test_range_mode_no_resolved_shas
+    test_range_mode_re_evaluates_range
+    test_multiple_fix_iterations_do_not_accumulate
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
     

@@ -120,24 +120,18 @@ review_gate_check() {
         echo ""
     }
 
-    # --- Helper: Extract diff-args from artifact frontmatter ---
+    # --- Helper: Extract diff-args (state first, artifact fallback) ---
     extract_diff_args() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local state_diff_args
+            state_diff_args=$(jq -r '.mode.diff_args // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ -n "$state_diff_args" && "$state_diff_args" != "null" ]]; then
+                echo "$state_diff_args"
+                return 0
+            fi
+        fi
         if [[ -f "$ARTIFACT_FILE" ]]; then
             sed -n 's/^<!-- *diff-args: *\(.*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
-        fi
-    }
-
-    # --- Helper: Extract base-sha from artifact frontmatter ---
-    extract_base_sha() {
-        if [[ -f "$ARTIFACT_FILE" ]]; then
-            sed -n 's/^<!-- *base-sha: *\([^ ]*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
-        fi
-    }
-
-    # --- Helper: Extract tip-sha from artifact frontmatter ---
-    extract_tip_sha() {
-        if [[ -f "$ARTIFACT_FILE" ]]; then
-            sed -n 's/^<!-- *tip-sha: *\([^ ]*\) *-->/\1/p' "$ARTIFACT_FILE" | head -1
         fi
     }
 
@@ -287,21 +281,11 @@ review_gate_check() {
             log "review-gate: using consensus '$consensus_mode'"
         fi
 
-        # For code-review-iterative, re-fetch the diff to capture fixes
+        # For code-review-iterative, re-fetch the diff from current args
         if [[ "$detected_type" == "code-review-iterative" ]]; then
             local diff_args
             diff_args=$(extract_diff_args)
             log "review-gate: code-review-iterative re-spawn with diff_args='$diff_args'"
-            local base_sha
-            base_sha=$(extract_base_sha)
-            local tip_sha
-            tip_sha=$(extract_tip_sha)
-            if [[ -n "$base_sha" ]]; then
-                log "review-gate: code-review-iterative using base_sha=$base_sha"
-            fi
-            if [[ -n "$tip_sha" ]]; then
-                log "review-gate: code-review-iterative using tip_sha=$tip_sha"
-            fi
 
             # Parse diff_args into array safely (no eval to avoid command injection)
             # Note: This splits on whitespace, so args with spaces won't round-trip.
@@ -313,8 +297,6 @@ review_gate_check() {
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-               REVIEW_GATE_BASE_SHA="$base_sha" \
-               REVIEW_GATE_TIP_SHA="$tip_sha" \
                "$0" spawn-code-review "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
