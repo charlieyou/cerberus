@@ -709,8 +709,15 @@ USAGE
         done
     }
 
+    # Task context from --context-file (issue description, scope, acceptance criteria)
+    local task_context=""
+    if [[ -n "$context_file" ]]; then
+        task_context=$(read_context_file "$context_file")
+    fi
+
+    # Author context from stored state (agent's clarifications during review iterations)
     local author_context=""
-    author_context=$(resolve_author_context "$review_dir" "$context_file")
+    author_context=$(resolve_author_context "$review_dir" "")
 
     local previous_reviews=""
     previous_reviews=$(code_review_previous_reviews "$review_dir")
@@ -729,21 +736,31 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${DIFF_CONTENT} using temp file to avoid ARG_MAX limits
+        # Load template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
         local diff_tmp="${review_dir}/diff_content.tmp"
+        local context_tmp="${review_dir}/context_content.tmp"
         printf '%s' "$diff_content" > "$diff_tmp"
-        prompt_content=$(awk -v diff_file="$diff_tmp" '
-            BEGIN { while ((getline line < diff_file) > 0) diff = diff (diff ? "\n" : "") line; close(diff_file) }
+        printf '%s' "${task_context:-No additional context provided.}" > "$context_tmp"
+        prompt_content=$(awk -v diff_file="$diff_tmp" -v context_file="$context_tmp" '
+            BEGIN {
+                while ((getline line < diff_file) > 0) diff = diff (diff ? "\n" : "") line; close(diff_file)
+                while ((getline line < context_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(context_file)
+            }
             {
                 while (match($0, /\$\{DIFF_CONTENT\}/)) {
                     printf "%s", substr($0, 1, RSTART-1)
                     printf "%s", diff
                     $0 = substr($0, RSTART+RLENGTH)
                 }
+                while (match($0, /\$\{CONTEXT\}/)) {
+                    printf "%s", substr($0, 1, RSTART-1)
+                    printf "%s", ctx
+                    $0 = substr($0, RSTART+RLENGTH)
+                }
                 print
             }
         ' "$prompt_template_path")
-        rm -f "$diff_tmp"
+        rm -f "$diff_tmp" "$context_tmp"
     else
         die "Code review prompt template not found in project or built-in locations"
     fi
