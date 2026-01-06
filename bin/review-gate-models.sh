@@ -241,11 +241,11 @@ repair_review_output() {
                 local result_str
                 result_str=$(jq -r '.result // empty' "$out_file" 2>/dev/null || true)
                 if [[ -n "$result_str" ]]; then
-                    repaired=$(echo "$result_str" | jq -c '.' 2>/dev/null || true)
+                    repaired=$(printf '%s' "$result_str" | jq -c '.' 2>/dev/null || true)
                     if [[ -z "$repaired" ]]; then
                         local stripped
-                        stripped=$(echo "$result_str" | sed '/^```json$/d; /^```$/d')
-                        repaired=$(echo "$stripped" | jq -c '.' 2>/dev/null || true)
+                        stripped=$(printf '%s' "$result_str" | sed '/^```json$/d; /^```$/d')
+                        repaired=$(printf '%s' "$stripped" | jq -c '.' 2>/dev/null || true)
                     fi
                     if [[ -z "$repaired" ]]; then
                         local tmp_file
@@ -304,7 +304,7 @@ repair_review_output() {
         return 1
     fi
 
-    if ! echo "$repaired" | jq -c '.' >/dev/null 2>&1; then
+    if ! printf '%s' "$repaired" | jq -c '.' >/dev/null 2>&1; then
         rg_log "review-gate: repair_json produced invalid JSON (reviewer=$reviewer)"
         return 1
     fi
@@ -454,6 +454,7 @@ extract_json() {
         claude)
             # Claude: --output-format json wraps result in metadata object
             # Extract .result field which contains the actual response (may have markdown fences)
+            # NOTE: Use printf '%s' instead of echo to preserve backslash escapes
             rg_log "review-gate: extract_json claude extracting from metadata wrapper"
             local result_str
             result_str=$(jq -r '.result // empty' "$file" 2>/dev/null || true)
@@ -462,19 +463,19 @@ extract_json() {
             fi
             if [[ -n "$result_str" ]]; then
                 # Try direct parse first (no fences)
-                json=$(echo "$result_str" | jq -c '.' 2>/dev/null || true)
+                json=$(printf '%s' "$result_str" | jq -c '.' 2>/dev/null || true)
                 if [[ -z "$json" ]]; then
                     # Result may be wrapped in ```json fences, strip them
                     local stripped
-                    stripped=$(echo "$result_str" | sed '/^```json$/d; /^```$/d')
-                    json=$(echo "$stripped" | jq -c '.' 2>/dev/null || true)
+                    stripped=$(printf '%s' "$result_str" | sed '/^```json$/d; /^```$/d')
+                    json=$(printf '%s' "$stripped" | jq -c '.' 2>/dev/null || true)
                 fi
                 if [[ -z "$json" ]]; then
                     # Fallback to extract_last_json_object using temp file
                     rg_log "review-gate: extract_json claude trying extract_last_json_object on result"
                     local tmp_file
                     tmp_file=$(mktemp)
-                    echo "$result_str" > "$tmp_file"
+                    printf '%s' "$result_str" > "$tmp_file"
                     json=$(extract_last_json_object "$tmp_file" "false" 2>/dev/null || true)
                     rm -f "$tmp_file"
                 fi
@@ -518,24 +519,25 @@ extract_json() {
 
     rg_log "review-gate: extract_json $reviewer after unwrap len=${#json}"
 
-    if ! echo "$json" | jq -c '.' >/dev/null 2>&1; then
+    # NOTE: Use printf '%s' instead of echo to preserve backslash escapes in JSON
+    if ! printf '%s' "$json" | jq -c '.' >/dev/null 2>&1; then
         rg_log "review-gate: extract_json $reviewer final jq validation FAILED"
         if [[ "$repaired" != "true" ]] && json=$(repair_review_output "$raw_output" "$schema_file" "$reviewer" "jq_failed"); then
             repaired="true"
         else
             return 1
         fi
-        if ! echo "$json" | jq -c '.' >/dev/null 2>&1; then
+        if ! printf '%s' "$json" | jq -c '.' >/dev/null 2>&1; then
             return 1
         fi
     fi
 
     # Log final extracted verdict for debugging
     local verdict
-    verdict=$(echo "$json" | jq -r '.verdict // "NO_VERDICT"' 2>/dev/null || echo "JQ_ERROR")
+    verdict=$(printf '%s' "$json" | jq -r '.verdict // "NO_VERDICT"' 2>/dev/null || echo "JQ_ERROR")
     rg_log "review-gate: extract_json $reviewer SUCCESS verdict=$verdict"
 
-    echo "$json" | jq -c '.'
+    printf '%s' "$json" | jq -c '.'
 }
 
 # Spawn a reviewer subprocess.

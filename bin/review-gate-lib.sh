@@ -131,21 +131,48 @@ save_iteration() {
 }
 
 # Unwrap review JSON from various wrapper formats
+# NOTE: Uses printf '%s' instead of echo to preserve backslash escapes in JSON
 unwrap_review_json() {
     local json="$1"
     if [[ -z "$json" ]]; then
         return 1
     fi
 
-    if echo "$json" | jq -e '.structured_output' >/dev/null 2>&1; then
-        json=$(echo "$json" | jq -c '.structured_output' 2>/dev/null || echo "")
+    if printf '%s' "$json" | jq -e '.structured_output' >/dev/null 2>&1; then
+        json=$(printf '%s' "$json" | jq -c '.structured_output' 2>/dev/null || echo "")
     fi
 
-    if [[ -n "$json" ]] && echo "$json" | jq -e '.response' >/dev/null 2>&1; then
+    if [[ -n "$json" ]] && printf '%s' "$json" | jq -e '.response' >/dev/null 2>&1; then
         local response
-        response=$(echo "$json" | jq -r '.response' 2>/dev/null || echo "")
-        if [[ -n "$response" ]] && echo "$response" | jq -e . >/dev/null 2>&1; then
-            json=$(echo "$response" | jq -c '.' 2>/dev/null || echo "")
+        response=$(printf '%s' "$json" | jq -r '.response' 2>/dev/null || echo "")
+        if [[ -n "$response" ]]; then
+            # Try direct JSON parse first
+            if printf '%s' "$response" | jq -e . >/dev/null 2>&1; then
+                json=$(printf '%s' "$response" | jq -c '.' 2>/dev/null || echo "")
+            else
+                # Response may be prose with embedded JSON - extract last JSON object
+                local extracted
+                extracted=$(printf '%s' "$response" | python3 -c '
+import json, sys
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+last_obj = None
+for i, ch in enumerate(text):
+    if ch != "{":
+        continue
+    try:
+        obj, _ = decoder.raw_decode(text[i:])
+        if isinstance(obj, dict) and "verdict" in obj:
+            last_obj = obj
+    except:
+        pass
+if last_obj:
+    print(json.dumps(last_obj))
+' 2>/dev/null || echo "")
+                if [[ -n "$extracted" ]] && printf '%s' "$extracted" | jq -e . >/dev/null 2>&1; then
+                    json="$extracted"
+                fi
+            fi
         fi
     fi
 
@@ -153,7 +180,7 @@ unwrap_review_json() {
         return 1
     fi
 
-    echo "$json"
+    printf '%s' "$json"
 }
 
 # Find active review gate for current project
