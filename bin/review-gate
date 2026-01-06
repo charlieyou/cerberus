@@ -420,6 +420,37 @@ USAGE
         done
     fi
 
+    # --- Session metadata (needed for reuse of prior base/tip) ---
+    local session_id="${CLAUDE_SESSION_ID:-}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    # --- Reuse base/tip from prior artifact when re-running in the same session ---
+    # This keeps the original review scope stable and allows fix commits to be appended,
+    # even when spawn-code-review is called again directly (no hook env).
+    if [[ -n "$session_id" && -z "${REVIEW_GATE_TIP_SHA:-}" && -z "${REVIEW_GATE_BASE_SHA:-}" ]]; then
+        local prior_review_dir prior_artifact prior_diff_args
+        prior_review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+        prior_artifact="$prior_review_dir/latest.md"
+        if [[ -f "$prior_artifact" ]]; then
+            prior_diff_args=$(sed -n 's/^<!-- *diff-args: *\(.*[^ ]\) *-->/\1/p' "$prior_artifact" | head -1)
+            if [[ -n "$prior_diff_args" && "$prior_diff_args" == "$diff_args_str" ]]; then
+                local prior_base_sha prior_tip_sha
+                prior_base_sha=$(sed -n 's/^<!-- *base-sha: *\([^ ]*\) *-->/\1/p' "$prior_artifact" | head -1)
+                prior_tip_sha=$(sed -n 's/^<!-- *tip-sha: *\([^ ]*\) *-->/\1/p' "$prior_artifact" | head -1)
+                if [[ -n "$prior_base_sha" ]]; then
+                    REVIEW_GATE_BASE_SHA="$prior_base_sha"
+                fi
+                if [[ -n "$prior_tip_sha" ]]; then
+                    REVIEW_GATE_TIP_SHA="$prior_tip_sha"
+                fi
+            fi
+        fi
+    fi
+
     # --- Resolve base_sha and tip_sha for all modes ---
     # These are used to:
     # 1. Define the original review scope (base_sha..tip_sha)
@@ -552,14 +583,6 @@ USAGE
 
     if [[ -z "$diff_content" ]]; then
         die "No changes found for diff mode: $diff_mode ${diff_target:-}"
-    fi
-
-    # --- Session metadata ---
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
-
-    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
-        session_id="$(basename "$transcript_path" .jsonl)"
     fi
 
     if [[ -z "$session_id" ]]; then
