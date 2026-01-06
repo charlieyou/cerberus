@@ -340,7 +340,7 @@ Options:
   --max-rounds <n>     Maximum review iterations before manual resolution
   --mode <level>       Intelligence mode: fast, smart, max
   --consensus <mode>   Consensus mode: majority (default), all, any
-  --context-file <path> Inject author context from file into the prompt
+  --context-file <path> Inject task context from file (provides background for reviewers)
   --focus <text>       Focus area to emphasize in the review
   --exclude <pathspec> Exclude files matching pattern (auto-prefixed with :! for git)
   --uncommitted       Review uncommitted changes (default)
@@ -454,7 +454,7 @@ USAGE
         done
     fi
 
-    # --- Session metadata (needed for reuse of prior base/tip) ---
+    # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
 
@@ -462,86 +462,23 @@ USAGE
         session_id="$(basename "$transcript_path" .jsonl)"
     fi
 
-    # --- Reuse base/tip from prior artifact when re-running in the same session ---
-    # This keeps the original review scope stable and allows fix commits to be appended,
-    # even when spawn-code-review is called again directly (no hook env).
-    if [[ -n "$session_id" && -z "${REVIEW_GATE_TIP_SHA:-}" && -z "${REVIEW_GATE_BASE_SHA:-}" ]]; then
-        local prior_review_dir prior_artifact prior_diff_args
-        prior_review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
-        prior_artifact="$prior_review_dir/latest.md"
-        if [[ -f "$prior_artifact" ]]; then
-            prior_diff_args=$(sed -n 's/^<!-- *diff-args: *\(.*[^ ]\) *-->/\1/p' "$prior_artifact" | head -1)
-            if [[ -n "$prior_diff_args" && "$prior_diff_args" == "$diff_args_str" ]]; then
-                local prior_base_sha prior_tip_sha
-                prior_base_sha=$(sed -n 's/^<!-- *base-sha: *\([^ ]*\) *-->/\1/p' "$prior_artifact" | head -1)
-                prior_tip_sha=$(sed -n 's/^<!-- *tip-sha: *\([^ ]*\) *-->/\1/p' "$prior_artifact" | head -1)
-                if [[ -n "$prior_base_sha" ]]; then
-                    REVIEW_GATE_BASE_SHA="$prior_base_sha"
-                fi
-                if [[ -n "$prior_tip_sha" ]]; then
-                    REVIEW_GATE_TIP_SHA="$prior_tip_sha"
-                fi
-            fi
-        fi
-    fi
-
-    # --- Resolve base_sha and tip_sha for all modes ---
-    # These are used to:
-    # 1. Define the original review scope (base_sha..tip_sha)
-    # 2. Detect and include fix commits on re-spawn (tip_sha..HEAD)
-    if [[ "$diff_mode" == "--uncommitted" ]]; then
-        if [[ -n "${REVIEW_GATE_BASE_SHA:-}" ]]; then
-            base_sha="$REVIEW_GATE_BASE_SHA"
-        else
-            base_sha=$(git rev-parse HEAD 2>/dev/null || true)
-        fi
-        # For --uncommitted, tip_sha is not used (working tree changes)
-    elif [[ "$diff_mode" == "--commit" ]]; then
-        # For --commit, base_sha is parent of first commit, tip_sha is last commit
-        local commits_list="${diff_target//,/ }"
-        local first_commit="" last_commit=""
-        for c in $commits_list; do
-            if [[ -z "$first_commit" ]]; then
-                first_commit="$c"
-            fi
-            last_commit="$c"
-        done
-        # Check for stored tip_sha from previous iteration
-        if [[ -n "${REVIEW_GATE_TIP_SHA:-}" ]]; then
-            tip_sha="$REVIEW_GATE_TIP_SHA"
-            base_sha="${REVIEW_GATE_BASE_SHA:-}"
-        else
-            base_sha=$(git rev-parse "${first_commit}^" 2>/dev/null || true)
-            tip_sha=$(git rev-parse "$last_commit" 2>/dev/null || true)
-        fi
+    # --- Resolve base_sha and tip_sha for modes that need them ---
+    if [[ "$diff_mode" == "--commit" ]]; then
+        # No base/tip needed for commit list diff (use commit diffs directly)
+        :
     elif [[ "$diff_mode" == "range" ]]; then
         # For range like A..B, base_sha=A, tip_sha=B (resolved to actual SHAs)
         local range_start="${diff_target%%..*}"
         local range_end="${diff_target##*..}"
-        # Check for stored SHAs from previous iteration
-        if [[ -n "${REVIEW_GATE_TIP_SHA:-}" ]]; then
-            tip_sha="$REVIEW_GATE_TIP_SHA"
-            base_sha="${REVIEW_GATE_BASE_SHA:-}"
-        else
-            base_sha=$(git rev-parse "$range_start" 2>/dev/null || true)
-            tip_sha=$(git rev-parse "$range_end" 2>/dev/null || true)
-        fi
+        base_sha=$(git rev-parse "$range_start" 2>/dev/null || true)
+        tip_sha=$(git rev-parse "$range_end" 2>/dev/null || true)
     elif [[ "$diff_mode" == "--base" ]]; then
-        # For --base, check for stored tip_sha
-        if [[ -n "${REVIEW_GATE_TIP_SHA:-}" ]]; then
-            tip_sha="$REVIEW_GATE_TIP_SHA"
-            base_sha="${REVIEW_GATE_BASE_SHA:-}"
-        else
-            base_sha=$(git merge-base "$diff_target" HEAD 2>/dev/null || true)
-            tip_sha=$(git rev-parse HEAD 2>/dev/null || true)
-        fi
+        base_sha=$(git merge-base "$diff_target" HEAD 2>/dev/null || true)
+        tip_sha=$(git rev-parse HEAD 2>/dev/null || true)
     fi
 
     # --- Gather the diff ---
     local diff_content=""
-    local fix_diff=""
-    local current_head
-    current_head=$(git rev-parse HEAD 2>/dev/null || true)
     local -a pathspec_args=()
     if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
         pathspec_args=(-- . "${exclude_pathspecs[@]}")
@@ -549,38 +486,21 @@ USAGE
     
     case "$diff_mode" in
         --uncommitted)
-            # For iterative reviews, always use base_sha to capture all changes
-            # since the original review started. This ensures fixes applied by the
-            # agent are visible even if they were staged or the index changed.
-            if [[ -n "$base_sha" ]]; then
-                diff_content=$(git diff "${base_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
-            fi
-            # Fallback to unstaged + staged changes only when base_sha is not set
-            # (i.e., first-time review or non-iterative scenario)
-            if [[ -z "$diff_content" ]]; then
-                diff_content=$(git diff "${pathspec_args[@]}" 2>/dev/null || true)
-                local cached_diff
-                cached_diff=$(git diff --cached "${pathspec_args[@]}" 2>/dev/null || true)
-                if [[ -n "$cached_diff" ]]; then
-                    if [[ -n "$diff_content" ]]; then
-                        diff_content+=$'\n'"$cached_diff"
-                    else
-                        diff_content="$cached_diff"
-                    fi
+            diff_content=$(git diff "${pathspec_args[@]}" 2>/dev/null || true)
+            local cached_diff
+            cached_diff=$(git diff --cached "${pathspec_args[@]}" 2>/dev/null || true)
+            if [[ -n "$cached_diff" ]]; then
+                if [[ -n "$diff_content" ]]; then
+                    diff_content+=$'\n'"$cached_diff"
+                else
+                    diff_content="$cached_diff"
                 fi
             fi
             ;;
         --base)
-            # Original scope: base..tip_sha (stable)
             diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
-            # Fix diff: tip_sha..HEAD (new commits since review started)
-            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
-            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
-            fi
             ;;
         --commit)
-            # Original scope: show each commit
             local commits_list="${diff_target//,/ }"
             for sha in $commits_list; do
                 local commit_diff
@@ -593,27 +513,11 @@ USAGE
                     fi
                 fi
             done
-            # Fix diff: tip_sha..HEAD (new commits since review started)
-            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
-            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
-            fi
             ;;
         range)
-            # Original scope: base..tip (using resolved SHAs for stability)
             diff_content=$(git diff "${base_sha}..${tip_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
-            # Fix diff: tip_sha..HEAD (new commits since review started)
-            # Only include fix diff on re-spawn when stored tip matches current tip (prevents stale env issues)
-            if [[ -n "${REVIEW_GATE_TIP_SHA:-}" && "$tip_sha" == "$REVIEW_GATE_TIP_SHA" && "$tip_sha" != "$current_head" ]]; then
-                fix_diff=$(git diff "${tip_sha}..HEAD" "${pathspec_args[@]}" 2>/dev/null || true)
-            fi
             ;;
     esac
-    
-    # Append fix diff if present
-    if [[ -n "$fix_diff" ]]; then
-        diff_content+=$'\n\n'"# Fix Changes (since review started)"$'\n\n'"$fix_diff"
-    fi
 
     if [[ -z "$diff_content" ]]; then
         die "No changes found for diff mode: $diff_mode ${diff_target:-}"
@@ -808,12 +712,6 @@ USAGE
     {
         echo "<!-- review-type: code-review-iterative -->"
         echo "<!-- diff-args: $diff_args_str -->"
-        if [[ -n "$base_sha" ]]; then
-            echo "<!-- base-sha: $base_sha -->"
-        fi
-        if [[ -n "$tip_sha" ]]; then
-            echo "<!-- tip-sha: $tip_sha -->"
-        fi
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -863,10 +761,9 @@ USAGE
     if [[ -n "$mode" ]]; then
         mode_arg=(--mode "$mode")
     fi
-    local -a context_file_arg=()
-    if [[ -n "$context_file" ]]; then
-        context_file_arg=(--context-file "$context_file")
-    fi
+    # NOTE: Do not pass --context-file to spawn for code-review-iterative.
+    # Task context is already injected into the prompt via ${CONTEXT} template variable.
+    # Passing it to spawn would duplicate it and mislabel it as Author Context.
     local -a consensus_arg=()
     if [[ -n "$consensus_mode" ]]; then
         consensus_arg=(--consensus "$consensus_mode")
@@ -875,7 +772,7 @@ USAGE
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code-review-iterative" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 }
 
 review_gate_spawn_plan_review() {
