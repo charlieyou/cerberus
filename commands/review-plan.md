@@ -49,10 +49,14 @@ If no path is provided, the most recent plan from `~/.claude/plans/` will be use
    - Breaking changes and testability
 
 2. The Stop hook waits for reviewers and checks consensus:
-   - If all reviewers PASS: You may proceed
+   - If all reviewers PASS: You may proceed (but check for remaining issues first)
    - If any reviewer finds issues: You must fix the plan and try again
 
 3. Fix issues in the plan file based on reviewer feedback, then the review automatically re-runs.
+
+## After Passing
+
+When all reviewers PASS, you MUST fix any remaining issues or suggestions noted in their feedback before proceeding.
 
 ## Review Criteria
 
