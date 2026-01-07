@@ -55,7 +55,7 @@ Commands:
     Spawn reviewers for code changes. Claude fixes code until consensus passes.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
-      --commit <shas>     Review one or more commits (space or comma separated)
+      --commit <shas>     Review one or more commits as a net diff (space or comma separated)
       --exclude <spec>    Exclude files matching pattern (auto-prefixed with :! for git)
 
   spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [plan-path]
@@ -343,7 +343,7 @@ Options:
   --exclude <pathspec> Exclude files matching pattern (auto-prefixed with :! for git)
   --uncommitted       Review uncommitted changes (default)
   --base <branch>     Review changes from branch to HEAD
-  --commit <sha...>   Review one or more commits (space or comma separated)
+  --commit <sha...>   Review one or more commits as a net diff (space or comma separated)
   <range>             Review a commit range (e.g., main..feature)
   [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
@@ -466,6 +466,95 @@ USAGE
     if [[ ${#exclude_pathspecs[@]} -gt 0 ]]; then
         pathspec_args=(-- . "${exclude_pathspecs[@]}")
     fi
+
+    net_diff_from_commits() {
+        local -a commits=("$@")
+        if [[ ${#commits[@]} -eq 0 ]]; then
+            echo ""
+            return 0
+        fi
+
+        local -a parent_shas=()
+        local sha
+        for sha in "${commits[@]}"; do
+            local parent_sha
+            parent_sha=$(git rev-parse "$sha^" 2>/dev/null || true)
+            if [[ -n "$parent_sha" ]]; then
+                parent_shas+=("$parent_sha")
+            fi
+        done
+
+        local base_sha=""
+        if [[ ${#parent_shas[@]} -gt 0 ]]; then
+            base_sha=$(git merge-base --octopus "${parent_shas[@]}" 2>/dev/null || true)
+        fi
+
+        if [[ -z "$base_sha" ]]; then
+            base_sha=$(git hash-object -t tree /dev/null 2>/dev/null || true)
+            if [[ -z "$base_sha" ]]; then
+                die "Unable to compute base for --commit net diff"
+            fi
+        fi
+
+        local base_tree
+        if git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            base_tree="${base_sha}^{tree}"
+        else
+            base_tree="$base_sha"
+        fi
+
+        local tmp_index
+        tmp_index=$(mktemp -t review-gate-index.XXXXXX)
+        if ! GIT_INDEX_FILE="$tmp_index" git read-tree "$base_tree" >/dev/null 2>&1; then
+            rm -f "$tmp_index"
+            die "Failed to read base tree for --commit net diff"
+        fi
+
+        for sha in "${commits[@]}"; do
+            local patch=""
+            local parent_sha
+            parent_sha=$(git rev-parse "$sha^" 2>/dev/null || true)
+            if [[ -n "$parent_sha" ]]; then
+                if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                    patch=$(git diff --binary "$parent_sha" "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
+                else
+                    patch=$(git diff --binary "$parent_sha" "$sha" 2>/dev/null || true)
+                fi
+            else
+                if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                    patch=$(git show --binary --pretty=format: --root "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
+                else
+                    patch=$(git show --binary --pretty=format: --root "$sha" 2>/dev/null || true)
+                fi
+            fi
+
+            if [[ -z "$patch" ]]; then
+                continue
+            fi
+
+            if ! printf '%s\n' "$patch" | GIT_INDEX_FILE="$tmp_index" git apply --cached --3way --whitespace=nowarn - >/dev/null 2>&1; then
+                rm -f "$tmp_index"
+                die "Failed to apply commit $sha while building net diff"
+            fi
+        done
+
+        local new_tree
+        new_tree=$(GIT_INDEX_FILE="$tmp_index" git write-tree 2>/dev/null || true)
+        if [[ -z "$new_tree" ]]; then
+            rm -f "$tmp_index"
+            die "Failed to write tree for --commit net diff"
+        fi
+
+        local diff_out=""
+        if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+            diff_out=$(git diff-tree --binary -p "$base_tree" "$new_tree" "${pathspec_args[@]}" 2>/dev/null || true)
+        else
+            diff_out=$(git diff-tree --binary -p "$base_tree" "$new_tree" 2>/dev/null || true)
+        fi
+
+        rm -f "$tmp_index"
+        printf '%s' "$diff_out"
+    }
     
     case "$diff_mode" in
         --uncommitted)
@@ -488,19 +577,8 @@ USAGE
             diff_content=$(git diff "${base_sha}..${head_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
             ;;
         --commit)
-            # Original scope: show each commit
             local commits_list="${diff_target//,/ }"
-            for sha in $commits_list; do
-                local commit_diff
-                commit_diff=$(git show "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
-                if [[ -n "$commit_diff" ]]; then
-                    if [[ -n "$diff_content" ]]; then
-                        diff_content+=$'\n'"$commit_diff"
-                    else
-                        diff_content="$commit_diff"
-                    fi
-                fi
-            done
+            diff_content=$(net_diff_from_commits $commits_list)
             ;;
         range)
             diff_content=$(git diff "$diff_target" "${pathspec_args[@]}" 2>/dev/null || true)

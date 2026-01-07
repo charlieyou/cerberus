@@ -415,7 +415,56 @@ test_exclude_commit_and_fix() {
     fi
 }
 
-# Test 8: max-rounds=0 auto-resolves without re-spawn
+# Test 8: --commit mode produces net diff across non-contiguous commits
+test_commit_mode_net_diff_non_contig() {
+    ((TESTS_RUN++)) || true
+    log_test "--commit mode produces net diff across non-contiguous commits"
+
+    setup_test_repo
+
+    echo "alpha" > file.txt
+    git add file.txt
+    git commit -q -m "commit A"
+    local sha_a
+    sha_a=$(git rev-parse HEAD)
+
+    echo "other" > other.txt
+    git add other.txt
+    git commit -q -m "commit B"
+    local sha_b
+    sha_b=$(git rev-parse HEAD)
+
+    echo "charlie" > file.txt
+    git add file.txt
+    git commit -q -m "commit C"
+    local sha_c
+    sha_c=$(git rev-parse HEAD)
+
+    export CLAUDE_SESSION_ID="test-session-$$-8"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local output
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$sha_a" "$sha_c" 2>&1)
+    local artifact_path
+    artifact_path=$(get_artifact_path "$output")
+
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if echo "$diff_content" | grep -q "other.txt"; then
+            log_fail "net diff unexpectedly included skipped commit"
+        elif echo "$diff_content" | grep -q "charlie" && ! echo "$diff_content" | grep -q "alpha"; then
+            log_pass "net diff reflects final content without skipped commit"
+        else
+            log_fail "net diff missing expected content"
+        fi
+    else
+        log_fail "artifact not created at $artifact_path"
+    fi
+}
+
+# Test 9: max-rounds=0 auto-resolves without re-spawn
 test_max_rounds_zero_auto_resolves() {
     ((TESTS_RUN++)) || true
     log_test "--max-rounds 0 auto-resolves without re-spawn"
@@ -496,6 +545,7 @@ main() {
     test_multiple_fix_iterations_do_not_accumulate
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
+    test_commit_mode_net_diff_non_contig
     test_max_rounds_zero_auto_resolves
     
     echo ""

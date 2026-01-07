@@ -13,8 +13,8 @@ Multi-model code review that automatically iterates until consensus is reached. 
 /cerberus:review-code                    # Review uncommitted changes (default)
 /cerberus:review-code --uncommitted      # Review uncommitted changes
 /cerberus:review-code --base main        # Review changes from main to HEAD
-/cerberus:review-code --commit abc123    # Review a single commit
-/cerberus:review-code --commit abc123 def456  # Review multiple commits
+/cerberus:review-code --commit abc123    # Review a single commit (net diff)
+/cerberus:review-code --commit abc123 def456  # Review multiple commits (net diff)
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
@@ -25,6 +25,8 @@ Multi-model code review that automatically iterates until consensus is reached. 
 /cerberus:review-code --exclude ':(exclude,glob)dist/**'  # Ignore files using git pathspec syntax
 /cerberus:review-code "focus on error handling"  # Focus review on specific area
 ```
+
+Note: `--commit` generates a single net diff by applying the listed commits onto their merge-base, so non-contiguous commit lists are supported and intermediate commits are not shown individually.
 
 ## How It Works
 
