@@ -657,16 +657,19 @@ USAGE
         die "Code review prompt template not found in project or built-in locations"
     fi
 
-    # --- Inject previous reviews / author context before output format ---
+    # --- Inject previous reviews / author context near the top of the prompt ---
     local review_context=""
-    if [[ -n "$previous_reviews" ]]; then
-        review_context+="$previous_reviews"
-    fi
     if [[ -n "$author_context" ]]; then
         if [[ -n "$review_context" ]]; then
             review_context+=$'\n'
         fi
         review_context+=$'## Author Context\nUse these clarifications when evaluating the changes and prior feedback.\n\n'"$author_context"
+    fi
+    if [[ -n "$previous_reviews" ]]; then
+        if [[ -n "$review_context" ]]; then
+            review_context+=$'\n'
+        fi
+        review_context+="$previous_reviews"
     fi
     if [[ -n "$focus_area" ]]; then
         if [[ -n "$review_context" ]]; then
@@ -680,6 +683,11 @@ USAGE
         printf '%s' "$review_context" > "$context_tmp"
         prompt_content=$(awk -v ctx_file="$context_tmp" '
             BEGIN { while ((getline line < ctx_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(ctx_file); inserted=0 }
+            /^## Task Context/ && inserted==0 {
+                print ctx
+                print ""
+                inserted=1
+            }
             /^## Output Format/ && inserted==0 {
                 print ctx
                 print ""
