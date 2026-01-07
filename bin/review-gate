@@ -335,7 +335,7 @@ Usage: ${CLI_CMD} spawn-code-review [options]
 
 Options:
   --agents <list>      Comma-separated subset of agents: codex,gemini,claude
-  --max-rounds <n>     Maximum review iterations before manual resolution
+  --max-rounds <n>     Maximum review iterations before manual resolution (0 disables auto-respawn)
   --mode <level>       Intelligence mode: fast, smart, max
   --consensus <mode>   Consensus mode: majority (default), all, any
   --context-file <path> Inject task context from file (provides background for reviewers)
@@ -845,7 +845,7 @@ the most recent session plan from ~/.claude/plans/.
 
 Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
-  --max-rounds <n>          Maximum review iterations before manual resolution
+  --max-rounds <n>          Maximum review iterations before manual resolution (0 disables auto-respawn)
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
   --focus <text>            Focus area to emphasize in the review
@@ -1193,7 +1193,7 @@ Spawn reviewers for a feature specification file.
 
 Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
-  --max-rounds <n>          Maximum review iterations before manual resolution
+  --max-rounds <n>          Maximum review iterations before manual resolution (0 disables auto-respawn)
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
   --consensus <mode>        Consensus mode: majority (default), all, any

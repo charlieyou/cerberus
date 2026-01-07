@@ -415,6 +415,67 @@ test_exclude_commit_and_fix() {
     fi
 }
 
+# Test 8: max-rounds=0 auto-resolves without re-spawn
+test_max_rounds_zero_auto_resolves() {
+    ((TESTS_RUN++)) || true
+    log_test "--max-rounds 0 auto-resolves without re-spawn"
+
+    setup_test_repo
+
+    export CLAUDE_SESSION_ID="test-session-$$-8"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local artifact_path
+    artifact_path=$("$REVIEW_GATE" artifact-path)
+    local review_dir
+    review_dir=$(dirname "$artifact_path")
+    mkdir -p "$review_dir/reviews"
+
+    cat > "$artifact_path" <<'EOF'
+<!-- review-type: code-review-iterative -->
+<!-- diff-args: --commit deadbeef -->
+<!-- max-rounds: 0 -->
+EOF
+
+    cat > "$review_dir/gate-state.json" <<EOF
+{
+  "status": "pending",
+  "config": {"max_rounds": 0, "consensus_mode": "majority"},
+  "reviewers": {"codex": {}},
+  "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "iteration": 0,
+  "mode": {"type": "code-diff", "diff_args": "--commit deadbeef"}
+}
+EOF
+
+    cat > "$review_dir/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"fail","findings":[{"title":"[P1] fail","body":"nope","priority":1,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+    touch "$review_dir/reviews/codex.done"
+
+    local output
+    output=$(echo "{\"session_id\":\"$CLAUDE_SESSION_ID\",\"transcript_path\":\"$REVIEW_GATE_TRANSCRIPT_PATH\"}" | "$REVIEW_GATE" check 2>/dev/null || true)
+
+    if ! echo "$output" | grep -q "Max iterations (0)"; then
+        log_fail "missing max-iterations message in hook output"
+        return
+    fi
+
+    local status
+    status=$(jq -r '.status // empty' "$review_dir/gate-state.json" 2>/dev/null || echo "")
+    if [[ "$status" != "resolved" ]]; then
+        log_fail "expected resolved status, got '${status:-<empty>}'"
+        return
+    fi
+
+    if [[ -d "$review_dir/reviews-iter-0" ]]; then
+        log_fail "unexpected reviews archive created (respawn occurred)"
+        return
+    fi
+
+    log_pass "auto-resolve triggered without respawn"
+}
+
 # Run all tests
 main() {
     echo "========================================"
@@ -429,6 +490,7 @@ main() {
     test_multiple_fix_iterations_do_not_accumulate
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
+    test_max_rounds_zero_auto_resolves
     
     echo ""
     echo "========================================"

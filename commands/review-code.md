@@ -18,6 +18,7 @@ Multi-model code review that automatically iterates until consensus is reached. 
 /cerberus:review-code main..feature      # Review a commit range
 /cerberus:review-code --agents codex,gemini      # Only run selected reviewers
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
+/cerberus:review-code --max-rounds 0     # Disable auto-respawn (single round)
 /cerberus:review-code --mode max         # Use max intelligence mode
 /cerberus:review-code --consensus any    # Pass if at least one reviewer approves
 /cerberus:review-code --consensus all    # Require unanimous approval
@@ -30,7 +31,7 @@ Multi-model code review that automatically iterates until consensus is reached. 
 1. **Spawn Review**: Run the spawn command to start the review
 2. **Reviewers Evaluate**: Codex, Gemini, and Claude analyze the diff in parallel
 3. **Fix Issues**: If reviewers find issues, fix the code
-4. **Re-review**: Reviews automatically re-run after you make changes
+4. **Re-review**: Reviews automatically re-run after you make changes (unless `--max-rounds 0`)
 5. **Pass**: When consensus is reached (per `--consensus` mode), the gate resolves
 
 ## Run the Review
@@ -86,7 +87,7 @@ When reviewers don't all agree:
 
 1. The stop hook presents issues from each reviewer
 2. Fix the code to address the feedback
-3. The review automatically re-runs (default 5, configurable via --max-rounds)
+3. The review automatically re-runs (default 3, configurable via --max-rounds; set `--max-rounds 0` to disable)
 
 ## Completion
 

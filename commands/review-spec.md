@@ -34,6 +34,7 @@ Limit the number of iterations:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --max-rounds 3 path/to/spec.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --max-rounds 0 path/to/spec.md  # Disable auto-respawn
 ```
 
 Choose an intelligence mode:
@@ -112,7 +113,7 @@ Specs are tiered by complexity. **Reviewers must respect the stated tier** and o
 
 The iterative review continues until:
 - Consensus is reached (per `--consensus` mode, default: majority)
-- Maximum iterations (default 3, configurable via --max-rounds) are reached
+- Maximum iterations (default 3, configurable via --max-rounds; set `0` to disable auto-respawn) are reached
 - You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve`
 
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.

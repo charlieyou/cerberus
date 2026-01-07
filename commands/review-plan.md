@@ -40,6 +40,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --agents codex,gemini pa
 
 # User: /review-plan --max-rounds 3 path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
 
 # User: /review-plan --consensus any path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --consensus any path/to/plan.md
@@ -86,7 +87,7 @@ Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) â
 
 The iterative review continues until:
 - Consensus is reached (per `--consensus` mode, default: majority)
-- Maximum iterations (default 5, configurable via --max-rounds) are reached
+- Maximum iterations (default 3, configurable via --max-rounds; set `0` to disable auto-respawn) are reached
 - You manually resolve with `${CLAUDE_PLUGIN_ROOT}/bin/review-gate resolve`
 
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.

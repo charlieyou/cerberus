@@ -9,7 +9,7 @@ Multi-model consensus review system that gates Claude Code session termination u
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
-- **Automatic iteration**: Reviews loop until consensus passes (default 3 rounds, configurable via `--max-rounds`)
+- **Automatic iteration**: Reviews loop until consensus passes (default 3 rounds, configurable via `--max-rounds`; set `--max-rounds 0` to disable auto-respawn)
 - **Code review**: Review git diffs (uncommitted, branch comparisons, commits, ranges)
 - **Plan & spec creation**: Interview + generator flow to draft plans or specs before review
 - **Plan & spec review**: Review implementation plans or feature specs before execution
@@ -212,8 +212,8 @@ Examples:
 2. **Evaluate**: All reviewers analyze in parallel
 3. **Consensus**: Stop hook checks if consensus threshold is met (default: majority)
 4. **Iterate**: If consensus not reached or blocking issues found (FAIL/P0/P1), presents issues and blocks for revision
-5. **Repeat**: After changes, review automatically re-runs
-6. **Complete**: Consensus reached = session can stop; default 3 iterations = manual decision (configurable via `--max-rounds`)
+5. **Repeat**: After changes, review automatically re-runs (unless `--max-rounds 0`)
+6. **Complete**: Consensus reached = session can stop; default 3 iterations = manual decision (configurable via `--max-rounds`, 0 disables auto-respawn)
 
 ## Review Criteria
 
@@ -246,7 +246,7 @@ Examples:
 
 **Convergence policy for specs:** reviewers are instructed to PASS when there are no P0/P1 issues, even if they list P2/P3 suggestions. This keeps spec reviews focused on blocking gaps rather than endless detail expansion. If you want stricter behavior, increase reviewer count or lower `--max-rounds` and use manual override.
 
-**Default max rounds:** 3 for all review types (overridable via `--max-rounds` or `REVIEW_GATE_MAX_ROUNDS`).
+**Default max rounds:** 3 for all review types (overridable via `--max-rounds` or `REVIEW_GATE_MAX_ROUNDS`; set to `0` to disable auto-respawn).
 
 **Author context example (recommended for spec reviews):**
 
