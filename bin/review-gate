@@ -564,9 +564,9 @@ USAGE
 
         local diff_out=""
         if [[ ${#pathspec_args[@]} -gt 0 ]]; then
-            diff_out=$(git diff-tree --binary -p "$base_tree" "$new_tree" "${pathspec_args[@]}" 2>/dev/null || true)
+            diff_out=$(git diff-tree -r --binary -p "$base_tree" "$new_tree" "${pathspec_args[@]}" 2>/dev/null || true)
         else
-            diff_out=$(git diff-tree --binary -p "$base_tree" "$new_tree" 2>/dev/null || true)
+            diff_out=$(git diff-tree -r --binary -p "$base_tree" "$new_tree" 2>/dev/null || true)
         fi
 
         rm -f "$tmp_index"

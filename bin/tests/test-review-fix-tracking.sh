@@ -415,27 +415,36 @@ test_exclude_commit_and_fix() {
     fi
 }
 
-# Test 8: --commit mode produces net diff across non-contiguous commits
+# Test 8: --commit mode produces net diff across non-contiguous commits (including subdirectories)
 test_commit_mode_net_diff_non_contig() {
     ((TESTS_RUN++)) || true
-    log_test "--commit mode produces net diff across non-contiguous commits"
+    log_test "--commit mode produces net diff across non-contiguous commits (including subdirs)"
 
     setup_test_repo
 
+    # Create files in subdirectories to test recursion
+    mkdir -p subdir/nested
     echo "alpha" > file.txt
-    git add file.txt
+    echo "sub_alpha" > subdir/sub.txt
+    echo "nested_alpha" > subdir/nested/deep.txt
+    git add file.txt subdir/sub.txt subdir/nested/deep.txt
     git commit -q -m "commit A"
     local sha_a
     sha_a=$(git rev-parse HEAD)
 
+    # Commit B: unrelated changes (should not appear in net diff)
     echo "other" > other.txt
-    git add other.txt
+    echo "other_sub" > subdir/other.txt
+    git add other.txt subdir/other.txt
     git commit -q -m "commit B"
     local sha_b
     sha_b=$(git rev-parse HEAD)
 
+    # Commit C: changes to same files as A (tests net diff merging across subdirs)
     echo "charlie" > file.txt
-    git add file.txt
+    echo "sub_charlie" > subdir/sub.txt
+    echo "nested_charlie" > subdir/nested/deep.txt
+    git add file.txt subdir/sub.txt subdir/nested/deep.txt
     git commit -q -m "commit C"
     local sha_c
     sha_c=$(git rev-parse HEAD)
@@ -452,12 +461,53 @@ test_commit_mode_net_diff_non_contig() {
         local diff_content
         diff_content=$(extract_diff_from_artifact "$artifact_path")
 
+        local failed=false
+        local fail_reasons=""
+
+        # Verify skipped commit files are NOT included
         if echo "$diff_content" | grep -q "other.txt"; then
-            log_fail "net diff unexpectedly included skipped commit"
-        elif echo "$diff_content" | grep -q "charlie" && ! echo "$diff_content" | grep -q "alpha"; then
-            log_pass "net diff reflects final content without skipped commit"
+            failed=true
+            fail_reasons+=" other.txt included from skipped commit;"
+        fi
+        if echo "$diff_content" | grep -q "subdir/other.txt"; then
+            failed=true
+            fail_reasons+=" subdir/other.txt included from skipped commit;"
+        fi
+
+        # Verify root file changes are in net diff
+        if ! echo "$diff_content" | grep -q "charlie"; then
+            failed=true
+            fail_reasons+=" missing root file content 'charlie';"
+        fi
+        if echo "$diff_content" | grep -q "+alpha"; then
+            failed=true
+            fail_reasons+=" intermediate content 'alpha' present (should be net);"
+        fi
+
+        # Verify subdirectory file changes are in net diff (tests recursion)
+        if ! echo "$diff_content" | grep -q "subdir/sub.txt"; then
+            failed=true
+            fail_reasons+=" missing subdir/sub.txt in diff;"
+        fi
+        if ! echo "$diff_content" | grep -q "sub_charlie"; then
+            failed=true
+            fail_reasons+=" missing subdir content 'sub_charlie';"
+        fi
+
+        # Verify nested subdirectory file changes are in net diff (tests deep recursion)
+        if ! echo "$diff_content" | grep -q "subdir/nested/deep.txt"; then
+            failed=true
+            fail_reasons+=" missing subdir/nested/deep.txt in diff;"
+        fi
+        if ! echo "$diff_content" | grep -q "nested_charlie"; then
+            failed=true
+            fail_reasons+=" missing nested content 'nested_charlie';"
+        fi
+
+        if $failed; then
+            log_fail "net diff issues:$fail_reasons"
         else
-            log_fail "net diff missing expected content"
+            log_pass "net diff reflects final content in root and subdirectories"
         fi
     else
         log_fail "artifact not created at $artifact_path"
@@ -471,36 +521,106 @@ test_commit_mode_fallback_on_conflict() {
 
     setup_test_repo
 
-    echo "base" > file.txt
+    # Create a base state
+    echo "base content" > file.txt
     git add file.txt
     git commit -q -m "base"
+    local base_sha
+    base_sha=$(git rev-parse HEAD)
 
-    echo "first" > file.txt
+    # Get current branch name for later checkout
+    local main_branch
+    main_branch=$(git branch --show-current)
+
+    # Create commit A: changes file.txt
+    echo "commit A content" > file.txt
     git add file.txt
-    git commit -q -m "commit A"
+    git commit -q -m "commit A: modify file"
     local sha_a
     sha_a=$(git rev-parse HEAD)
 
-    echo "second" > file.txt
+    # Create a divergent branch from base
+    git checkout -q "$base_sha"
+    git checkout -q -b divergent
+
+    # Create commit B on divergent branch: different changes to same file
+    # This creates a situation where commits A and B have conflicting changes
+    # that cannot be cleanly merged via 3-way merge in net_diff_from_commits
+    echo "commit B content (divergent)" > file.txt
     git add file.txt
-    git commit -q -m "commit B"
+    git commit -q -m "commit B: divergent modify"
+    local sha_b
+    sha_b=$(git rev-parse HEAD)
+
+    # Go back to main
+    git checkout -q "$main_branch"
 
     export CLAUDE_SESSION_ID="test-session-$$-9"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
     export REVIEW_GATE_COMMIT_NET_STRICT=0
-    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$sha_a" 2>&1)
+    # Request both conflicting commits - this should trigger fallback
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$sha_a" "$sha_b" 2>&1)
     local artifact_path
     artifact_path=$(get_artifact_path "$output")
 
     if [[ -f "$artifact_path" ]]; then
         local diff_content
         diff_content=$(extract_diff_from_artifact "$artifact_path")
-        if echo "$diff_content" | grep -q "diff --git" && echo "$diff_content" | grep -q "first"; then
-            log_pass "fallback produced per-commit diff"
+
+        local has_commit_a_content=false
+        local has_commit_b_content=false
+        local has_per_commit_headers=false
+        local has_multiple_commits=false
+
+        # Check for content from both commits (per-commit fallback includes both)
+        if echo "$diff_content" | grep -q "commit A content"; then
+            has_commit_a_content=true
+        fi
+        if echo "$diff_content" | grep -q "commit B content"; then
+            has_commit_b_content=true
+        fi
+
+        # Per-commit diffs from git show include commit headers (Author:, Date:, etc.)
+        # Net diffs from git diff-tree do NOT include these headers
+        # This is the key indicator that fallback was used instead of net diff
+        if echo "$diff_content" | grep -qE "^Author:"; then
+            has_per_commit_headers=true
+        fi
+
+        # Fallback concatenates multiple git show outputs, each starting with "commit <sha>"
+        # Count the number of commit headers - should be 2 for our two commits
+        local commit_count
+        commit_count=$(echo "$diff_content" | grep -cE "^commit [0-9a-f]{40}" || true)
+        if [[ "$commit_count" -ge 2 ]]; then
+            has_multiple_commits=true
+        fi
+
+        local failed=false
+        local fail_reasons=""
+
+        if ! $has_commit_a_content; then
+            failed=true
+            fail_reasons+=" missing commit A content;"
+        fi
+        if ! $has_commit_b_content; then
+            failed=true
+            fail_reasons+=" missing commit B content;"
+        fi
+        if ! $has_per_commit_headers; then
+            failed=true
+            fail_reasons+=" missing Author: header (suggests net diff was used, not per-commit fallback);"
+        fi
+        if ! $has_multiple_commits; then
+            failed=true
+            fail_reasons+=" expected 2 commit headers but found $commit_count (fallback should include both commits separately);"
+        fi
+
+        if $failed; then
+            log_fail "fallback verification issues:$fail_reasons"
         else
-            log_fail "fallback diff missing expected content"
+            log_pass "fallback produced per-commit diffs with proper headers"
         fi
     else
         log_fail "artifact not created at $artifact_path"
