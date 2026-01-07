@@ -473,6 +473,7 @@ USAGE
             echo ""
             return 0
         fi
+        local strict_mode="${REVIEW_GATE_COMMIT_NET_STRICT:-0}"
 
         local -a parent_shas=()
         local sha
@@ -492,7 +493,11 @@ USAGE
         if [[ -z "$base_sha" ]]; then
             base_sha=$(git hash-object -t tree /dev/null 2>/dev/null || true)
             if [[ -z "$base_sha" ]]; then
-                die "Unable to compute base for --commit net diff"
+                if [[ "$strict_mode" == "1" ]]; then
+                    die "Unable to compute base for --commit net diff"
+                fi
+                NET_DIFF_FALLBACK_REASON="unable to compute base"
+                return 0
             fi
         fi
 
@@ -507,7 +512,11 @@ USAGE
         tmp_index=$(mktemp -t review-gate-index.XXXXXX)
         if ! GIT_INDEX_FILE="$tmp_index" git read-tree "$base_tree" >/dev/null 2>&1; then
             rm -f "$tmp_index"
-            die "Failed to read base tree for --commit net diff"
+            if [[ "$strict_mode" == "1" ]]; then
+                die "Failed to read base tree for --commit net diff"
+            fi
+            NET_DIFF_FALLBACK_REASON="failed to read base tree"
+            return 0
         fi
 
         for sha in "${commits[@]}"; do
@@ -534,7 +543,11 @@ USAGE
 
             if ! printf '%s\n' "$patch" | GIT_INDEX_FILE="$tmp_index" git apply --cached --3way --whitespace=nowarn - >/dev/null 2>&1; then
                 rm -f "$tmp_index"
-                die "Failed to apply commit $sha while building net diff"
+                if [[ "$strict_mode" == "1" ]]; then
+                    die "Failed to apply commit $sha while building net diff"
+                fi
+                NET_DIFF_FALLBACK_REASON="apply failed for commit $sha"
+                return 0
             fi
         done
 
@@ -542,7 +555,11 @@ USAGE
         new_tree=$(GIT_INDEX_FILE="$tmp_index" git write-tree 2>/dev/null || true)
         if [[ -z "$new_tree" ]]; then
             rm -f "$tmp_index"
-            die "Failed to write tree for --commit net diff"
+            if [[ "$strict_mode" == "1" ]]; then
+                die "Failed to write tree for --commit net diff"
+            fi
+            NET_DIFF_FALLBACK_REASON="failed to write tree"
+            return 0
         fi
 
         local diff_out=""
@@ -578,7 +595,28 @@ USAGE
             ;;
         --commit)
             local commits_list="${diff_target//,/ }"
-            diff_content=$(net_diff_from_commits $commits_list)
+            local net_diff=""
+            NET_DIFF_FALLBACK_REASON=""
+            net_diff=$(net_diff_from_commits $commits_list)
+            if [[ -n "$net_diff" ]]; then
+                diff_content="$net_diff"
+            else
+                if [[ -n "$NET_DIFF_FALLBACK_REASON" ]]; then
+                    commit_net_warning="Note: Net diff failed ($NET_DIFF_FALLBACK_REASON); falling back to per-commit diffs."
+                fi
+                local sha
+                for sha in $commits_list; do
+                    local commit_diff
+                    commit_diff=$(git show "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
+                    if [[ -n "$commit_diff" ]]; then
+                        if [[ -n "$diff_content" ]]; then
+                            diff_content+=$'\n'"$commit_diff"
+                        else
+                            diff_content="$commit_diff"
+                        fi
+                    fi
+                done
+            fi
             ;;
         range)
             diff_content=$(git diff "$diff_target" "${pathspec_args[@]}" 2>/dev/null || true)
@@ -705,6 +743,9 @@ USAGE
     done
 
     local prompt_content
+    if [[ -n "${commit_net_warning:-}" ]]; then
+        task_context="${task_context:-No additional context provided.}"$'\n\n'"$commit_net_warning"
+    fi
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
         # Load template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
         local diff_tmp="${review_dir}/diff_content.tmp"

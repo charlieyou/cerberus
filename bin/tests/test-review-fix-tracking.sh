@@ -464,7 +464,50 @@ test_commit_mode_net_diff_non_contig() {
     fi
 }
 
-# Test 9: max-rounds=0 auto-resolves without re-spawn
+# Test 9: --commit fallback to per-commit diffs when net diff fails
+test_commit_mode_fallback_on_conflict() {
+    ((TESTS_RUN++)) || true
+    log_test "--commit falls back to per-commit diffs when net diff fails"
+
+    setup_test_repo
+
+    echo "base" > file.txt
+    git add file.txt
+    git commit -q -m "base"
+
+    echo "first" > file.txt
+    git add file.txt
+    git commit -q -m "commit A"
+    local sha_a
+    sha_a=$(git rev-parse HEAD)
+
+    echo "second" > file.txt
+    git add file.txt
+    git commit -q -m "commit B"
+
+    export CLAUDE_SESSION_ID="test-session-$$-9"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local output
+    export REVIEW_GATE_COMMIT_NET_STRICT=0
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --commit "$sha_a" 2>&1)
+    local artifact_path
+    artifact_path=$(get_artifact_path "$output")
+
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+        if echo "$diff_content" | grep -q "diff --git" && echo "$diff_content" | grep -q "first"; then
+            log_pass "fallback produced per-commit diff"
+        else
+            log_fail "fallback diff missing expected content"
+        fi
+    else
+        log_fail "artifact not created at $artifact_path"
+    fi
+}
+
+# Test 10: max-rounds=0 auto-resolves without re-spawn
 test_max_rounds_zero_auto_resolves() {
     ((TESTS_RUN++)) || true
     log_test "--max-rounds 0 auto-resolves without re-spawn"
@@ -546,6 +589,7 @@ main() {
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
     test_commit_mode_net_diff_non_contig
+    test_commit_mode_fallback_on_conflict
     test_max_rounds_zero_auto_resolves
     
     echo ""
