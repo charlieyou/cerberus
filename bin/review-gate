@@ -467,11 +467,23 @@ USAGE
         pathspec_args=(-- . "${exclude_pathspecs[@]}")
     fi
 
+    # net_diff_from_commits: Compute net diff from a list of commits
+    # Args: output_file reason_file commit1 [commit2 ...]
+    # Returns: 0 = success (output in output_file)
+    #          1 = fallback needed (reason in reason_file)
+    #          2 = strict mode failure (reason in reason_file, caller should die)
     net_diff_from_commits() {
+        local output_file="$1"
+        local reason_file="$2"
+        shift 2
         local -a commits=("$@")
+
+        # Clear output and reason files
+        : > "$output_file"
+        : > "$reason_file"
+
         if [[ ${#commits[@]} -eq 0 ]]; then
-            echo ""
-            return 0
+            return 0  # Success with empty output
         fi
         local strict_mode="${REVIEW_GATE_COMMIT_NET_STRICT:-0}"
 
@@ -494,10 +506,11 @@ USAGE
             base_sha=$(git hash-object -t tree /dev/null 2>/dev/null || true)
             if [[ -z "$base_sha" ]]; then
                 if [[ "$strict_mode" == "1" ]]; then
-                    die "Unable to compute base for --commit net diff"
+                    printf '%s' "Unable to compute base for --commit net diff" > "$reason_file"
+                    return 2
                 fi
-                NET_DIFF_FALLBACK_REASON="unable to compute base"
-                return 0
+                printf '%s' "unable to compute base" > "$reason_file"
+                return 1
             fi
         fi
 
@@ -513,10 +526,11 @@ USAGE
         if ! GIT_INDEX_FILE="$tmp_index" git read-tree "$base_tree" >/dev/null 2>&1; then
             rm -f "$tmp_index"
             if [[ "$strict_mode" == "1" ]]; then
-                die "Failed to read base tree for --commit net diff"
+                printf '%s' "Failed to read base tree for --commit net diff" > "$reason_file"
+                return 2
             fi
-            NET_DIFF_FALLBACK_REASON="failed to read base tree"
-            return 0
+            printf '%s' "failed to read base tree" > "$reason_file"
+            return 1
         fi
 
         for sha in "${commits[@]}"; do
@@ -544,10 +558,11 @@ USAGE
             if ! printf '%s\n' "$patch" | GIT_INDEX_FILE="$tmp_index" git apply --cached --3way --whitespace=nowarn - >/dev/null 2>&1; then
                 rm -f "$tmp_index"
                 if [[ "$strict_mode" == "1" ]]; then
-                    die "Failed to apply commit $sha while building net diff"
+                    printf '%s' "Failed to apply commit $sha while building net diff" > "$reason_file"
+                    return 2
                 fi
-                NET_DIFF_FALLBACK_REASON="apply failed for commit $sha"
-                return 0
+                printf '%s' "apply failed for commit $sha" > "$reason_file"
+                return 1
             fi
         done
 
@@ -556,21 +571,21 @@ USAGE
         if [[ -z "$new_tree" ]]; then
             rm -f "$tmp_index"
             if [[ "$strict_mode" == "1" ]]; then
-                die "Failed to write tree for --commit net diff"
+                printf '%s' "Failed to write tree for --commit net diff" > "$reason_file"
+                return 2
             fi
-            NET_DIFF_FALLBACK_REASON="failed to write tree"
-            return 0
+            printf '%s' "failed to write tree" > "$reason_file"
+            return 1
         fi
 
-        local diff_out=""
         if [[ ${#pathspec_args[@]} -gt 0 ]]; then
-            diff_out=$(git diff-tree -r --binary -p "$base_tree" "$new_tree" "${pathspec_args[@]}" 2>/dev/null || true)
+            git diff-tree -r --binary -p "$base_tree" "$new_tree" "${pathspec_args[@]}" 2>/dev/null > "$output_file" || true
         else
-            diff_out=$(git diff-tree -r --binary -p "$base_tree" "$new_tree" 2>/dev/null || true)
+            git diff-tree -r --binary -p "$base_tree" "$new_tree" 2>/dev/null > "$output_file" || true
         fi
 
         rm -f "$tmp_index"
-        printf '%s' "$diff_out"
+        return 0
     }
     
     case "$diff_mode" in
@@ -595,14 +610,28 @@ USAGE
             ;;
         --commit)
             local commits_list="${diff_target//,/ }"
-            local net_diff=""
-            NET_DIFF_FALLBACK_REASON=""
-            net_diff=$(net_diff_from_commits $commits_list)
-            if [[ -n "$net_diff" ]]; then
-                diff_content="$net_diff"
+            local net_diff_output_file net_diff_reason_file
+            net_diff_output_file=$(mktemp -t review-gate-net-diff-out.XXXXXX)
+            net_diff_reason_file=$(mktemp -t review-gate-net-diff-reason.XXXXXX)
+
+            local net_diff_rc=0
+            net_diff_from_commits "$net_diff_output_file" "$net_diff_reason_file" $commits_list || net_diff_rc=$?
+
+            if [[ $net_diff_rc -eq 0 ]]; then
+                # Success - use net diff (even if empty, which will be caught later)
+                diff_content=$(cat "$net_diff_output_file")
+            elif [[ $net_diff_rc -eq 2 ]]; then
+                # Strict mode failure - die with the reason
+                local strict_reason
+                strict_reason=$(cat "$net_diff_reason_file")
+                rm -f "$net_diff_output_file" "$net_diff_reason_file"
+                die "$strict_reason"
             else
-                if [[ -n "$NET_DIFF_FALLBACK_REASON" ]]; then
-                    commit_net_warning="Note: Net diff failed ($NET_DIFF_FALLBACK_REASON); falling back to per-commit diffs."
+                # Non-strict failure (rc=1) - fallback to per-commit diffs
+                local fallback_reason
+                fallback_reason=$(cat "$net_diff_reason_file")
+                if [[ -n "$fallback_reason" ]]; then
+                    commit_net_warning="Note: Net diff failed ($fallback_reason); falling back to per-commit diffs."
                 fi
                 local sha
                 for sha in $commits_list; do
@@ -617,6 +646,7 @@ USAGE
                     fi
                 done
             fi
+            rm -f "$net_diff_output_file" "$net_diff_reason_file"
             ;;
         range)
             diff_content=$(git diff "$diff_target" "${pathspec_args[@]}" 2>/dev/null || true)
