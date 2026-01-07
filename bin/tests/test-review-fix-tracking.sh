@@ -456,8 +456,14 @@ EOF
     local output
     output=$(echo "{\"session_id\":\"$CLAUDE_SESSION_ID\",\"transcript_path\":\"$REVIEW_GATE_TRANSCRIPT_PATH\"}" | "$REVIEW_GATE" check 2>/dev/null || true)
 
-    if ! echo "$output" | grep -q "Max iterations (0)"; then
-        log_fail "missing max-iterations message in hook output"
+    # max-rounds=0 should NOT include "Max iterations" messaging
+    if echo "$output" | grep -q "Max iterations"; then
+        log_fail "max-rounds=0 should not include max-iterations message"
+        return
+    fi
+    # But should still contain review results
+    if ! echo "$output" | grep -q "codex"; then
+        log_fail "missing reviewer name in output"
         return
     fi
 

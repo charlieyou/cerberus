@@ -1300,32 +1300,52 @@ Please provide a brief summary of the review outcome, then you may stop."
             CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve --reason auto_proceed_max_iter >&2 || true
-            REASON="$RESULTS
+            if [[ "$MAX_ITERATIONS" -eq 0 ]]; then
+                # max-rounds=0: Just output results without max-iterations messaging
+                REASON="$RESULTS"
+                if [[ -n "$BLOCKING_ISSUES" ]]; then
+                    REASON+="
+
+### Remaining Issues (P0/P1)
+
+$BLOCKING_ISSUES"
+                fi
+                if [[ -n "$INFO_ITEMS" ]]; then
+                    REASON+="
+
+$INFO_ITEMS"
+                fi
+                REASON+="
+
+Please summarize the review outcome."
+            else
+                REASON="$RESULTS
 
 ---
 
 ## Max Iterations Reached
 
 **Max iterations ($MAX_ITERATIONS) reached without consensus.** The gate has been auto-resolved to proceed."
-            if [[ -n "$BLOCKING_ISSUES" ]]; then
-                REASON+="
+                if [[ -n "$BLOCKING_ISSUES" ]]; then
+                    REASON+="
 
 ### Remaining Issues (P0/P1)
 
 $BLOCKING_ISSUES"
-            else
-                REASON+="
+                else
+                    REASON+="
 
 No remaining P0/P1 issues were reported by non-PASS reviewers."
-            fi
-            if [[ -n "$INFO_ITEMS" ]]; then
-                REASON+="
+                fi
+                if [[ -n "$INFO_ITEMS" ]]; then
+                    REASON+="
 
 $INFO_ITEMS"
-            fi
-            REASON+="
+                fi
+                REASON+="
 
 Please summarize the review outcome, noting that max iterations was reached and listing any unresolved issues."
+            fi
 
             output_block "$REASON"
             exit 0
