@@ -221,7 +221,7 @@ review_gate_check() {
         fi
     fi
     if [[ -n "$state_max_rounds" ]]; then
-        if [[ "$state_max_rounds" =~ ^[0-9]+$ ]] && [[ "$state_max_rounds" -ge 1 ]]; then
+        if [[ "$state_max_rounds" =~ ^[0-9]+$ ]] && [[ "$state_max_rounds" -ge 0 ]]; then
             MAX_ITERATIONS="$state_max_rounds"
         else
             log "review-gate: invalid state max_rounds '$state_max_rounds' (using $MAX_ITERATIONS)"
@@ -230,7 +230,7 @@ review_gate_check() {
     local max_rounds
     max_rounds=$(extract_max_rounds)
     if [[ -n "$max_rounds" ]]; then
-        if [[ "$max_rounds" =~ ^[0-9]+$ ]] && [[ "$max_rounds" -ge 1 ]]; then
+        if [[ "$max_rounds" =~ ^[0-9]+$ ]] && [[ "$max_rounds" -ge 0 ]]; then
             MAX_ITERATIONS="$max_rounds"
         else
             log "review-gate: invalid max-rounds '$max_rounds' (using $MAX_ITERATIONS)"

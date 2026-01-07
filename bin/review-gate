@@ -94,8 +94,8 @@ validate_max_rounds() {
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
-        die "Invalid --max-rounds '$value' (must be >= 1)"
+    if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 0 ]]; then
+        die "Invalid --max-rounds '$value' (must be >= 0)"
     fi
 }
 
