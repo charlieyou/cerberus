@@ -30,6 +30,12 @@ ${DIFF_CONTENT}
 ```
 </diff>
 
+## Important Context
+
+- You are reviewing a diff, not full file contents.
+- Do not treat diff prefixes (+/-) or context markers as actual whitespace/indentation.
+- Ignore syntax/formatting/lint errors; ruff/format/ty/pytest already handle those.
+
 ## Guidelines for Determining Bugs
 
 1. It meaningfully impacts the accuracy, performance, security, or maintainability of the code.
