@@ -1326,9 +1326,15 @@ No remaining P0/P1 issues were reported by non-PASS reviewers."
 
 $INFO_ITEMS"
                 fi
-                REASON+="
+                if [[ -n "$BLOCKING_ISSUES" || -n "$INFO_ITEMS" ]]; then
+                    REASON+="
 
-Please summarize the review outcome, noting that max iterations was reached and listing any unresolved issues."
+**Please address all remaining issues above before stopping.** Then summarize the review outcome, noting that max iterations was reached."
+                else
+                    REASON+="
+
+Please summarize the review outcome, noting that max iterations was reached."
+                fi
             fi
 
             output_block "$REASON"
