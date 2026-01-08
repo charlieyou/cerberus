@@ -852,8 +852,6 @@ review_gate_check() {
             if [[ -f "$output_file" ]]; then
                 local result
                 if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
-                    all_issues+=$'### '"$reviewer (ERROR)"$'\n'
-                    all_issues+=$'Summary: Invalid reviewer output\n\n'
                     continue
                 fi
 
@@ -867,20 +865,12 @@ review_gate_check() {
                 if [[ "$verdict" != "PASS" ]]; then
                     local findings
                     findings=$(echo "$result" | jq -r '.findings // [] | .[] | (.title // "No title") + ": " + (.body // "")' 2>/dev/null || echo "")
-                    local summary
-                    summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
 
-                    if [[ -n "$findings" || -n "$summary" ]]; then
+                    if [[ -n "$findings" ]]; then
                         all_issues+=$'### '"$reviewer ($verdict)"$'\n'
-                        if [[ -n "$summary" ]]; then
-                            all_issues+="Summary: $summary"$'\n'
-                        fi
-                        if [[ -n "$findings" ]]; then
-                            all_issues+=$'Findings:\n'
-                            while IFS= read -r finding; do
-                                all_issues+="- $finding"$'\n'
-                            done <<< "$findings"
-                        fi
+                        while IFS= read -r finding; do
+                            all_issues+="- $finding"$'\n'
+                        done <<< "$findings"
                         all_issues+=$'\n'
                     fi
                 fi
@@ -946,15 +936,9 @@ review_gate_check() {
                     .[] |
                     normalize_title(.title; .priority) + ": " + (.body // "")
                 ' 2>/dev/null || echo "")
-                local summary
-                summary=$(echo "$result" | jq -r '.summary // ""' 2>/dev/null || echo "")
 
                 if [[ -n "$findings" ]]; then
                     all_issues+=$'### '"$reviewer ($verdict)"$'\n'
-                    if [[ -n "$summary" ]]; then
-                        all_issues+="Summary: $summary"$'\n'
-                    fi
-                    all_issues+=$'Findings:\n'
                     while IFS= read -r finding; do
                         all_issues+="- $finding"$'\n'
                     done <<< "$findings"
