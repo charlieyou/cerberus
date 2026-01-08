@@ -66,7 +66,7 @@ Commands:
   spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until consensus passes.
 
-  wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
+  wait --json [--finalize] [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
   resolve [--reason <text>]
@@ -2509,6 +2509,7 @@ review_gate_wait() {
     trap '_wait_error_json $? $LINENO' ERR
 
     local json_mode="false"
+    local finalize="false"
     local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -2521,6 +2522,10 @@ review_gate_wait() {
         case "$1" in
             --json)
                 json_mode="true"
+                shift
+                ;;
+            --finalize)
+                finalize="true"
                 shift
                 ;;
             --timeout=*)
@@ -2561,7 +2566,7 @@ review_gate_wait() {
             -h|--help)
                 # Note: No need to clear ERR trap here - return 0 doesn't trigger it
                 cat <<USAGE
-Usage: ${CLI_CMD} wait --json [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
+Usage: ${CLI_CMD} wait --json [--finalize] [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
 USAGE
                 return 0
                 ;;
@@ -2864,6 +2869,53 @@ USAGE
             '.status = $status | .consensus_verdict = $consensus')
     else
         result_json=$(echo "$result_json" | jq --arg status "$status" '.status = $status')
+    fi
+
+    if [[ "$finalize" == "true" && "$status" != "timeout" && -n "$consensus_verdict" && -f "$state_file" ]]; then
+        local timestamp
+        timestamp=$(date -Iseconds)
+
+        local reason="wait_finalize_${consensus_verdict,,}"
+
+        local review_dir plan_path spec_path artifact_path
+        review_dir=$(dirname "$state_file")
+        plan_path=$(jq -r '.mode.plan_path // empty' "$state_file" 2>/dev/null || echo "")
+        spec_path=$(jq -r '.mode.spec_path // empty' "$state_file" 2>/dev/null || echo "")
+        artifact_path="$review_dir/latest.md"
+
+        local plan_sha="" spec_sha="" artifact_sha=""
+        if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+            plan_sha=$(compute_sha256 "$plan_path" 2>/dev/null || echo "")
+        fi
+        if [[ -n "$spec_path" && -f "$spec_path" ]]; then
+            spec_sha=$(compute_sha256 "$spec_path" 2>/dev/null || echo "")
+        fi
+        if [[ -f "$artifact_path" ]]; then
+            artifact_sha=$(compute_sha256 "$artifact_path" 2>/dev/null || echo "")
+        fi
+
+        local temp_file="${state_file}.tmp.$$"
+        trap 'rm -f "${temp_file:-}"' EXIT
+        jq --arg timestamp "$timestamp" \
+           --arg reason "$reason" \
+           --arg consensus "$consensus_verdict" \
+           --arg plan_sha "$plan_sha" \
+           --arg spec_sha "$spec_sha" \
+           --arg artifact_sha "$artifact_sha" \
+           '
+           .status = "resolved"
+           | .decision = (.decision // {})
+           | .decision.action = "proceed"
+           | .decision.decided_at = $timestamp
+           | .decision.reason = $reason
+           | .consensus = (.consensus // {})
+           | .consensus.verdict = $consensus
+           | if $plan_sha != "" then .artifact.plan_sha = $plan_sha else . end
+           | if $spec_sha != "" then .artifact.spec_sha = $spec_sha else . end
+           | if $artifact_sha != "" then .artifact.sha256 = $artifact_sha else . end
+           ' \
+           "$state_file" > "$temp_file"
+        mv "$temp_file" "$state_file"
     fi
 
     echo "$result_json"

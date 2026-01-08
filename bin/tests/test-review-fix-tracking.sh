@@ -694,6 +694,57 @@ EOF
     log_pass "auto-resolve triggered without respawn"
 }
 
+# Test 11: wait --finalize resolves the gate state
+test_wait_finalize_resolves_gate() {
+    ((TESTS_RUN++)) || true
+    log_test "wait --finalize resolves gate state"
+
+    setup_test_repo
+
+    export CLAUDE_SESSION_ID="test-session-$$-9"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local artifact_path
+    artifact_path=$("$REVIEW_GATE" artifact-path)
+    local review_dir
+    review_dir=$(dirname "$artifact_path")
+    mkdir -p "$review_dir/reviews"
+
+    cat > "$review_dir/gate-state.json" <<EOF
+{
+  "status": "pending",
+  "config": {"max_rounds": 0, "consensus_mode": "majority"},
+  "reviewers": {"codex": {}},
+  "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "iteration": 0,
+  "mode": {"type": "code-diff", "diff_args": "--commit deadbeef"}
+}
+EOF
+
+    cat > "$review_dir/reviews/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"ok","findings":[]}
+EOF
+    touch "$review_dir/reviews/codex.done"
+
+    "$REVIEW_GATE" wait --json --finalize --session-id "$CLAUDE_SESSION_ID" --transcript-path "$REVIEW_GATE_TRANSCRIPT_PATH" >/dev/null
+
+    local status
+    status=$(jq -r '.status // empty' "$review_dir/gate-state.json" 2>/dev/null || echo "")
+    if [[ "$status" != "resolved" ]]; then
+        log_fail "expected resolved status, got '${status:-<empty>}'"
+        return
+    fi
+
+    local reason
+    reason=$(jq -r '.decision.reason // empty' "$review_dir/gate-state.json" 2>/dev/null || echo "")
+    if [[ "$reason" != wait_finalize_* ]]; then
+        log_fail "expected decision.reason to start with wait_finalize_, got '${reason:-<empty>}'"
+        return
+    fi
+
+    log_pass "wait finalized gate state"
+}
+
 # Run all tests
 main() {
     echo "========================================"
@@ -708,6 +759,7 @@ main() {
     test_multiple_fix_iterations_do_not_accumulate
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
+    test_wait_finalize_resolves_gate
     test_commit_mode_net_diff_non_contig
     test_commit_mode_fallback_on_conflict
     test_max_rounds_zero_auto_resolves
