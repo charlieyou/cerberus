@@ -1242,7 +1242,7 @@ INSTRUCTIONS
         CLAUDE_SESSION_ID="$SESSION_ID" \
             REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
             "$0" resolve >&2 || true
-        INFO_ITEMS=$(collect_informational_findings)
+        ALL_ISSUES=$(collect_issues)
         # Prompt Claude for summary before allowing stop
         local pass_msg
         case "$CONSENSUS_MODE" in
@@ -1260,15 +1260,14 @@ INSTRUCTIONS
         if [[ $CURRENT_ITERATION -gt 1 ]]; then
             SUMMARY_PROMPT+=" (after $CURRENT_ITERATION iterations)"
         fi
-        if [[ -n "$INFO_ITEMS" ]]; then
+        if [[ -n "$ALL_ISSUES" ]]; then
             SUMMARY_PROMPT+="
 
-$INFO_ITEMS
+## Review Findings
 
-These are non-blocking issues (P2/P3), but you **MUST** fix them before stopping. Please:
-1. Address each P2/P3 issue listed above
-2. Provide a brief summary of what you fixed
-3. Then you may stop"
+$ALL_ISSUES
+
+Please address any issues above, then provide a brief summary of the review outcome."
         else
             SUMMARY_PROMPT+="
 
@@ -1279,25 +1278,19 @@ Please provide a brief summary of the review outcome, then you may stop."
         # Check iteration limit
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
             log "review-gate: max iterations reached"
-            BLOCKING_ISSUES=$(collect_blocking_issues)
-            INFO_ITEMS=$(collect_informational_findings)
+            ALL_ISSUES=$(collect_issues)
             CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve --reason auto_proceed_max_iter >&2 || true
             if [[ "$MAX_ITERATIONS" -eq 0 ]]; then
                 # max-rounds=0: Just output results without max-iterations messaging
                 REASON="$RESULTS"
-                if [[ -n "$BLOCKING_ISSUES" ]]; then
+                if [[ -n "$ALL_ISSUES" ]]; then
                     REASON+="
 
-### Remaining Issues (P0/P1)
+## Review Findings
 
-$BLOCKING_ISSUES"
-                fi
-                if [[ -n "$INFO_ITEMS" ]]; then
-                    REASON+="
-
-$INFO_ITEMS"
+$ALL_ISSUES"
                 fi
                 REASON+="
 
@@ -1310,26 +1303,14 @@ Please summarize the review outcome."
 ## Max Iterations Reached
 
 **Max iterations ($MAX_ITERATIONS) reached without consensus.** The gate has been auto-resolved to proceed."
-                if [[ -n "$BLOCKING_ISSUES" ]]; then
+                if [[ -n "$ALL_ISSUES" ]]; then
                     REASON+="
 
-### Remaining Issues (P0/P1)
+## Remaining Issues
 
-$BLOCKING_ISSUES"
-                else
-                    REASON+="
+$ALL_ISSUES
 
-No remaining P0/P1 issues were reported by non-PASS reviewers."
-                fi
-                if [[ -n "$INFO_ITEMS" ]]; then
-                    REASON+="
-
-$INFO_ITEMS"
-                fi
-                if [[ -n "$BLOCKING_ISSUES" || -n "$INFO_ITEMS" ]]; then
-                    REASON+="
-
-**Please address all remaining issues above before stopping.** Then summarize the review outcome, noting that max iterations was reached."
+**You *MUST* fix all remaining issues above before stopping.** Then summarize the review outcome, noting that max iterations was reached."
                 else
                     REASON+="
 
@@ -1341,9 +1322,8 @@ Please summarize the review outcome, noting that max iterations was reached."
             exit 0
         fi
 
-        # Collect issues from non-PASS reviews
-        ISSUES=$(collect_issues)
-        INFO_ITEMS=$(collect_informational_findings)
+        # Collect all issues from non-PASS reviews
+        ALL_ISSUES=$(collect_issues)
 
         # Extract mode paths/args BEFORE cleaning state (which deletes STATE_FILE)
         MODE_SPEC_PATH=$(jq -r '.mode.spec_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
@@ -1356,12 +1336,12 @@ Please summarize the review outcome, noting that max iterations was reached."
         log "review-gate: revision required; incremented iteration"
 
         # Format type-specific revision instructions (using extracted paths/args)
-        REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH" "$MODE_DIFF_ARGS")
+        REVISION_INSTRUCTIONS=$(format_revision_instructions "$TRIGGER_SOURCE" "$ALL_ISSUES" "$MODE_PLAN_PATH" "$MODE_SPEC_PATH" "$MODE_DIFF_ARGS")
 
         local required_msg
         case "$CONSENSUS_MODE" in
             all)  required_msg="All reviewers must agree (PASS) before proceeding." ;;
-            any)  required_msg="At least one reviewer must pass, with no FAIL verdicts or P0/P1 findings blocking (consensus=any)." ;;
+            any)  required_msg="At least one reviewer must pass, with no blocking issues (consensus=any)." ;;
             *)    required_msg="Majority of reviewers must pass before proceeding (consensus=majority)." ;;
         esac
         REASON="$RESULTS
@@ -1373,11 +1353,6 @@ Please summarize the review outcome, noting that max iterations was reached."
 **$required_msg**
 
 $REVISION_INSTRUCTIONS"
-        if [[ -n "$INFO_ITEMS" ]]; then
-            REASON+="
-
-$INFO_ITEMS"
-        fi
 
         output_block "$REASON"
     fi
