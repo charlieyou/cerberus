@@ -24,6 +24,22 @@ The user provides either:
 
 ## Workflow
 
+## Prompting Best Practices (Compliance)
+
+Use clear, explicit instructions and structured outputs to reduce ambiguity and improve task quality. Follow these guidelines:
+- Put critical constraints and gates near the top of relevant sections.
+- Use consistent, labeled sections and compact tables for mappings and validation.
+- Ask clarifying questions rather than guessing when plan details are ambiguous or missing.
+- Separate **context** from **requirements** from **output format**.
+- Be explicit about required output formats and include short, representative examples.
+- Use clear headings and bullet lists; avoid unstructured paragraphs for requirements.
+- Avoid contradicting instructions; if conflicts exist, call them out and resolve before generating tasks.
+- Prefer precise, concrete language; avoid vague qualifiers like "maybe" or "as needed".
+- Put instructions before context, and use clear delimiters (e.g., `###` or `"""`) to separate them.
+- If you forbid something, say what to do instead (positive instruction over negative-only).
+- Use checklists/tables for multi-step validation; avoid burying gates in prose.
+- Treat `CLAUDE.md` (if present) as authoritative for repo-specific conventions and constraints.
+
 ### Phase 1: Load Plan Context
 
 1. **Locate plan file**:
@@ -31,7 +47,10 @@ The user provides either:
    - Otherwise, find most recent `*-plan.md` in `docs/` or `~/.claude/plans/`
    - If no plan found, abort: "No plan found. Run /create-plan first."
 
-2. **Extract from plan**:
+2. **Load repo guidance (if present)**:
+   - If `CLAUDE.md` exists, read it for repo conventions (tests, commands, style, ownership)
+
+3. **Extract from plan**:
    - Context & Goals (feature summary)
    - Scope & Non-Goals (boundaries)
    - High-Level Approach (phases, technical approach)
@@ -41,13 +60,13 @@ The user provides either:
    - Testing & Validation Strategy
    - Acceptance Criteria Coverage table
 
-3. **Plan completeness check**:
+4. **Plan completeness check**:
    - If plan contains `[TBD]` in Technical Design or Testing Strategy:
      - **Warn** the user that plan is incomplete
      - **Default**: Abort and recommend running `/create-plan` review gate
      - **Override** (only if user explicitly requests): Create a preliminary "Clarify design gaps" task before implementation tasks
 
-4. **Extract artifact references** (do not load yet):
+5. **Extract artifact references** (do not load yet):
    - Note paths to referenced artifacts:
      - Spec file (for user stories, priorities, AC)
      - Data model (for entity tasks)
@@ -94,6 +113,14 @@ Before generating tasks, verify all referenced files:
 ### Phase 3: Task Decomposition
 
 Generate tasks following these rules:
+
+#### Obligation Extraction & Coverage
+
+**Goal**: Ensure all plan obligations are captured, owned by tasks, and verifiable.
+
+1. **Extract obligations**: Identify all plan statements using MUST / SHALL / REQUIRED / PROHIBIT / FORBID / FAIL-FAST / DEPRECATED / BREAKING CHANGE.
+2. **Map to tasks**: Every obligation must map to at least one task with explicit verification.
+3. **Create an Obligation Coverage table** (plan clause → task + verification). This table is required output (see Phase 4b).
 
 #### TDD Task Ordering
 
@@ -301,6 +328,8 @@ What this task accomplishes (1-2 sentences)
 - How to verify this task is complete
 - Test commands to run
 - **Config override test** (required for new configurable values): At least one test proving a non-default override reaches runtime via the normal load/construction path (not by constructing config objects directly in the test)
+- **Merge/precedence semantics** (if applicable): Explicit tests for merge/override/precedence/default behavior
+- **Negative cases** (if applicable): At least one test covering rejection/error/invalid input behavior
 
 **Integration Path Test** (per-feature, not per-task):
 - At least one task per feature must include a test exercising the top-level construction path
@@ -331,6 +360,26 @@ After generating task specs, produce a **sizing summary table** and verify all t
 
 Split and re-estimate until all pass.
 
+### Phase 4c: Required Coverage Artifacts
+
+Provide the following **required** artifacts after task specs:
+
+**Obligation Coverage** (required):
+
+```markdown
+| Plan Clause | Task(s) | Verification |
+|------------|---------|--------------|
+| "MUST ... " | T001 | Unit test X + integration test Y |
+```
+
+**Propagation Map** (required for new/repurposed inputs/fields/signals):
+
+```markdown
+| Input/Field/Signal | Origin | Transport | Consumption | Verification |
+|-------------------|--------|-----------|-------------|--------------|
+| idle_timeout | config.yaml | OrchestratorConfig → AgentSessionConfig | SessionRunner | Integration test T001 |
+```
+
 #### Worked Example
 
 Plan proposes: "Implement full password reset flow (backend + email + UI)"
@@ -352,6 +401,7 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 
 | Check | Gate | Rule | Fix |
 |-------|------|------|-----|
+| **Obligation coverage** | Hard | All MUST/SHALL/REQUIRED/PROHIBIT/FORBID/FAIL-FAST/DEPRECATED/BREAKING CHANGE clauses mapped to tasks + verification | Add task(s) or update verification |
 | **File overlap** | Hard | No two parallel tasks share files | Add dependency |
 | **AC coverage** | Hard | Every spec AC maps to exactly one primary task (if spec present) | Add task or reassign |
 | **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary (if spec present) | Reassign ownership |
@@ -360,6 +410,9 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 3 ACs | MUST split |
 | **Sizing: mechanical** | Hard | Mechanical sweeps: max 18 files, must be 1 subsystem, grep-able pattern | Split by subsystem or convert to standard |
 | **No vague tasks** | Hard | Every task has concrete files + verification steps | Rewrite or delete |
+| **Startup vs runtime** | Hard | Config/boot-time semantics have separate startup/load-path verification | Add startup/load-path test |
+| **Negative-case coverage** | Hard | Rejection/error/invalid inputs have explicit negative tests | Add negative tests |
+| **Merge/precedence semantics** | Hard | Merge/override/precedence/defaults have explicit tests | Add tests |
 | **End-to-end wiring** | Hard | New data/config/templates have wiring maps; tasks cover each hop | Add wiring map + missing tasks/deps |
 | **Adapter/bridge coverage** | Hard | Field changes mapped across all adapters/mappers/DI builders | Add/update adapter tasks |
 | **Config override test** | Hard | New config values have override tests reaching runtime | Add override test |
