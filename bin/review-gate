@@ -31,10 +31,7 @@ source "$SCRIPT_DIR/review-gate-hook.sh"
 # Main Script
 # =============================================================================
 
-# Model defaults
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.2}"
-GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
-CLAUDE_MODEL="${CLAUDE_MODEL:-opus}"
+
 
 usage() {
     cat <<USAGE
