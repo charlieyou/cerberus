@@ -99,6 +99,7 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 - Circular dependencies between steps or unclear ordering for risky operations.
 - High-risk changes without any verification or monitoring plan.
 - **Gameable acceptance criteria** (see below)
+- **Parallel/duplicate infrastructure** (see below)
 
 > Note: Do **not** flag a plan for referencing a file/module that is explicitly labeled as "new" or "to be created". Only treat it as a red flag when the plan incorrectly assumes existing artifacts.
 
@@ -130,6 +131,35 @@ Acceptance criteria that use **proxy metrics** instead of **observable outcomes*
 **The test:** Could a malicious-compliance agent satisfy this AC while missing the point? If yes, flag it.
 
 In general, prefer AC that describe behavior, invariants, or verifiable states—not internal structure limits or work quotas.
+
+### Parallel/Duplicate Infrastructure (Flag as P1)
+
+Plans that propose creating new infrastructure when similar infrastructure already exists in the codebase are a serious red flag. This leads to fragmented, inconsistent codebases.
+
+**Anti-patterns to flag:**
+
+| Pattern | Example | Why it's problematic |
+|---------|---------|---------------------|
+| Duplicate config system | "Create a new config loader for X" when `config/loader.ts` exists | Fragments configuration, creates drift |
+| Parallel registry | "Add a new plugin registry" when `plugins/registry.ts` exists | Duplicates patterns, confuses extension points |
+| Redundant middleware | "Create auth middleware" when auth middleware chain exists | Bypasses existing security model |
+| New event system | "Build event dispatcher for Y" when `events/` system exists | Fragments event handling |
+| Separate state management | "Add state store for Z" when state management exists | Creates inconsistent state patterns |
+
+**What to look for:**
+1. Does the plan include an "Integration Analysis" section?
+2. Does it show which existing mechanisms were considered?
+3. If proposing new infrastructure, is there explicit justification for why existing mechanisms are insufficient?
+
+**When to flag:**
+- Plan creates new infrastructure without acknowledging existing similar systems
+- Plan lacks "Integration Analysis" or "Existing Mechanisms Considered" section
+- Justification for new infrastructure is weak ("cleaner to start fresh", "existing is complex")
+
+**When NOT to flag:**
+- Plan explicitly extends existing infrastructure
+- Plan justifies new infrastructure with concrete incompatibility reasons
+- Existing mechanism is deprecated or being replaced as part of a broader effort
 
 ### Priority Levels
 

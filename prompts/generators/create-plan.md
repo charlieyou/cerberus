@@ -41,6 +41,11 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 10. **Trace back to spec**: Reference which spec Acceptance Criteria are addressed by which parts of the design.
 11. **Include constraints**: Capture architectural and testing constraints that guide implementation.
 12. **Acceptance Criteria quality**: Ensure all AC describe observable outcomes, not proxy metrics. See **Acceptance Criteria Quality** below.
+13. **Integration-first design (CRITICAL)**:
+    - Before proposing any new infrastructure, identify existing mechanisms in the codebase that could be extended.
+    - The plan MUST include an "Integration Analysis" section showing which existing systems were considered.
+    - Default to extending existing infrastructure. Creating new systems requires explicit justification.
+    - Red flags to avoid: "Create a new [X] system" when an [X] system already exists in the codebase.
 
 ## Plan Template
 
@@ -71,6 +76,18 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 - [Required coverage levels or quality gates]
 - [Performance/load testing requirements]
 - [Must-have regression coverage]
+
+## Integration Analysis
+
+### Existing Mechanisms Considered
+[REQUIRED: List existing codebase infrastructure that was evaluated for this feature]
+
+| Existing Mechanism | Could Serve Feature? | Decision | Rationale |
+|--------------------|---------------------|----------|-----------|
+| `path/to/existing/system` | Yes/Partial/No | Extend/New | [Why this decision] |
+
+### Integration Approach
+[Describe how this feature hooks into existing infrastructure. If creating new infrastructure, explain why existing mechanisms are insufficient.]
 
 ## Prerequisites
 [Checklist of things that must be true before starting implementation.]

@@ -13,7 +13,7 @@ Turn a spec or vague feature idea into a **design-focused implementation plan** 
 
 You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**:
 
-1. **Phase 0–1b**: Research codebase + verify file existence
+1. **Phase 0–1b**: Research codebase + integration point analysis + verify file existence
 2. **Phase 1c**: Write initial plan with `[TBD]` placeholders to a file (this becomes the canonical doc)
 3. **Phase 2**: Run an interview focused on filling `[TBD]` placeholders
 4. **Phase 3**: Build context from plan file + user answers
@@ -107,6 +107,45 @@ Before asking implementation questions, understand how and where the work will l
 5. **Ownership hints**:
    - Infer which modules/areas "own" the behavior you're changing.
 
+### Phase 1a: Integration Point Analysis (CRITICAL)
+
+**Goal: Identify existing infrastructure to extend BEFORE proposing new components.**
+
+This phase prevents the common failure mode of proposing parallel/duplicate systems when the codebase already has mechanisms that should be extended.
+
+**If a spec exists**: Honor any integration constraints from the spec (e.g., "Must reuse existing auth pipeline"). If the plan needs to deviate from spec constraints, explicitly call out the tradeoff and risk.
+
+1. **Identify existing mechanisms** that could serve this feature:
+   - Config systems, plugin architectures, registry patterns
+   - Existing abstractions that handle similar concerns
+   - Hook points, event systems, middleware chains
+   - Factory patterns, strategy patterns, or extension points
+
+2. **For each existing mechanism, evaluate**:
+   - Can this feature be implemented by extending/hooking into it?
+   - What would need to change in the existing system?
+   - What are the tradeoffs vs building something new?
+
+3. **Build an Integration Decision Table**:
+   ```
+   | Existing Mechanism | Could Serve Feature? | Extend vs New | Rationale |
+   |--------------------|---------------------|---------------|-----------|
+   | src/config/loader.ts | Yes | Extend | Already handles all component config |
+   | src/plugins/registry.ts | Partial | Extend + Add | Has plugin loading, needs config hooks |
+   | N/A - no existing auth middleware | No | New | Nothing exists for this concern |
+   ```
+
+4. **Default to extension**: If an existing mechanism can serve the feature with reasonable modifications, the plan MUST propose extending it rather than creating a parallel system. Creating new infrastructure requires explicit justification:
+   - Existing mechanism is fundamentally incompatible (explain why)
+   - Extending would require breaking changes with high blast radius
+   - Existing mechanism is deprecated or scheduled for removal
+
+5. **Red flags to catch yourself**:
+   - "Create a new config system for X" when a config system exists
+   - "Add a new registry for Y" when registries already exist
+   - "Build a new middleware chain" when middleware chains exist
+   - Any "new" that duplicates existing patterns
+
 ### Phase 1b: File & Module Existence Verification
 
 Plans must not hallucinate existing files. Explicitly verify file existence:
@@ -160,6 +199,18 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 ### Testing Constraints
 - [TBD: coverage requirements]
+
+## Integration Analysis
+
+### Existing Mechanisms Considered
+[Pre-fill from Phase 1a Integration Decision Table]
+
+| Existing Mechanism | Could Serve Feature? | Decision | Rationale |
+|--------------------|---------------------|----------|-----------|
+| [path/to/mechanism] | Yes/Partial/No | Extend/New | [Why] |
+
+### Integration Approach
+[TBD: How this feature hooks into existing infrastructure. If creating new infrastructure, justify why existing mechanisms are insufficient.]
 
 ## Prerequisites
 - [ ] [TBD: access, approvals, infra]

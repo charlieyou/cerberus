@@ -86,6 +86,29 @@ Before asking any questions, understand the existing codebase:
 
 Document findings internally—these inform the skeleton and your questions.
 
+### Phase 1a: Integration Constraints & Expectations (CRITICAL)
+
+**Goal: Identify codebase-aware constraints on WHAT to build, not HOW to build it.**
+
+This phase prevents specs that imply new infrastructure when stakeholders/architecture require extending existing systems. The spec captures constraints and expectations; the plan makes detailed integration decisions.
+
+1. **Identify existing mechanisms** relevant to this feature:
+   - Config systems, plugin architectures, registry patterns
+   - Existing abstractions that handle similar concerns
+   - Hook points, event systems, middleware chains
+
+2. **Document integration expectations as constraints**:
+   - "Must plug into existing [X] system" (if architecturally required)
+   - "Must not introduce a new [Y]" (if ownership/consistency requires it)
+   - "Should follow established pattern from [similar feature]"
+
+3. **Capture in spec (Constraints, Non-goals, or Open Questions)**:
+   - **Constraints (L-tier)**: Hard integration requirements (e.g., "Must reuse existing auth pipeline")
+   - **Non-goals**: Explicit exclusions (e.g., "Not building a new config system")
+   - **Open Questions**: Suspected needs for new infrastructure, flagged as risks for plan to evaluate (e.g., "Open: Can existing event system handle required throughput?")
+
+**Important**: The spec should avoid binding to specific modules/file paths unless they are product-level constraints. Detailed extend-vs-new decisions belong in the plan.
+
 ### Phase 1b: Draft Spec Skeleton
 
 Create a skeleton based on your research. Start with Tier S fields; expand as complexity signals emerge.
