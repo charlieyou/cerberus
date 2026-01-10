@@ -444,6 +444,8 @@ Spawn external reviewers on the plan file:
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
+**CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.
+
 **IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Put findings + options in a single tool call. Plain text questions are not interactive.
 
 #### Prioritized BFS for Review Findings
