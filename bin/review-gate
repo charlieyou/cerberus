@@ -25,6 +25,12 @@ CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 # Load shared helpers
 source "$SCRIPT_DIR/review-gate-lib.sh"
 source "$SCRIPT_DIR/review-gate-models.sh"
+
+# Source telemetry library (after review-gate-lib.sh)
+if [[ -f "$SCRIPT_DIR/telemetry-lib.sh" ]]; then
+    source "$SCRIPT_DIR/telemetry-lib.sh" 2>/dev/null || true
+fi
+
 source "$SCRIPT_DIR/review-gate-hook.sh"
 
 # =============================================================================
@@ -2489,6 +2495,12 @@ review_gate_resolve() {
     fi
 
     mv "$temp_file" "$state_file"
+
+    # Update run telemetry on resolution
+    if declare -f update_run_telemetry_on_resolve >/dev/null 2>&1; then
+        update_run_telemetry_on_resolve "$review_dir" "resolved" "${reason:-manual}" 2>/dev/null || true
+    fi
+
     echo "Review gate resolved"
 }
 

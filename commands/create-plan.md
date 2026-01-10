@@ -384,9 +384,9 @@ mkdir -p "${REVIEW_DIR:-/tmp}/plan-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate
 ```
 
 The generate script will output paths to the draft files:
-- `$OUTPUT_DIR/codex.md`
-- `$OUTPUT_DIR/gemini.md`
-- `$OUTPUT_DIR/claude.md`
+- `$OUTPUT_DIR/codex/draft.md`
+- `$OUTPUT_DIR/gemini/draft.md`
+- `$OUTPUT_DIR/claude/draft.md`
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
@@ -400,9 +400,9 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the plan file.
 
 Draft files to read:
-- $OUTPUT_DIR/codex.md
-- $OUTPUT_DIR/gemini.md  
-- $OUTPUT_DIR/claude.md
+- $OUTPUT_DIR/codex/draft.md
+- $OUTPUT_DIR/gemini/draft.md
+- $OUTPUT_DIR/claude/draft.md
 
 Plan file to update: docs/YYYY-MM-DD-FEATURE-plan.md
 

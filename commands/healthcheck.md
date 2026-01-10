@@ -40,9 +40,9 @@ ${CLAUDE_PLUGIN_ROOT}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast 
 Defaults to `--mode smart` if not specified.
 
 The generator writes drafts to the output directory and returns their paths:
-- `$OUTPUT_DIR/codex.md`
-- `$OUTPUT_DIR/gemini.md`
-- `$OUTPUT_DIR/claude.md`
+- `$OUTPUT_DIR/codex/draft.md`
+- `$OUTPUT_DIR/gemini/draft.md`
+- `$OUTPUT_DIR/claude/draft.md`
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
@@ -56,9 +56,9 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into a single healthcheck artifact.
 
 Draft files to read:
-- $OUTPUT_DIR/codex.md
-- $OUTPUT_DIR/gemini.md  
-- $OUTPUT_DIR/claude.md
+- $OUTPUT_DIR/codex/draft.md
+- $OUTPUT_DIR/gemini/draft.md
+- $OUTPUT_DIR/claude/draft.md
 
 Synthesis rules:
 1. Identify common findings - Issues flagged by multiple models are likely real

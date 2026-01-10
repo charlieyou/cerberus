@@ -6,6 +6,13 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[review-gate-lib] $*" >&2; }
 fi
 
+# Source telemetry-lib.sh for init_iteration_dir and other telemetry functions
+# This ensures a single authoritative implementation is used
+_REVIEW_GATE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$_REVIEW_GATE_LIB_DIR/telemetry-lib.sh" ]]; then
+    source "$_REVIEW_GATE_LIB_DIR/telemetry-lib.sh" 2>/dev/null || true
+fi
+
 # Get project hash from transcript path or calculate from project root
 get_project_hash() {
     local transcript_path="${1:-}"
@@ -245,4 +252,95 @@ compute_sha256() {
     fi
 
     return 1
+}
+
+# --- Telemetry Integration Helpers ---
+# Note: init_iteration_dir is provided by telemetry-lib.sh (sourced above)
+
+# Write iteration telemetry summary
+# Usage: write_iteration_telemetry "$iter_dir" "$status" "$consensus"
+write_iteration_telemetry() {
+    local iter_dir="$1"
+    local status="$2"
+    local consensus="$3"
+    
+    # Aggregate stats from agents
+    local total_tokens=0
+    local total_cost=0
+    
+    for stats_file in "$iter_dir"/agents/*/stats.json; do
+        [[ -f "$stats_file" ]] || continue
+        local tokens cost
+        tokens=$(jq -r '((.tokens.input // 0) + (.tokens.output // 0))' "$stats_file" 2>/dev/null || echo "0")
+        cost=$(jq -r '.cost_usd // 0' "$stats_file" 2>/dev/null || echo "0")
+        total_tokens=$((total_tokens + tokens))
+        # Use awk for floating point addition
+        total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $cost}" 2>/dev/null || echo "$total_cost")
+    done
+    
+    # Write iteration.json atomically
+    if ! jq -n \
+        --arg status "$status" \
+        --arg consensus "$consensus" \
+        --argjson total_tokens "$total_tokens" \
+        --argjson total_cost "$total_cost" \
+        '{
+            status: $status,
+            consensus: $consensus,
+            tokens: $total_tokens,
+            cost_usd: $total_cost,
+            completed_at: (now | todate)
+        }' > "$iter_dir/iteration.json.tmp.$$" 2>/dev/null; then
+        log "review-gate: WARNING: failed to write iteration telemetry"
+        rm -f "$iter_dir/iteration.json.tmp.$$"
+        return 1
+    fi
+    mv "$iter_dir/iteration.json.tmp.$$" "$iter_dir/iteration.json"
+    log "review-gate: wrote iteration telemetry: $iter_dir/iteration.json"
+}
+
+# Update run telemetry when review gate resolves
+# Usage: update_run_telemetry_on_resolve "$review_dir" "$decision" "$reason"
+update_run_telemetry_on_resolve() {
+    local review_dir="$1"
+    local decision="$2"
+    local reason="$3"
+    
+    # Source telemetry-lib.sh if not already loaded
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if ! declare -f resolve_run_telemetry >/dev/null 2>&1; then
+        if [[ -f "$script_dir/telemetry-lib.sh" ]]; then
+            source "$script_dir/telemetry-lib.sh" || {
+                log "review-gate: WARNING: failed to source telemetry-lib.sh"
+                return 1
+            }
+        else
+            log "review-gate: WARNING: telemetry-lib.sh not found"
+            return 1
+        fi
+    fi
+
+    # Use telemetry-lib function to record resolution
+    resolve_run_telemetry "$review_dir" "$decision" "$reason" || true
+    log "review-gate: updated run telemetry on resolve: decision=$decision reason=$reason"
+}
+
+# Get human-readable telemetry summary
+# Usage: get_telemetry_summary_for_output "$review_dir"
+get_telemetry_summary_for_output() {
+    local review_dir="$1"
+    local run_telemetry="$review_dir/run-telemetry.json"
+    
+    if [[ ! -f "$run_telemetry" ]]; then
+        echo ""
+        return
+    fi
+    
+    local tokens cost iterations
+    tokens=$(jq -r '((.totals.tokens.input // 0) + (.totals.tokens.output // 0))' "$run_telemetry" 2>/dev/null || echo "0")
+    cost=$(jq -r '.totals.cost_usd // 0' "$run_telemetry" 2>/dev/null || echo "0")
+    iterations=$(jq -r '.iterations | length' "$run_telemetry" 2>/dev/null || echo "0")
+    
+    printf 'Telemetry: %d tokens, $%.4f across %d iteration(s)' "$tokens" "$cost" "$iterations"
 }

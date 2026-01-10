@@ -1,0 +1,48 @@
+{
+  "run_id": "run-2024-01-01-abc123",
+  "started_at": "2024-01-01T10:00:00Z",
+  "completed_at": "2024-01-01T10:15:30Z",
+  "total_duration_ms": 930000,
+  "iterations": 3,
+  "status": "completed",
+  "summary": {
+    "total_tokens": {
+      "input": 4500,
+      "output": 1250,
+      "cached": 600,
+      "total": 6350
+    },
+    "total_cost_usd": 0.0375,
+    "agents_used": ["claude", "gemini"],
+    "models_used": ["claude-sonnet-4-20250514", "gemini-2.5-pro"],
+    "tools_used": {
+      "Read": 8,
+      "Grep": 4,
+      "edit_file": 2,
+      "Bash": 1
+    }
+  },
+  "iterations_summary": [
+    {
+      "iteration": 1,
+      "agent": "claude",
+      "tokens_total": 2050,
+      "duration_ms": 4500,
+      "cost_usd": 0.0125
+    },
+    {
+      "iteration": 2,
+      "agent": "gemini",
+      "tokens_total": 2300,
+      "duration_ms": 3200,
+      "cost_usd": null
+    },
+    {
+      "iteration": 3,
+      "agent": "claude",
+      "tokens_total": 2000,
+      "duration_ms": 4000,
+      "cost_usd": 0.0120
+    }
+  ]
+}

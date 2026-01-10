@@ -1,0 +1,21 @@
+{
+  "session_id": "gemini-session-456",
+  "response": "# Review Results\n\nAll checks passed.",
+  "stats": {
+    "tools": {
+      "byName": {
+        "Read": {"calls": 3, "tokens": 150},
+        "Grep": {"calls": 1, "tokens": 50}
+      }
+    },
+    "models": {
+      "gemini-2.5-pro": {
+        "tokens": {
+          "input": 1800,
+          "output": 500
+        }
+      }
+    },
+    "totalLatencyMs": 3200
+  }
+}

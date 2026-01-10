@@ -1,0 +1,19 @@
+{
+  "session_id": "abc123-session",
+  "result": "# Code Review\n\nLooks good!",
+  "tokens": {
+    "input": 1500,
+    "output": 350,
+    "cached": 200
+  },
+  "duration_ms": 4500,
+  "duration_api_ms": 4200,
+  "total_cost_usd": 0.0125,
+  "modelUsage": {
+    "claude-sonnet-4-20250514": {
+      "input": 1500,
+      "output": 350,
+      "cached": 200
+    }
+  }
+}

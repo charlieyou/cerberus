@@ -1,0 +1,15 @@
+{
+  "agent": "claude",
+  "session_id": "abc123-session",
+  "model": "claude-sonnet-4-20250514",
+  "tokens": {
+    "input": 1500,
+    "output": 350,
+    "cached": 200,
+    "total": 2050
+  },
+  "duration_ms": 4500,
+  "duration_api_ms": 4200,
+  "cost_usd": 0.0125,
+  "tools": {}
+}

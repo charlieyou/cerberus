@@ -1,0 +1,7 @@
+{"type":"session.started","thread_id":"thread-xyz","timestamp":"2024-01-01T10:00:00Z"}
+{"type":"item.started","item_id":"item1","tool":"Read","timestamp":"2024-01-01T10:00:01Z"}
+{"type":"item.completed","item_id":"item1","tool":"Read","timestamp":"2024-01-01T10:00:02Z"}
+{"type":"item.started","item_id":"item2","tool":"Grep","timestamp":"2024-01-01T10:00:03Z"}
+{"type":"item.completed","item_id":"item2","tool":"Grep","timestamp":"2024-01-01T10:00:04Z"}
+{"type":"turn.completed","usage":{"input_tokens":1200,"output_tokens":400},"timestamp":"2024-01-01T10:00:10Z"}
+{"type":"session.completed","thread_id":"thread-xyz","timestamp":"2024-01-01T10:00:11Z"}

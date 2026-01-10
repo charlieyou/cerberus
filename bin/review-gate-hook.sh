@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
 # Hook-specific logic for review-gate.
+
+# Source telemetry library if available (sourced after review-gate-lib.sh by the caller)
+# This is a fallback for standalone sourcing of this file
+if [[ -z "${_CERBERUS_TELEMETRY_LIB_SOURCED:-}" ]]; then
+    _SCRIPT_DIR_HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$_SCRIPT_DIR_HOOK/telemetry-lib.sh" ]]; then
+        source "$_SCRIPT_DIR_HOOK/telemetry-lib.sh" 2>/dev/null || true
+    fi
+fi
+
+# Source review-gate-lib.sh for shared helpers (write_iteration_telemetry, etc.)
+# This is a fallback when the hook is invoked without prior sourcing of review-gate-lib.sh
+if ! declare -f write_iteration_telemetry >/dev/null 2>&1; then
+    _SCRIPT_DIR_HOOK="${_SCRIPT_DIR_HOOK:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+    if [[ -f "$_SCRIPT_DIR_HOOK/review-gate-lib.sh" ]]; then
+        source "$_SCRIPT_DIR_HOOK/review-gate-lib.sh" 2>/dev/null || true
+    fi
+fi
+
 review_gate_check() {
     # Defensive error handling: on unexpected errors, allow stop to avoid blocking forever
     # The hook must either output valid JSON or output nothing (allow)
@@ -37,7 +56,7 @@ review_gate_check() {
         else
             LOG_FILE="$REVIEW_DIR/cerberus.log"
         fi
-        mkdir -p "$(dirname "$LOG_FILE")"
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     }
 
     # --- Session identification ---
@@ -71,10 +90,18 @@ review_gate_check() {
         exit 0
     }
 
-    # --- Helper: Output allow (exit 0 with no output) ---
+    # --- Helper: Output allow (exit 0, optionally with warning message) ---
     output_allow() {
-        log "review-gate: allowing stop"
-        trap - ERR  # Clear error trap before explicit exit
+        local message="${1:-}"
+        if [[ -n "$message" ]]; then
+            log "review-gate: allowing stop with warning: ${message:0:200}"
+            trap - ERR  # Clear error trap before explicit exit
+            # Output JSON with allow decision and warning message so user sees it
+            jq -n --arg message "$message" '{"decision": "allow", "message": $message}'
+        else
+            log "review-gate: allowing stop"
+            trap - ERR  # Clear error trap before explicit exit
+        fi
         exit 0
     }
 
@@ -98,6 +125,8 @@ review_gate_check() {
     log "review-gate: artifact_file=$ARTIFACT_FILE"
 
     # --- [AC1] Allowlist resolve command to prevent deadlock ---
+    # IMPORTANT: This check MUST happen before _ensure_review_dir_writable
+    # so users can always escape the gate via resolve, even when storage is broken.
     PENDING_CMD=$(echo "$INPUT" | jq -r '.pending_tool_input.command // ""' 2>/dev/null || echo "")
     if [[ -n "$PENDING_CMD" ]]; then
         log "review-gate: pending_tool_input.command=$PENDING_CMD"
@@ -105,6 +134,30 @@ review_gate_check() {
     if [[ "$PENDING_CMD" == *"review-gate resolve"* ]]; then
         log "review-gate: allow resolve command"
         output_allow
+    fi
+
+    # --- Ensure review directory is writable ---
+    # The review directory MUST be writable for gate enforcement to work.
+    # If not writable, this is an error condition that should fail clearly,
+    # NOT silently allow stop (which would disable enforcement).
+    _ensure_review_dir_writable() {
+        local test_file="$REVIEW_DIR/.write-test.$$"
+        if ! mkdir -p "$REVIEW_DIR" 2>/dev/null; then
+            return 1
+        fi
+        if ! touch "$test_file" 2>/dev/null; then
+            return 1
+        fi
+        rm -f "$test_file" 2>/dev/null
+        return 0
+    }
+
+    if ! _ensure_review_dir_writable; then
+        log "review-gate: WARNING: review directory not writable: $REVIEW_DIR - failing open"
+        # Fail open: if we can't write to storage, we can't persist state or enforce the gate.
+        # Blocking here would create a deadlock (user stuck, gate can't track progress).
+        # Warn clearly so user knows enforcement is disabled, but allow stop.
+        output_allow "Review gate warning: cannot write to review directory ($REVIEW_DIR). Gate enforcement disabled - check permissions or disk space."
     fi
 
     # --- Helper: Detect review type from artifact frontmatter ---
@@ -239,11 +292,23 @@ review_gate_check() {
     log "review-gate: max_iterations=$MAX_ITERATIONS"
 
     # --- Helper: Spawn reviewers for current artifact ---
-    # Returns 0 on success (caller should proceed to polling), exits on error/resolved
+    # Returns 0 on success (caller should proceed to polling), 1 on failure
     spawn_reviewers() {
         local detected_type
         detected_type=$(detect_review_type)
         log "review-gate: spawn reviewers (type=${detected_type:-none})"
+
+        # Initialize telemetry iteration directory
+        local current_iter iter_dir
+        current_iter=$(load_iteration 2>/dev/null || echo "0")
+        if declare -f init_iteration_dir >/dev/null 2>&1; then
+            iter_dir=$(init_iteration_dir "$REVIEW_DIR" "$current_iter" 2>/dev/null) || true
+            if [[ -n "$iter_dir" ]]; then
+                log "review-gate: telemetry iteration dir: $iter_dir"
+                # Export for use by reviewer processes and later telemetry collection
+                export TELEMETRY_ITER_DIR="$iter_dir"
+            fi
+        fi
 
         local spawn_success=false
         local agents_csv
@@ -397,9 +462,9 @@ review_gate_check() {
 
     # --- [AC6] Check for stale state (>30 min = 1800 seconds) ---
     cleanup_stale_state() {
-        rm -f "$STATE_FILE"
-        rm -f "$ITERATION_FILE"
-        rm -rf "$REVIEWS_DIR"
+        rm -f "$STATE_FILE" 2>/dev/null || true
+        rm -f "$ITERATION_FILE" 2>/dev/null || true
+        rm -rf "$REVIEWS_DIR" 2>/dev/null || true
     }
 
     mark_stale_resolved() {
@@ -513,8 +578,8 @@ review_gate_check() {
         fi
 
         # Clear reviews directory
-        rm -rf "$REVIEWS_DIR"
-        mkdir -p "$REVIEWS_DIR"
+        rm -rf "$REVIEWS_DIR" 2>/dev/null || true
+        mkdir -p "$REVIEWS_DIR" 2>/dev/null || true
     }
 
     # --- Check status (if state exists) ---
@@ -572,7 +637,12 @@ review_gate_check() {
     # --- Artifact exists but no state file → spawn reviewers ---
     if [[ ! -f "$STATE_FILE" ]]; then
         log "review-gate: spawning reviewers (no state)"
-        spawn_reviewers
+        # spawn_reviewers either returns 0 (success) or exits via output_allow/output_block
+        # If it somehow returns non-zero, block to avoid silently disabling enforcement
+        if ! spawn_reviewers; then
+            log "review-gate: spawn failed unexpectedly with no existing state"
+            output_block "Review gate error: failed to spawn reviewers. Check configuration and reviewer availability."
+        fi
     else
         # --- State exists but pending with no reviewers → re-spawn ---
         local status reviewers_count
@@ -582,7 +652,12 @@ review_gate_check() {
         if [[ "$status" == "pending" && "$reviewers_count" == "0" ]]; then
             log "review-gate: re-spawning reviewers (pending state with no reviewers)"
             export REVIEW_GATE_RERUN=1
-            spawn_reviewers
+            if ! spawn_reviewers; then
+                # Spawn failed - block to avoid silently disabling enforcement
+                # spawn_reviewers normally exits via output_allow/output_block, so this is defensive
+                log "review-gate: re-spawn failed unexpectedly"
+                output_block "Review gate error: failed to re-spawn reviewers. Check configuration and reviewer availability."
+            fi
         fi
     fi
 
@@ -613,6 +688,78 @@ review_gate_check() {
 
         log "review-gate: progress completed=$completed total=$total running=${running_list[*]}"
         echo "$completed|$total|${running_list[*]}"
+    }
+
+    # --- Extract telemetry from completed reviewers ---
+    _extract_reviewer_telemetry() {
+        # Skip if telemetry functions not available
+        if ! declare -f safe_extract_telemetry >/dev/null 2>&1; then
+            log "review-gate: telemetry extraction skipped (telemetry-lib not loaded)"
+            return 0
+        fi
+
+        local reviewers
+        reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
+        [[ -z "$reviewers" ]] && return 0
+
+        local current_iter iter_dir
+        current_iter=$(load_iteration 2>/dev/null || echo "0")
+        iter_dir="${TELEMETRY_ITER_DIR:-$REVIEW_DIR/iterations/$current_iter}"
+
+        # Ensure iteration directory exists
+        if [[ ! -d "$iter_dir/agents" ]]; then
+            mkdir -p "$iter_dir/agents" 2>/dev/null || return 0
+        fi
+
+        for reviewer in $reviewers; do
+            # Normalize reviewer name to canonical agent (claude, codex, gemini)
+            # This ensures telemetry is stored in the expected directories
+            local base_agent="$reviewer"
+            if [[ "$reviewer" == claude* ]]; then
+                base_agent="claude"
+            elif [[ "$reviewer" == codex* ]]; then
+                base_agent="codex"
+            elif [[ "$reviewer" == gemini* ]]; then
+                base_agent="gemini"
+            fi
+
+            # Read .json file for telemetry (.done is an empty sentinel file)
+            local output_file="$REVIEWS_DIR/${reviewer}.json"
+            local agent_dir="$iter_dir/agents/$base_agent"
+
+            # Skip if already extracted for this agent
+            if [[ -f "$agent_dir/stats.json" ]]; then
+                log "review-gate: telemetry already extracted for $base_agent (reviewer: $reviewer)"
+                continue
+            fi
+
+            mkdir -p "$agent_dir" 2>/dev/null || continue
+
+            # Try to extract telemetry from output file if present
+            if [[ -f "$output_file" ]]; then
+                local stats
+                stats=$(safe_extract_telemetry "$reviewer" "$output_file" 2>/dev/null) || stats=""
+                if [[ -n "$stats" && "$stats" != "{}" ]]; then
+                    # Ensure stats is compact JSON for safe passing to functions
+                    stats=$(printf '%s' "$stats" | jq -c '.' 2>/dev/null) || stats=""
+                    if [[ -n "$stats" && "$stats" != "{}" ]]; then
+                        printf '%s' "$stats" > "$agent_dir/stats.json" 2>/dev/null || true
+                        cp "$output_file" "$agent_dir/raw.json" 2>/dev/null || true
+                        log "review-gate: extracted telemetry for $base_agent (reviewer: $reviewer)"
+
+                        # Update run telemetry with compact JSON using canonical agent name
+                        if declare -f update_run_telemetry >/dev/null 2>&1; then
+                            update_run_telemetry "$REVIEW_DIR" "$current_iter" "$base_agent" "$stats" 2>/dev/null || true
+                        fi
+                    fi
+                fi
+            fi
+
+            # Copy processed review output as draft
+            if [[ -f "$output_file" ]]; then
+                cp "$output_file" "$agent_dir/review.json" 2>/dev/null || true
+            fi
+        done
     }
 
     # --- Calculate consensus (PRIORITY-BASED with configurable mode) ---
@@ -1186,6 +1333,8 @@ INSTRUCTIONS
 
         if [[ "$COMPLETED" -ge "$TOTAL" ]]; then
             log "review-gate: reviewers complete"
+            # Extract telemetry from completed reviewers
+            _extract_reviewer_telemetry || true
             break
         fi
 
@@ -1217,6 +1366,13 @@ INSTRUCTIONS
     # Get current iteration
     CURRENT_ITERATION=$(get_iteration)
 
+    # Write iteration telemetry after consensus
+    if declare -f write_iteration_telemetry >/dev/null 2>&1; then
+        local iter_dir="${TELEMETRY_ITER_DIR:-$REVIEW_DIR/iterations/$CURRENT_ITERATION}"
+        write_iteration_telemetry "$iter_dir" "awaiting_decision" "$CONSENSUS" 2>/dev/null || true
+        log "review-gate: wrote iteration telemetry (consensus=$CONSENSUS)"
+    fi
+
     # Get trigger source and mode info for revision messages
     TRIGGER_SOURCE=$(jq -r '.trigger_source // "artifact"' "$STATE_FILE" 2>/dev/null || echo "artifact")
     MODE_PLAN_PATH=$(jq -r '.mode.plan_path // ""' "$STATE_FILE" 2>/dev/null || echo "")
@@ -1242,7 +1398,21 @@ INSTRUCTIONS
         CLAUDE_SESSION_ID="$SESSION_ID" \
             REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
             "$0" resolve >&2 || true
+
+        # Update run telemetry on auto_approve resolution
+        if declare -f update_run_telemetry_on_resolve >/dev/null 2>&1; then
+            update_run_telemetry_on_resolve "$REVIEW_DIR" "auto_approve" "consensus_passed" 2>/dev/null || true
+            log "review-gate: updated run telemetry on auto_approve"
+        fi
+
         ALL_ISSUES=$(collect_issues)
+
+        # Get telemetry summary for output message
+        local telemetry_summary=""
+        if declare -f get_telemetry_summary_for_output >/dev/null 2>&1; then
+            telemetry_summary=$(get_telemetry_summary_for_output "$REVIEW_DIR" 2>/dev/null) || telemetry_summary=""
+        fi
+
         # Prompt Claude for summary before allowing stop
         local pass_msg
         case "$CONSENSUS_MODE" in
@@ -1259,6 +1429,11 @@ INSTRUCTIONS
 **$pass_msg**"
         if [[ $CURRENT_ITERATION -gt 1 ]]; then
             SUMMARY_PROMPT+=" (after $CURRENT_ITERATION iterations)"
+        fi
+        if [[ -n "$telemetry_summary" ]]; then
+            SUMMARY_PROMPT+="
+
+*$telemetry_summary*"
         fi
         if [[ -n "$ALL_ISSUES" ]]; then
             SUMMARY_PROMPT+="
@@ -1282,6 +1457,12 @@ Please provide a brief summary of the review outcome, then you may stop."
             CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve --reason auto_proceed_max_iter >&2 || true
+
+            # Update run telemetry on max_iterations resolution
+            if declare -f update_run_telemetry_on_resolve >/dev/null 2>&1; then
+                update_run_telemetry_on_resolve "$REVIEW_DIR" "auto_proceed" "max_iterations" 2>/dev/null || true
+                log "review-gate: updated run telemetry on max_iterations"
+            fi
             if [[ "$MAX_ITERATIONS" -eq 0 ]]; then
                 # max-rounds=0: Just output results without max-iterations messaging
                 REASON="$RESULTS"

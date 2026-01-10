@@ -15,6 +15,26 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # Load model helpers
 source "$SCRIPT_DIR/review-gate-models.sh"
+# Source telemetry library (optional - don't fail if missing)
+if [[ -f "$SCRIPT_DIR/telemetry-lib.sh" ]]; then
+    source "$SCRIPT_DIR/telemetry-lib.sh" 2>/dev/null || true
+fi
+
+# Define fallback stubs if telemetry functions aren't available
+# This ensures JSON mode works even when telemetry-lib is missing
+if ! declare -f safe_extract_telemetry >/dev/null 2>&1; then
+    safe_extract_telemetry() {
+        # Fallback: emit empty telemetry when lib unavailable
+        local agent="${1:-unknown}"
+        echo "{\"agent\":\"$agent\",\"telemetry_available\":false}"
+    }
+fi
+if ! declare -f _emit_empty_telemetry >/dev/null 2>&1; then
+    _emit_empty_telemetry() {
+        local agent="${1:-unknown}"
+        echo "{\"agent\":\"$agent\",\"telemetry_available\":false}"
+    }
+fi
 
 usage() {
     cat <<'USAGE'
@@ -37,6 +57,174 @@ USAGE
 die() {
     echo "Error: $*" >&2
     exit 1
+}
+
+# Extract content from Claude JSON output
+# Claude --output-format json can return various structures:
+# - {"result": "text"} - simple top-level result string (common)
+# - {"response": "text"} - alternative top-level string
+# - {"content": [{type:"text", text:"..."}]} - content block array (API format)
+# - {"message": {content: [...]}} - nested message wrapper
+# - {"messages": [{role:"assistant", content:[...]}]} - conversation format
+extract_claude_content() {
+    local raw_file="$1"
+    # Try multiple extraction strategies in order of likelihood
+    local content
+    content=$(jq -r '
+        # Strategy 1: Simple top-level string fields (most common for CLI output)
+        if (.result | type) == "string" and (.result | length) > 0 then .result
+        elif (.response | type) == "string" and (.response | length) > 0 then .response
+
+        # Strategy 2: Content as array of content blocks (Claude API format)
+        # Format: content is array of {type:"text", text:"..."} objects
+        elif (.content | type) == "array" then
+            [.content[] | select(.type == "text" or .type == "output_text") | .text // empty] | join("")
+
+        # Strategy 3: Content as direct string
+        elif (.content | type) == "string" and (.content | length) > 0 then .content
+
+        # Strategy 4: Nested message.content array
+        elif (.message.content | type) == "array" then
+            [.message.content[] | select(.type == "text") | .text // empty] | join("")
+        elif (.message.content | type) == "string" then .message.content
+
+        # Strategy 5: messages array with assistant responses
+        elif (.messages | type) == "array" then
+            [.messages[] | select(.role == "assistant") |
+             if (.content | type) == "array" then
+                 [.content[] | select(.type == "text") | .text // empty] | join("")
+             elif (.content | type) == "string" then .content
+             else empty end
+            ] | join("\n\n")
+
+        # Strategy 6: text field directly
+        elif (.text | type) == "string" and (.text | length) > 0 then .text
+
+        # Strategy 7: output field (alternative naming)
+        elif (.output | type) == "string" and (.output | length) > 0 then .output
+
+        else empty
+        end
+    ' "$raw_file" 2>/dev/null)
+
+    # If jq extraction failed or returned empty, fall back to raw file
+    if [[ -z "$content" ]]; then
+        cat "$raw_file"
+    else
+        printf '%s' "$content"
+    fi
+}
+
+# Extract content from Codex JSONL output (last message content)
+extract_codex_content() {
+    local raw_file="$1"
+    # Codex --json outputs JSONL with event objects like:
+    # - {"type":"turn.completed","usage":{...}}
+    # - {"item":{"type":"message","content":[{"type":"text","text":"..."}]}}
+    # - {"item":{"type":"function_call_output","output":"..."}}
+    # Try multiple extraction strategies in order of likelihood:
+    local content
+    content=$(jq -s -r '
+        # Strategy 1: Extract text from item.content arrays (message items)
+        # Format: item.content is array of {type:"text", text:"..."} or {type:"output_text", text:"..."}
+        ([.[] | select(.item.content) | .item.content |
+          if type == "array" then .[] | select(.text) | .text
+          elif type == "string" then .
+          else empty end
+        ] | join("")) as $item_content |
+        if ($item_content | length) > 0 then $item_content
+
+        # Strategy 2: Extract from item.output (function call outputs)
+        else ([.[] | select(.item.output) | .item.output |
+          if type == "string" then . else empty end
+        ] | join("")) as $item_output |
+        if ($item_output | length) > 0 then $item_output
+
+        # Strategy 3: Find assistant role messages with content
+        else ([.[] | select(.role == "assistant" and .content) | .content] | join("")) as $assistant |
+        if ($assistant | length) > 0 then $assistant
+
+        # Strategy 4: Find response.output_text or output_text fields
+        else ([.[] | select(.response.output_text) | .response.output_text] | join("")) as $resp_out |
+        if ($resp_out | length) > 0 then $resp_out
+
+        # Strategy 5: Find .output string fields
+        else ([.[] | select(.output and (.output | type) == "string") | .output] | join("")) as $output |
+        if ($output | length) > 0 then $output
+
+        # Strategy 6: Find .message.content
+        else ([.[] | select(.message.content) | .message.content] | join("")) as $msg |
+        if ($msg | length) > 0 then $msg
+
+        # Strategy 7: Find any .content or .text string field
+        else ([.[] | select(.content and (.content | type) == "string") | .content] | join("")) as $content |
+        if ($content | length) > 0 then $content
+        else ([.[] | select(.text and (.text | type) == "string") | .text] | join("")) as $text |
+        if ($text | length) > 0 then $text
+
+        else empty
+        end end end end end end end end
+    ' "$raw_file" 2>/dev/null)
+
+    # If jq extraction failed or returned empty, fall back to raw file
+    if [[ -z "$content" ]]; then
+        cat "$raw_file"
+    else
+        printf '%s' "$content"
+    fi
+}
+
+# Extract content from Gemini JSON output
+# Gemini -o json can return various structures similar to Claude
+extract_gemini_content() {
+    local raw_file="$1"
+    local content
+    content=$(jq -r '
+        # Strategy 1: Simple top-level string fields
+        if (.response | type) == "string" and (.response | length) > 0 then .response
+        elif (.text | type) == "string" and (.text | length) > 0 then .text
+
+        # Strategy 2: Content as array of content blocks (Gemini API format)
+        elif (.content | type) == "array" then
+            [.content[] | select(.type == "text" or .text) | .text // empty] | join("")
+
+        # Strategy 3: Content as direct string
+        elif (.content | type) == "string" and (.content | length) > 0 then .content
+
+        # Strategy 4: Candidates array (Gemini API response format)
+        elif (.candidates | type) == "array" then
+            [.candidates[].content.parts[]? | select(.text) | .text] | join("")
+
+        # Strategy 5: result field
+        elif (.result | type) == "string" and (.result | length) > 0 then .result
+
+        # Strategy 6: output field
+        elif (.output | type) == "string" and (.output | length) > 0 then .output
+
+        else empty
+        end
+    ' "$raw_file" 2>/dev/null)
+
+    # If jq extraction failed or returned empty, fall back to raw file
+    if [[ -z "$content" ]]; then
+        cat "$raw_file"
+    else
+        printf '%s' "$content"
+    fi
+}
+
+# Format telemetry for display
+format_telemetry_line() {
+    local stats_file="$1"
+    if [[ -f "$stats_file" ]]; then
+        local tokens duration cost
+        tokens=$(jq -r '(.tokens.input // 0) + (.tokens.output // 0)' "$stats_file" 2>/dev/null || echo "0")
+        duration=$(jq -r '(.duration_ms // 0) / 1000 | . * 10 | floor / 10' "$stats_file" 2>/dev/null || echo "0")
+        cost=$(jq -r '.cost_usd // 0 | . * 1000 | floor / 1000' "$stats_file" 2>/dev/null || echo "0")
+        echo "${tokens} tokens, ${duration}s, \$${cost}"
+    else
+        echo "no telemetry"
+    fi
 }
 
 # normalize_mode and validate_mode are provided by review-gate-models.sh
@@ -222,37 +410,64 @@ review_gate_generate() {
     local draft_dir="$output_dir"
     mkdir -p "$draft_dir"
     # Clear stale sentinel files from prior runs to avoid reusing stale markers
-    rm -f "$draft_dir"/*.done "$draft_dir"/*.failed 2>/dev/null || true
+    rm -rf "$draft_dir/codex" "$draft_dir/gemini" "$draft_dir/claude" 2>/dev/null || true
 
-    local codex_draft="$draft_dir/codex.md"
-    local gemini_draft="$draft_dir/gemini.md"
-    local claude_draft="$draft_dir/claude.md"
-    local codex_done="$draft_dir/codex.done"
-    local gemini_done="$draft_dir/gemini.done"
-    local claude_done="$draft_dir/claude.done"
-    local codex_failed="$draft_dir/codex.failed"
-    local gemini_failed="$draft_dir/gemini.failed"
-    local claude_failed="$draft_dir/claude.failed"
+    # Create agent subdirectories
+    mkdir -p "$draft_dir/codex" "$draft_dir/gemini" "$draft_dir/claude"
+
+    # Detect CLI JSON support
+    local codex_json_mode=false
+    local gemini_json_mode=false
+    local claude_json_mode=false
+
+    if detect_cli_json_support claude; then
+        claude_json_mode=true
+    fi
+    if detect_cli_json_support codex; then
+        codex_json_mode=true
+    fi
+    if detect_cli_json_support gemini; then
+        gemini_json_mode=true
+    fi
 
     echo "Starting generators for type: $review_type" >&2
     echo "Draft directory: $draft_dir" >&2
+    echo "JSON modes: codex=$codex_json_mode, gemini=$gemini_json_mode, claude=$claude_json_mode" >&2
 
     # Spawn Codex (with repo access via read-only sandbox)
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
     local codex_reasoning="${CODEX_REASONING_EFFORT:-medium}"
     if command -v codex >/dev/null 2>&1; then
-        echo "Spawning Codex generator (model: $codex_model)..." >&2
+        echo "Spawning Codex generator (model: $codex_model, json=$codex_json_mode)..." >&2
         (
-            if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
-                touch "$codex_done"
+            local codex_raw="$draft_dir/codex/raw.json"
+            local codex_draft="$draft_dir/codex/draft.md"
+            local codex_stats="$draft_dir/codex/stats.json"
+            local codex_done="$draft_dir/codex/codex.done"
+            local codex_failed="$draft_dir/codex/codex.failed"
+
+            if [[ "$codex_json_mode" == "true" ]]; then
+                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --json "$prompt_content" > "$codex_raw" 2>&1; then
+                    extract_codex_content "$codex_raw" > "$codex_draft"
+                    safe_extract_telemetry codex "$codex_raw" > "$codex_stats"
+                    touch "$codex_done"
+                else
+                    touch "$codex_failed"
+                fi
             else
-                touch "$codex_failed"
+                # Fallback to text mode
+                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
+                    _emit_empty_telemetry codex > "$codex_stats"
+                    touch "$codex_done"
+                else
+                    touch "$codex_failed"
+                fi
             fi
         ) &
         local pid_codex=$!
     else
         echo "Warning: codex not found, skipping" >&2
-        touch "$codex_failed"
+        touch "$draft_dir/codex/codex.failed"
         local pid_codex=""
     fi
 
@@ -261,24 +476,43 @@ review_gate_generate() {
     if command -v gemini >/dev/null 2>&1; then
         local gemini_settings=""
         if gemini_settings=$(gemini_readonly_settings_path); then
-            echo "Spawning Gemini generator (model: $gemini_model)..." >&2
+            echo "Spawning Gemini generator (model: $gemini_model, json=$gemini_json_mode)..." >&2
             (
-                if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                    gemini -m "$gemini_model" -o text "$prompt_content" > "$gemini_draft" 2>&1; then
-                    touch "$gemini_done"
+                local gemini_raw="$draft_dir/gemini/raw.json"
+                local gemini_draft="$draft_dir/gemini/draft.md"
+                local gemini_stats="$draft_dir/gemini/stats.json"
+                local gemini_done="$draft_dir/gemini/gemini.done"
+                local gemini_failed="$draft_dir/gemini/gemini.failed"
+
+                if [[ "$gemini_json_mode" == "true" ]]; then
+                    if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
+                        gemini -m "$gemini_model" -o json "$prompt_content" > "$gemini_raw" 2>&1; then
+                        extract_gemini_content "$gemini_raw" > "$gemini_draft"
+                        safe_extract_telemetry gemini "$gemini_raw" > "$gemini_stats"
+                        touch "$gemini_done"
+                    else
+                        touch "$gemini_failed"
+                    fi
                 else
-                    touch "$gemini_failed"
+                    # Fallback to text mode
+                    if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
+                        gemini -m "$gemini_model" -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                        _emit_empty_telemetry gemini > "$gemini_stats"
+                        touch "$gemini_done"
+                    else
+                        touch "$gemini_failed"
+                    fi
                 fi
             ) &
             local pid_gemini=$!
         else
             echo "Warning: gemini read-only settings missing, skipping" >&2
-            touch "$gemini_failed"
+            touch "$draft_dir/gemini/gemini.failed"
             local pid_gemini=""
         fi
     else
         echo "Warning: gemini not found, skipping" >&2
-        touch "$gemini_failed"
+        touch "$draft_dir/gemini/gemini.failed"
         local pid_gemini=""
     fi
 
@@ -289,21 +523,43 @@ review_gate_generate() {
         local -a claude_disallowed_tools
         read -r -a claude_allowed_tools <<< "$CLAUDE_READONLY_ALLOWED_TOOLS"
         read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
-        echo "Spawning Claude generator (model: $claude_model)..." >&2
+        echo "Spawning Claude generator (model: $claude_model, json=$claude_json_mode)..." >&2
         (
-            if echo "$prompt_content" | claude -p --model "$claude_model" \
-                --allowedTools "${claude_allowed_tools[@]}" \
-                --disallowedTools "${claude_disallowed_tools[@]}" \
-                > "$claude_draft" 2>&1; then
-                touch "$claude_done"
+            local claude_raw="$draft_dir/claude/raw.json"
+            local claude_draft="$draft_dir/claude/draft.md"
+            local claude_stats="$draft_dir/claude/stats.json"
+            local claude_done="$draft_dir/claude/claude.done"
+            local claude_failed="$draft_dir/claude/claude.failed"
+
+            if [[ "$claude_json_mode" == "true" ]]; then
+                if echo "$prompt_content" | claude -p --model "$claude_model" \
+                    --output-format json \
+                    --allowedTools "${claude_allowed_tools[@]}" \
+                    --disallowedTools "${claude_disallowed_tools[@]}" \
+                    > "$claude_raw" 2>&1; then
+                    extract_claude_content "$claude_raw" > "$claude_draft"
+                    safe_extract_telemetry claude "$claude_raw" > "$claude_stats"
+                    touch "$claude_done"
+                else
+                    touch "$claude_failed"
+                fi
             else
-                touch "$claude_failed"
+                # Fallback to text mode
+                if echo "$prompt_content" | claude -p --model "$claude_model" \
+                    --allowedTools "${claude_allowed_tools[@]}" \
+                    --disallowedTools "${claude_disallowed_tools[@]}" \
+                    > "$claude_draft" 2>&1; then
+                    _emit_empty_telemetry claude > "$claude_stats"
+                    touch "$claude_done"
+                else
+                    touch "$claude_failed"
+                fi
             fi
         ) &
         local pid_claude=$!
     else
         echo "Warning: claude not found, skipping" >&2
-        touch "$claude_failed"
+        touch "$draft_dir/claude/claude.failed"
         local pid_claude=""
     fi
 
@@ -318,9 +574,9 @@ review_gate_generate() {
         local gemini_complete=false
         local claude_complete=false
 
-        [[ -f "$codex_done" || -f "$codex_failed" ]] && codex_complete=true
-        [[ -f "$gemini_done" || -f "$gemini_failed" ]] && gemini_complete=true
-        [[ -f "$claude_done" || -f "$claude_failed" ]] && claude_complete=true
+        [[ -f "$draft_dir/codex/codex.done" || -f "$draft_dir/codex/codex.failed" ]] && codex_complete=true
+        [[ -f "$draft_dir/gemini/gemini.done" || -f "$draft_dir/gemini/gemini.failed" ]] && gemini_complete=true
+        [[ -f "$draft_dir/claude/claude.done" || -f "$draft_dir/claude/claude.failed" ]] && claude_complete=true
 
         if $codex_complete && $gemini_complete && $claude_complete; then
             break
@@ -339,35 +595,58 @@ review_gate_generate() {
         sleep 2
     done
 
-    # Count successful drafts
+    # Count successful drafts and collect telemetry
     local draft_count=0
     local drafts=()
+    local total_tokens=0
+    local total_cost=0
 
-    if [[ -f "$codex_done" && -f "$codex_draft" && -s "$codex_draft" ]]; then
+    if [[ -f "$draft_dir/codex/codex.done" && -f "$draft_dir/codex/draft.md" && -s "$draft_dir/codex/draft.md" ]]; then
         ((draft_count++)) || true
-        drafts+=("$codex_draft")
+        drafts+=("codex")
         echo "Codex: completed successfully" >&2
-    elif [[ -f "$codex_failed" ]]; then
+        if [[ -f "$draft_dir/codex/stats.json" ]]; then
+            local codex_tokens codex_cost
+            codex_tokens=$(jq -r '(.tokens.input // 0) + (.tokens.output // 0)' "$draft_dir/codex/stats.json" 2>/dev/null || echo "0")
+            codex_cost=$(jq -r '.cost_usd // 0' "$draft_dir/codex/stats.json" 2>/dev/null || echo "0")
+            total_tokens=$((total_tokens + codex_tokens))
+            total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $codex_cost}")
+        fi
+    elif [[ -f "$draft_dir/codex/codex.failed" ]]; then
         echo "Codex: failed" >&2
     else
         echo "Codex: timed out" >&2
     fi
 
-    if [[ -f "$gemini_done" && -f "$gemini_draft" && -s "$gemini_draft" ]]; then
+    if [[ -f "$draft_dir/gemini/gemini.done" && -f "$draft_dir/gemini/draft.md" && -s "$draft_dir/gemini/draft.md" ]]; then
         ((draft_count++)) || true
-        drafts+=("$gemini_draft")
+        drafts+=("gemini")
         echo "Gemini: completed successfully" >&2
-    elif [[ -f "$gemini_failed" ]]; then
+        if [[ -f "$draft_dir/gemini/stats.json" ]]; then
+            local gemini_tokens gemini_cost
+            gemini_tokens=$(jq -r '(.tokens.input // 0) + (.tokens.output // 0)' "$draft_dir/gemini/stats.json" 2>/dev/null || echo "0")
+            gemini_cost=$(jq -r '.cost_usd // 0' "$draft_dir/gemini/stats.json" 2>/dev/null || echo "0")
+            total_tokens=$((total_tokens + gemini_tokens))
+            total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $gemini_cost}")
+        fi
+    elif [[ -f "$draft_dir/gemini/gemini.failed" ]]; then
         echo "Gemini: failed" >&2
     else
         echo "Gemini: timed out" >&2
     fi
 
-    if [[ -f "$claude_done" && -f "$claude_draft" && -s "$claude_draft" ]]; then
+    if [[ -f "$draft_dir/claude/claude.done" && -f "$draft_dir/claude/draft.md" && -s "$draft_dir/claude/draft.md" ]]; then
         ((draft_count++)) || true
-        drafts+=("$claude_draft")
+        drafts+=("claude")
         echo "Claude: completed successfully" >&2
-    elif [[ -f "$claude_failed" ]]; then
+        if [[ -f "$draft_dir/claude/stats.json" ]]; then
+            local claude_tokens claude_cost
+            claude_tokens=$(jq -r '(.tokens.input // 0) + (.tokens.output // 0)' "$draft_dir/claude/stats.json" 2>/dev/null || echo "0")
+            claude_cost=$(jq -r '.cost_usd // 0' "$draft_dir/claude/stats.json" 2>/dev/null || echo "0")
+            total_tokens=$((total_tokens + claude_tokens))
+            total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $claude_cost}")
+        fi
+    elif [[ -f "$draft_dir/claude/claude.failed" ]]; then
         echo "Claude: failed" >&2
     else
         echo "Claude: timed out" >&2
@@ -389,11 +668,18 @@ review_gate_generate() {
     echo ""
     echo "## Draft Files"
     echo ""
-    for draft in "${drafts[@]}"; do
-        local model_name
-        model_name=$(basename "$draft" .md)
-        echo "- **$model_name**: $draft"
+    for agent in "${drafts[@]}"; do
+        local stats_line
+        stats_line=$(format_telemetry_line "$draft_dir/$agent/stats.json")
+        echo "- **$agent**: $draft_dir/$agent/draft.md ($stats_line)"
     done
+    echo ""
+    echo "## Telemetry"
+    echo ""
+    # Format total cost with 3 decimal places
+    local formatted_cost
+    formatted_cost=$(printf "%.3f" "$total_cost" 2>/dev/null || echo "$total_cost")
+    echo "Total: $total_tokens tokens, \$$formatted_cost"
     echo ""
     echo "## Synthesis Instructions"
     echo ""

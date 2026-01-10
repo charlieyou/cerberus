@@ -1,5 +1,7 @@
 # TODO
 
+* Gemini: Fall back to flash when pro usage limits are hit
+
 * add /constitution command (from Spec Kit)
   - Create/update project principles at `/memory/constitution.md`
   - Non-negotiable constraints that gate planning (e.g., "max 3 services", "no ORMs", "100% API test coverage")
@@ -27,6 +29,7 @@
 ## Spec/Plan Generation
 
 * separate templates from orchestration - users can choose their own template to use
+* Instruct to use subagents to save context for exploration
 
 ## All Reviews
 
@@ -36,7 +39,9 @@
 
 ## Code Review
 
-* dont pass a diff directly to the code review, agents should explore themselves
+* remove language on avoiding false positives?
+* dont pass a diff directly to the code review, agents should explore themselves?
+* Or at least explicitly instruct them to explore the code around it
 * code review flag to not fix the code, iterate on the review
 
 ## BD Groom Command
