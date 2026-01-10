@@ -21,11 +21,48 @@ Task(subagent_type="general-purpose", description="Fix [P1] issue title", prompt
 
 **Do NOT use author-context instead of fixing** clear, correct issues you can resolve in code.
 
+### Author Context Format (use this exact structure)
+
+Reviewers are trained to parse this format. Use the **exact finding title** in quotes so reviewers can match mechanically:
+
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context '
+Resolved:
+- "[P1] Fix typer.prompt err parameter": Added err=True to all prompt calls (lines 922, 941).
+
+False Positives:
+- "[P1] mala init exits 1 for non-dry-run": INTENTIONAL per issue scope.
+  Evidence: Issue description says "Don'\''t implement file ops - that'\''s T003".
+  The xfail tests are designed to fail until T003 implements file writing.
+
+- "[P1] typer.prompt does not accept err parameter": typer.prompt DOES accept err=True.
+  Evidence: `python -c "import inspect,typer; print(inspect.signature(typer.prompt))"`
+  Output: `(text: str, ..., err: bool = False, ...)`
+
+Questions:
+- None
+'
 ```
 
-Keep it to a short summary (1-2 paragraphs max). Update each iteration to reflect current state; do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.
+### Evidence That Reviewers Accept
+
+Reviewers are instructed to accept disputes when you provide these evidence types (matching their "Evidence Hierarchy"):
+
+| Evidence Type | Example |
+|---------------|---------|
+| **File:line references** | "Guard exists at runner.py:120-130" |
+| **API verification** | "inspect.signature(typer.prompt) shows err parameter" |
+| **Test output** | "test_init_flow passes and covers this path" |
+| **Scope reference** | "Issue says 'T003 handles file ops'" |
+
+Reviewers will REJECT vague disputes like:
+- "This is intentional" (no evidence)
+- "The code works" (no proof)
+- "Already handled elsewhere" (no file:line)
+
+### Updating Author Context
+
+Keep it current each iteration. Do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.
 
 ## Self-Review Before Stopping
 
