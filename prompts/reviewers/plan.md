@@ -21,7 +21,8 @@ ${PLAN_CONTENT}
      - Risks & Edge Cases / Breaking Changes
      - Testing & Validation
      - Open Questions (if any)?
-   - Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) — that is handled separately by `/create-tasks`
+   - Note: Plans may include a high-level task list with dependencies and verification steps, but should avoid overly granular implementation checklists (that level of breakdown is handled by `/create-tasks`)
+   - Deviations from section names or ordering should not be treated as P1 unless they make the plan non-executable or cause ambiguity at P0/P1 severity. Otherwise, classify template/structure concerns as P2 or P3.
    - If the structure differs, is it still easy to execute and review?
 
 2. **Completeness**
@@ -78,8 +79,9 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 5. The issue does not rely on unstated assumptions about the codebase.
 6. To claim a step is missing or wrong, you must identify specific evidence or a clear consequence.
 7. The issue is clearly not an intentional design choice.
-8. **Iteration hygiene:** Only flag issues that are new or still unresolved. Do not re-raise issues already addressed unless the plan regressed or the fix is incomplete.
-9. **Avoid scope creep:** Do not demand exhaustive detail beyond what's required to implement and ship safely.
+8. **Iteration hygiene (verification-first):** At the start of each review round, first verify whether previously flagged P0/P1 issues are resolved in the updated plan and any provided author-context. For each prior issue, decide if it is resolved, partially resolved, or still unresolved. Only after completing this verification step should you flag genuinely new issues. Do not re-raise issues already addressed unless the plan clearly regressed or you can point to a specific remaining gap. In later iterations where most high-severity issues are resolved, be conservative about promoting new concerns to P1; prefer P2 unless there is a concrete, high-likelihood failure on the main happy path.
+9. **Author-context awareness:** Input may include an author-context note summarizing which findings were resolved, which were false positives, and any constraints. Treat items explicitly marked as "Resolved" as resolved unless the updated plan clearly contradicts them. If there is ambiguity between the updated plan and author-context, default to trusting author-context and classify any residual concern as P2 or a clarifying question rather than P1. Do not re-flag such items unless you can point to a specific remaining gap or regression.
+10. **Avoid scope creep:** Do not demand exhaustive detail beyond what's required to implement and ship safely.
 
 ### Comment Guidelines
 
@@ -132,7 +134,7 @@ Acceptance criteria that use **proxy metrics** instead of **observable outcomes*
 
 In general, prefer AC that describe behavior, invariants, or verifiable states—not internal structure limits or work quotas.
 
-### Parallel/Duplicate Infrastructure (Flag as P1)
+### Parallel/Duplicate Infrastructure (Flag as P1 only when it causes happy-path failures)
 
 Plans that propose creating new infrastructure when similar infrastructure already exists in the codebase are a serious red flag. This leads to fragmented, inconsistent codebases.
 
@@ -151,10 +153,14 @@ Plans that propose creating new infrastructure when similar infrastructure alrea
 2. Does it show which existing mechanisms were considered?
 3. If proposing new infrastructure, is there explicit justification for why existing mechanisms are insufficient?
 
-**When to flag:**
-- Plan creates new infrastructure without acknowledging existing similar systems
-- Plan lacks "Integration Analysis" or "Existing Mechanisms Considered" section
+**When to flag as P1:**
+- Duplication is very likely to cause inconsistent behavior or failures on core happy-path flows (e.g., two conflicting auth systems, divergent state management)
+
+**When to flag as P2 (not P1):**
+- Duplication is primarily a maintainability or long-term complexity concern
+- Plan creates new infrastructure without acknowledging existing similar systems (but doesn't cause happy-path failures)
 - Justification for new infrastructure is weak ("cleaner to start fresh", "existing is complex")
+- You only suspect duplication from generic naming patterns without clear evidence
 
 **When NOT to flag:**
 - Plan explicitly extends existing infrastructure
@@ -178,7 +184,7 @@ Use when the plan is structurally or logically impossible to execute as written.
 
 **[P1] – High-severity, must-fix before implementation**
 
-Use when leaving the issue unfixed will *very likely* cause failure or serious risk on normal, expected execution paths.
+Use when leaving the issue unfixed will *very likely* cause failure or serious risk on normal, expected execution paths in the system as described in the plan (not based on speculative runtime or library behavior).
 
 - Criteria (any one is enough):
   - The main "happy path" will fail or be blocked for a large portion of users.
@@ -191,6 +197,8 @@ Use when leaving the issue unfixed will *very likely* cause failure or serious r
 - **Non-examples (these are P2):**
   - An env var is missing only for a rare debug/diagnostic path.
   - Logging setup is missing for a divergence-warning path but doesn't crash the main flow.
+  - Concerns that depend on hypothetical or undocumented behavior of the underlying runtime, language, or third-party libraries when the plan does not introduce a new dependency on that behavior.
+  - Questions about future API design, ergonomics, or alternative architectures that are not required to ship safely.
 
 **[P2] – Normal, should be resolved before implementation**
 
@@ -204,7 +212,9 @@ Use when the plan is executable but has gaps that could cause bugs, confusion, o
   - Missing env var for an optional analytics integration or rarely used admin path.
   - Missing logging only in debug-only flows; main processing still works.
   - Unclear behavior for non-core edge cases.
-- **When torn between P1 and P2, default to P2.**
+- **When torn between P1 and P2, default to P2, especially in later iterations where remaining concerns are narrow, speculative, or limited to non-core paths. Only classify an issue as P1 when it clearly meets the P1 criteria.**
+- **Late-iteration P1 rarity:** After an iteration where all known P0/P1 issues are resolved, discovering a new P1 in later iterations should be rare. Only introduce a new P1 if there is clear, concrete evidence that it meets the P1 criteria and explain why it was not identifiable earlier. Otherwise, default to P2.
+- **Partially resolved issues:** If a previously P1 issue is partially resolved such that the remaining risk is limited to non-core paths or unlikely edge cases, consider whether it should be downgraded to P2 and state that explicitly.
 
 **[P3] – Low-severity, nice-to-have clarity or polish**
 
@@ -227,11 +237,14 @@ Use for feedback that would improve quality but is not expected to cause failure
 
 ## Reasoning Process
 
-Before outputting your review, use ultrathink to reason step-by-step:
-1. Evaluate each dimension (completeness, correctness, dependencies, risks, etc.)
-2. For each potential finding, explicitly ask: "Does this meet P1 criteria, or is it P2?"
-3. Consider edge cases and failure modes carefully
-4. Only then formulate your findings and verdict
+Before outputting your review, use ultrathink to reason step-by-step. Follow this sequence:
+1. Reconstruct the previous review state: list prior P0/P1 issues and any relevant author-context notes provided in the input.
+2. For each prior P0/P1, check the updated plan to determine whether it is resolved, partially resolved, or still unresolved.
+3. Only after completing this verification step, scan the updated plan for genuinely new potential issues.
+4. For each potential finding (old or new), explicitly ask: "Does this meet P1 criteria, or is it P2?" If you are uncertain and it is not clearly catastrophic on the main happy path, classify it as P2.
+5. Consider edge cases and failure modes, but do not escalate speculative or highly uncertain concerns about runtimes/APIs to P1; classify them as P2 or raise them as questions.
+6. Only then formulate your findings and verdict, ensuring the verdict logic matches the Priority and Verdict Guidelines.
+7. **Convergence sanity-check:** Before deciding the verdict, re-check: Are all remaining concerns P2/P3 or questions and not clearly catastrophic for the main happy path? If yes, you SHOULD choose PASS, even if P2/P3 feedback remains.
 
 ## Output Format
 
