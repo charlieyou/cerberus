@@ -9,6 +9,8 @@ Validate that generated tasks form a coherent, complete, and executable work gra
 
 > **Upstream**: This command validates output from `/create-tasks`.
 
+> ⚠️ **ITERATION REQUIRED**: This command does NOT stop after identifying issues. You MUST fix all blocking issues and re-run validation until verdict is PASS. See [Iteration Loop](#iteration-loop-mandatory) section.
+
 ## Execution Contract
 
 1. Complete Phases 1–6 in order. For each phase, update internal state, list any issues, then proceed.
@@ -16,6 +18,8 @@ Validate that generated tasks form a coherent, complete, and executable work gra
 3. Use step-by-step reasoning internally to build and analyze the task graph. Only include final conclusions and structured reports in output.
 4. Only produce the final report once all blocking gates are evaluated.
 5. **For task graphs with >10 tasks, you MUST use the subagent strategy below.**
+6. **Single-call self-healing**: Within this single `/review-tasks` invocation, simulate the full iteration loop: detect blocking issues → apply fixes to your internal state → re-run Phases 1–6 on the updated state → repeat until PASS or max iterations. Only emit the final report for the **last** iteration.
+7. **A FAIL verdict without attempted fixes is incorrect behavior.** The command is not complete after the first FAIL verdict. You must fix issues and re-validate before stopping.
 
 ---
 
@@ -23,7 +27,9 @@ Validate that generated tasks form a coherent, complete, and executable work gra
 
 You MUST use subagents to review task graphs with more than 10 tasks. Claude's reliable context zone is ~100k tokens; reviewing many detailed tasks in a single context risks degraded quality.
 
-Do NOT attempt to review all tasks and checks in a single monolithic context when task count exceeds 10.
+**Why this matters**: Large task graphs exceed reliable single-context reasoning. Partitioning work and aggregating results preserves thoroughness and prevents missed blockers due to context compression.
+
+Treat subagents as separate focused reasoning passes within your single response (you do not need external APIs or real parallel processes). Do NOT attempt to review all tasks and checks in a single monolithic context when task count exceeds 10.
 
 **Using more tokens via subagents IMPROVES quality. Do NOT sacrifice review thoroughness to save tokens.**
 
@@ -138,17 +144,20 @@ Do NOT attempt to review all tasks and checks in a single monolithic context whe
    - Returns explicit PASS/FAIL for graph integrity
 
 5. **Run Final No Stragglers Gate** with full visibility before producing verdict:
-   - MUST have access to ALL plan items and ALL tasks
-   - MUST explicitly confirm: "Closing all tasks = plan fully complete"
-   - MUST FAIL the review if any doubt exists
+   - Have access to ALL plan items and ALL tasks
+   - Explicitly confirm: "Closing all tasks = plan fully complete"
+   - If any doubt exists, identify the gap and fix it in the iteration loop
 
-**You MUST NOT:**
+**Required behaviors:**
+- Always run full global coverage and graph checks with complete information
+- Always explicitly evaluate the No Stragglers Gate before emitting PASS
+- Prefer thorough analysis over token-saving
+- If aggregated issues are blocking, apply fixes and re-run from step 1 (up to 5 iterations)
 
-- Declare PASS if the No Stragglers Gate cannot confidently pass
-- Skip the Plan Coverage check or approximate it from incomplete information
-- Rely on per-batch approximations for global checks
-- Sacrifice thoroughness to save tokens—quality is paramount
-- Output PASS when any plan objective, AC, or MUST/SHALL lacks an owning, reachable task
+**Avoid:**
+- Declaring PASS when the No Stragglers Gate is uncertain
+- Skipping Plan Coverage or approximating global checks from partial batches
+- Outputting PASS when any objective/AC/MUST/SHALL lacks an owning, reachable task
 
 ### When to Use Single-Context Review
 
@@ -169,7 +178,8 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
   <step id="6">spawn_global_graph_subagent input="file_task_map + dependency_graph + parent_relationships"</step>
   <step id="7">aggregate_issues from="all_subagents"</step>
   <step id="8">run_no_stragglers_gate scope="ALL plan_items + ALL tasks"</step>
-  <step id="9">emit_final_report verdict="PASS only if no blocking issues AND no-stragglers-gate PASS"</step>
+  <step id="9">if blocking_issues AND iterations_lt_5: apply_fixes_to_state, goto step 3</step>
+  <step id="10">emit_final_report verdict="PASS | FAIL | FAIL_MAX_ITERATIONS"</step>
 </review-coordinator>
 ```
 
@@ -184,7 +194,7 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 5. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
 6. **Graph Integrity**: Every task is reachable from `bd ready` via dependency completions
 
-**Verdict is FAIL if ANY blocking gate has issues. Fix blocking issues and re-run.**
+**Verdict is FAIL if ANY blocking gate has issues. You MUST fix blocking issues and re-run validation. Do NOT stop until verdict is PASS.**
 
 ---
 
@@ -596,7 +606,7 @@ For tasks with new config/data/templates:
 
 ---
 
-## Verdict: PASS / FAIL
+## Verdict: PASS / FAIL / FAIL (MAX_ITERATIONS_REACHED)
 
 ### Blocking Issues (must fix)
 1. [Issue description + fix]
@@ -605,6 +615,22 @@ For tasks with new config/data/templates:
 ### Warnings (should fix)
 1. [Issue description + fix]
 2. ...
+
+### Iteration Notes
+- **Iterations used**: N
+- **Fixes applied**: [summary of fixes by category]
+
+### Machine-Readable Verdict (JSON)
+
+```json
+{
+  "verdict": "PASS",
+  "iterations_used": 2,
+  "blocking_issue_count": 0,
+  "warning_count": 1,
+  "total_tasks": 12
+}
+```
 ```
 
 ### Detailed Findings Format
@@ -664,7 +690,50 @@ None
 1. T003 and T004 could potentially run in parallel if split by subsystem
 ```
 
-### Example: FAIL Report
+### Example: FAIL → PASS (Iterative Self-Healing)
+
+This example shows the **final output** after internal iteration. Intermediate iterations are not printed.
+
+```markdown
+## Task Review Summary
+
+**Source**: Beads (oauth epic)
+**Plan**: docs/oauth-plan.md
+**Total Tasks**: 10
+
+### 1. Plan Coverage
+- Objectives: 3/3 covered
+- Acceptance criteria: 7/7 covered
+- MUST/SHALL obligations: 4/4 covered
+- Orphan tasks: none
+- **Status**: PASS
+
+### 2. Dependency Correctness
+- File overlap violations: 0
+- Missing logical deps: 0
+- Chain length violations: 0 (max chain: 4)
+- Circular dependencies: none
+- **Status**: PASS
+
+[... all other sections PASS ...]
+
+## Verdict: PASS
+
+### Blocking Issues
+None
+
+### Warnings
+1. Chain T001→T002→T003→T004 could parallelize T003/T004 if split by subsystem
+
+### Iteration Notes
+- **Iterations used**: 3
+- **Fixes applied**:
+  - Iteration 1: Created T008 for missing "revoke tokens" objective, created T009 for missing "refresh token expiry" AC
+  - Iteration 2: Added dependency `bd dep add T005 T002` (file overlap), split T003 into T003a + T003b (sizing)
+  - Iteration 3: Consolidated T004 ACs from 5 → 3
+```
+
+### Example: FAIL After Max Iterations
 
 ```markdown
 ## Task Review Summary
@@ -673,37 +742,18 @@ None
 **Plan**: docs/oauth-plan.md
 **Total Tasks**: 8
 
-### 1. Plan Coverage
-- Objectives: 2/3 covered
-- Acceptance criteria: 5/7 covered
-- MUST/SHALL obligations: 2/4 covered
-- Orphan tasks: T007
-- **Status**: FAIL
+[... sections with issues ...]
 
-### 2. Dependency Correctness
-- File overlap violations: 2
-- Missing logical deps: 1
-- Chain length violations: 1 (chain: 5)
-- Circular dependencies: none
-- **Status**: FAIL
+## Verdict: FAIL (MAX_ITERATIONS_REACHED)
 
-[...]
+### Remaining Blocking Issues
+1. **Chain length**: T001→T002→T003→T004→T005→T006 (6 tasks) — requires plan restructuring
+2. **Circular dependency**: T007 ↔ T008 — cannot resolve without changing task boundaries
 
-## Verdict: FAIL
-
-### Blocking Issues (must fix)
-1. **Plan Coverage**: Objective "User can revoke OAuth tokens" has no owning task
-   - Fix: Create task for token revocation endpoint
-2. **Plan Coverage**: AC "Refresh tokens expire after 7 days" has no owning task
-   - Fix: Add to T004 or create new task
-3. **File Overlap**: T002 and T005 both touch src/oauth/tokens.ts without dependency
-   - Fix: `bd dep add T005 T002`
-4. **Sizing**: T003 touches 15 files across 4 subsystems
-   - Fix: Split into T003a (backend, 6 files) and T003b (frontend, 5 files)
-
-### Warnings
-1. Chain T001→T002→T003→T004→T005 is 5 tasks; consider parallelizing T003/T004
-2. T007 has no plan mapping—verify it's needed or remove
+### Iteration Notes
+- **Iterations used**: 5 (max)
+- **Fixes applied**: 12 issues resolved across 5 iterations
+- **Escalation needed**: Remaining issues require plan-level changes
 ```
 
 ---
@@ -740,9 +790,10 @@ None
 - Run `bd ready` to see which tasks can start immediately
 
 **After review FAILS:**
-- Fix all BLOCKING issues first
-- Re-run `/review-tasks` to verify fixes
-- Iterate until PASS
+- You MUST fix all BLOCKING issues immediately (do not stop)
+- Re-run validation to verify fixes
+- Continue iterating until PASS
+- See **Iteration Loop** section below for fix actions
 
 **Common fix commands (if using beads):**
 ```bash
@@ -757,6 +808,167 @@ bd create "Task title" -p 1 --parent <epic-id> --description "..."
 
 # View task for editing
 bd show <task-id>
+```
+
+---
+
+## Iteration Loop (Mandatory)
+
+**Why this matters**: The user wants a task graph that is immediately executable after this command. Merely reporting problems still leaves them with an unusable plan. Iterating until PASS ensures `/review-tasks` delivers a ready-to-run task set, not a problem list.
+
+This loop runs **inside a single command execution**. Do not ask the user to re-run `/review-tasks`. Instead, internally:
+- Apply fixes to your `plan_items`, `tasks`, `file_task_map`, and `dependency_graph` state
+- Recompute findings after each batch of fixes
+- Continue until you reach a PASS verdict or hit the max-iteration limit
+- Only output the final iteration's report
+
+### Loop Behavior
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ITERATION LOOP                           │
+│                                                              │
+│  1. Run validation (Phases 1-6)                             │
+│  2. Produce verdict                                         │
+│  3. IF FAIL with blocking issues:                           │
+│     a. Apply fixes to internal state (tasks, deps, ACs)     │
+│     b. Re-run validation from Phase 1 on updated state      │
+│     c. GOTO step 2                                          │
+│  4. IF PASS: Emit final report and stop                     │
+│  5. IF FAIL after 5 iterations:                             │
+│     a. Set verdict to FAIL (MAX_ITERATIONS_REACHED)         │
+│     b. List top 3-5 remaining blocking issues               │
+│     c. Stop and report                                      │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Fix Actions by Issue Type
+
+When you encounter blocking issues, apply fixes to your internal state immediately, then re-validate:
+
+| Issue Type | Fix Action |
+|------------|------------|
+| **Sizing: files > 12** | Split task into 2+ tasks by subsystem; update `tasks` list and `dependency_graph` |
+| **Sizing: subsystems > 3** | Split task by subsystem boundary; each new task ≤ 2 subsystems |
+| **Sizing: ACs > 3** | Consolidate ACs into 3 by grouping related behaviors; or split task |
+| **Chain length > 4** | Restructure to allow parallelism; split middle tasks to reduce chain |
+| **File overlap without dep** | Add dependency to `dependency_graph` |
+| **Circular dependency** | Remove one edge; restructure task boundaries if needed |
+| **Missing plan coverage** | Add new task to `tasks` list for uncovered objective/AC/obligation |
+| **Orphan task** | Add plan mapping justification or remove from `tasks` |
+| **Missing verification** | Update task in `tasks` with concrete verification commands |
+| **Subjective AC** | Rewrite AC in task with measurable, testable criteria |
+| **Missing required section** | Update task in `tasks` with the missing section |
+
+### Fix Semantics
+
+When you "fix" an issue inside this command:
+
+**If `--beads` is enabled**:
+- Record the `bd ...` commands you would execute under `### Applied Fixes`
+- For re-validation, assume those commands have been applied
+- Update your internal `tasks` and `dependency_graph` state to match
+
+**If not using beads** (TODO.md or plan-only):
+- Update your internal `tasks` list with the corrected task definitions
+- Show the key changes in `### Iteration Notes` at the end
+- Use the updated state for subsequent validation iterations
+
+The goal is: after all iterations complete, the final report reflects a valid, executable task graph.
+
+### Fix Execution (Beads Mode)
+
+When `--beads` flag is set, execute fixes using bd commands:
+
+```bash
+# Split oversized task (example: T009 with 6 subsystems)
+bd update T009 --description "[narrowed scope: subsystems A, B only]..."
+bd create "T009b: [remaining scope: subsystems C, D]" -p 2 --parent <epic> --description "..."
+bd create "T009c: [remaining scope: subsystems E, F]" -p 2 --parent <epic> --description "..."
+bd dep add T009b T009   # If sequential
+bd dep add T009c T009   # If sequential
+
+# Consolidate ACs (example: T012 with 5 ACs → 3)
+bd update T012 --description "[consolidated ACs: 1. Combined AC, 2. Combined AC, 3. Combined AC]..."
+
+# Add missing dependency
+bd dep add <blocked> <blocker>
+
+# Create missing coverage task
+bd create "Task for uncovered AC" -p 1 --parent <epic> --description "..."
+```
+
+### Fix Execution (TODO.md Mode)
+
+When using TODO.md, edit the file directly:
+
+1. Split tasks by duplicating the task block and narrowing scope
+2. Add dependencies by updating the `Depends:` field
+3. Consolidate ACs by editing the Acceptance Criteria section
+4. Add missing tasks by inserting new task blocks
+
+### Iteration Tracking
+
+Track iterations in your output:
+
+```markdown
+## Review Iteration 1
+[... findings ...]
+**Verdict**: FAIL (3 blocking issues)
+
+### Fixes Applied
+1. Split T009 into T009a, T009b, T009c (subsystem boundaries)
+2. Consolidated T012 ACs from 5 → 3
+3. Added dependency: T005 → T003
+
+## Review Iteration 2
+[... re-run validation ...]
+**Verdict**: FAIL (1 blocking issue)
+
+### Fixes Applied
+1. Split T010 into T010a, T010b
+
+## Review Iteration 3
+[... re-run validation ...]
+**Verdict**: PASS
+
+All blocking issues resolved. Tasks ready for execution.
+```
+
+### Stopping Conditions
+
+You may ONLY stop when:
+1. **Verdict is PASS** — all blocking gates satisfied, emit final report
+2. **Maximum iterations reached** (5) — emit `FAIL (MAX_ITERATIONS_REACHED)` with remaining issues
+3. **Unfixable structural issue** — document as "ACCEPTED DEVIATION" with justification
+
+A response that reports FAIL without attempting fixes and re-validation is **incorrect behavior**. Do not:
+- Stop after the first FAIL verdict
+- Recommend fixes without applying them to internal state
+- Ask the user to re-run the command
+
+### Reporting Style
+
+- Only emit the **final** full `Task Review Summary` for the last iteration
+- Include a brief `### Iteration Notes` section summarizing iterations used and main fix categories
+- Do **not** print full summaries for intermediate iterations; keep them in reasoning only
+
+### Structural Deviation Exception
+
+Some blocking issues may be inherent to the plan structure and unfixable without changing the plan itself. In these cases:
+
+1. **Document the deviation** with explicit justification
+2. **Verify the deviation is unavoidable** given the plan's requirements
+3. **Accept with documentation** — mark as "ACCEPTED DEVIATION" in report
+4. **Continue to PASS** if no other blocking issues remain
+
+Example:
+```markdown
+### Accepted Deviations
+1. **Chain length 5 (vs max 4)**: The auth flow has inherent sequential dependencies
+   (token → session → permission → access → audit). Parallelization would require
+   plan changes. Accepted as structural constraint.
 ```
 
 ## Handling Edge Cases
