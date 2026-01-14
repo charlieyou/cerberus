@@ -8,6 +8,15 @@ argument-hint: [--beads] [--from-plan <path/to/plan.md>]
 Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to either **Beads issues** (with `--beads` flag) or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
+> **Downstream**: Output is validated by `/review-tasks`.
+
+## The No-Stragglers Invariant
+
+> **Completing ALL generated tasks MUST fully implement the plan.**
+>
+> This is the fundamental contract of task generation. When a user completes every task in the generated graph, the feature must be 100% complete—not 90%, not "mostly done", but FULLY DONE with no remaining work.
+>
+> Every objective, acceptance criterion, and MUST/SHALL obligation from the plan MUST have at least one owning task. If this invariant cannot be satisfied, task generation MUST fail.
 
 ## Mode Selection
 
@@ -424,6 +433,21 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 **Hard gates** block output. **Advisory** checks are recommendations.
 
 **Validation loop**: Run checks → fix violations → re-run checks → repeat until all pass.
+
+## Success Criteria
+
+**Task generation succeeds when ALL of the following are true:**
+
+1. **No-Stragglers Invariant**: Every plan objective, AC, and MUST/SHALL obligation has at least one owning task
+2. **All Hard Gates Pass**: Zero violations in Phase 5 validation table
+3. **Obligation Coverage Complete**: Obligation Coverage table shows 100% mapping with verification
+4. **AC Coverage Complete**: Every spec AC (if spec present) maps to exactly one primary owner task
+5. **Dependency Graph Valid**: No file overlaps without deps, no cycles, chains ≤ 4
+6. **Sizing Compliant**: All tasks within hard limits (12 files / 3 subsystems / 3 ACs)
+7. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
+8. **Wiring Complete**: New data/config/templates have wiring maps and coverage
+
+**Tasks may ONLY be output when all success criteria are met.**
 
 ### Phase 6: Output Generation
 
