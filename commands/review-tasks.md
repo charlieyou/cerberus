@@ -15,13 +15,15 @@ Validate that generated tasks form a coherent, complete, and executable work gra
 2. Maintain explicit state objects: `plan_items`, `tasks`, `file_task_map`, `dependency_graph`, `issues`.
 3. Use step-by-step reasoning internally to build and analyze the task graph. Only include final conclusions and structured reports in output.
 4. Only produce the final report once all blocking gates are evaluated.
-5. **For large task graphs (>20 tasks), you MUST use the subagent strategy below.**
+5. **For task graphs with >10 tasks, you MUST use the subagent strategy below.**
 
 ---
 
 ## Subagent Strategy (Mandatory for Large Reviews)
 
-You MUST use subagents to review large task graphs. Do NOT attempt to review all tasks and checks in a single monolithic context when task count exceeds 20.
+You MUST use subagents to review task graphs with more than 10 tasks. Claude's reliable context zone is ~100k tokens; reviewing many detailed tasks in a single context risks degraded quality.
+
+Do NOT attempt to review all tasks and checks in a single monolithic context when task count exceeds 10.
 
 **Using more tokens via subagents IMPROVES quality. Do NOT sacrifice review thoroughness to save tokens.**
 
@@ -53,7 +55,7 @@ You MUST use subagents to review large task graphs. Do NOT attempt to review all
 │                    COORDINATOR AGENT                         │
 │  - Loads plan + all tasks (Phase 1)                         │
 │  - Builds state: plan_items, tasks, file_task_map, deps     │
-│  - Partitions tasks into batches (10-20 per batch)          │
+│  - Partitions tasks into batches (5-10 per batch)           │
 │  - Spawns subagents, merges findings                        │
 │  - Runs final No Stragglers Gate                            │
 │  - Produces final PASS/FAIL verdict                         │
@@ -113,7 +115,7 @@ You MUST use subagents to review large task graphs. Do NOT attempt to review all
 
 **You MUST:**
 
-1. **Partition tasks into batches** by epic/parent or plan phase (10-20 tasks per batch)
+1. **Partition tasks into batches** by epic/parent or plan phase (5-10 tasks per batch)
 
 2. **Spawn Batch Review Subagents** for each batch that perform:
    - Agent Completability checks
@@ -150,7 +152,7 @@ You MUST use subagents to review large task graphs. Do NOT attempt to review all
 
 ### When to Use Single-Context Review
 
-For small task graphs (≤20 tasks), you MAY run all checks in a single context. However:
+For small task graphs (≤10 tasks), you MAY run all checks in a single context. However:
 - You MUST still perform ALL checks with equal rigor
 - You MUST still explicitly run the No Stragglers reasoning
 - If context pressure causes any check to be skipped or approximated, switch to subagent strategy
@@ -161,7 +163,7 @@ For small task graphs (≤20 tasks), you MAY run all checks in a single context.
 <review-coordinator>
   <step id="1">load_plan_and_tasks</step>
   <step id="2">build_state: plan_items, tasks, file_task_map, dependency_graph</step>
-  <step id="3">partition_tasks batch_size="10-20" strategy="epic_or_phase"</step>
+  <step id="3">partition_tasks batch_size="5-10" strategy="epic_or_phase"</step>
   <step id="4">spawn_batch_subagents for="each_batch" checks="completability,format,sizing,tdd,wiring,local-deps"</step>
   <step id="5">spawn_global_coverage_subagent input="ALL plan_items + ALL task_summaries"</step>
   <step id="6">spawn_global_graph_subagent input="file_task_map + dependency_graph + parent_relationships"</step>
