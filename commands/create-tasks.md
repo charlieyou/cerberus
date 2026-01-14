@@ -435,15 +435,17 @@ Use the **beads skill** to create issues. Follow these patterns:
 
 ##### Type & Priority Mapping
 
+**Important**: Use only `task` or `epic` types. Do NOT use `bug` or `chore`. Epics are purely organizational containers—if work needs to be done in an agent thread, it must be a `task`.
+
 | Plan Context | Type | Priority |
 |--------------|------|----------|
-| New feature from spec | feature | P1-P2 (based on story priority) |
+| New feature from spec | task | P1-P2 (based on story priority) |
 | Refactor/restructure | task | P2 |
-| Bug fix from risks section | bug | P1 |
+| Bug fix from risks section | task | P1 |
 | Infrastructure/setup | task | P1 |
-| Documentation/polish | chore | P3 |
+| Documentation/polish | task | P3 |
 | Parent grouping (3+ child tasks) | epic | P1 |
-| Cleanup/tech debt | chore | P3-P4 |
+| Cleanup/tech debt | task | P3-P4 |
 
 ##### Issue Creation Flow
 
