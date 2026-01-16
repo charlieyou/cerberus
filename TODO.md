@@ -10,6 +10,7 @@
   - Propagate principle changes across templates
   - Prevents: agent creativity creep, architectural drift, forgotten constraints
 
+Task review should use multi-models
 * add /analyze command (from Spec Kit)
   - Read-only consistency audit across spec/plan/tasks before implementation
   - Detection passes: duplication, ambiguity, underspecification, constitution violations, coverage gaps, inconsistency
@@ -31,18 +32,14 @@
 * separate templates from orchestration - users can choose their own template to use
 * Instruct to use subagents to save context for exploration
 
+
 ## All Reviews
 
-* after pass, it should fix the non blocking issues
 * allow more rounds of review after max iter is hit
-* strictness modes -- fail on any error, require 3, etc
 
 ## Code Review
 
-* remove language on avoiding false positives?
 * dont pass a diff directly to the code review, agents should explore themselves?
-* Or at least explicitly instruct them to explore the code around it
-* code review flag to not fix the code, iterate on the review
 
 ## BD Groom Command
 
