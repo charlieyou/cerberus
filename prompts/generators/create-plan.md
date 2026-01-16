@@ -46,6 +46,9 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
     - The plan MUST include an "Integration Analysis" section showing which existing systems were considered.
     - Default to extending existing infrastructure. Creating new systems requires explicit justification.
     - Red flags to avoid: "Create a new [X] system" when an [X] system already exists in the codebase.
+14. **Spec/legacy fidelity**:
+    - If the plan deviates from spec/legacy requirements, include a **Deviation Log** with rationale and approval status.
+    - If no deviations, explicitly write "None".
 
 ## Plan Template
 
@@ -162,6 +165,14 @@ Format questions as a numbered list. Your first response must be EITHER (a) only
 |---------|------------|
 | AC #1: [summary] | Technical Design section X, Unit tests |
 | AC #2: [summary] | Data Model, E2E tests |
+
+## Spec/Legacy Fidelity
+[If a spec/legacy doc exists, confirm the plan matches it. Any deviations must be explicit.]
+
+### Deviation Log
+| Source | Deviation | Rationale | Approved? |
+|--------|-----------|-----------|-----------|
+| None | — | — | — |
 
 ## Open Questions
 

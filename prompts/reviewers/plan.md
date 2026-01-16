@@ -15,11 +15,13 @@ ${PLAN_CONTENT}
      - Context/Goals
      - Scope/Non-Goals
      - Assumptions & Constraints
+     - Integration Analysis
      - Prerequisites
      - High-level Approach
      - Technical Design (architecture, data model, interfaces, file impact summary)
      - Risks & Edge Cases / Breaking Changes
      - Testing & Validation
+     - Spec/Legacy Fidelity (Deviation Log if applicable)
      - Open Questions (if any)?
    - Note: Plans may include a high-level task list with dependencies and verification steps, but should avoid overly granular implementation checklists (that level of breakdown is handled by `/create-tasks`)
    - Deviations from section names or ordering should not be treated as P1 unless they make the plan non-executable or cause ambiguity at P0/P1 severity. Otherwise, classify template/structure concerns as P2 or P3.
@@ -56,6 +58,9 @@ ${PLAN_CONTENT}
    - Is the scope appropriate (not gold-plated, not under-specified)?
    - Are MVP vs follow-ups clear where relevant?
    - Are non-goals or explicit exclusions called out to avoid scope creep?
+9. **Spec/Legacy Fidelity**
+   - Does the plan preserve spec/legacy requirements verbatim, especially enumerations/constants/thresholds?
+   - If deviations exist, are they explicitly logged with rationale and approval status?
 
 ### What Makes a Good Plan
 
@@ -67,6 +72,7 @@ A good implementation plan should:
 4. **Ground itself in reality** — Reference concrete files, modules, and systems, or explicitly mark new artifacts as "to be created".
 5. **Map to acceptance criteria** — Show how the design addresses each spec AC.
 6. **Respect scope** — Focus on what's needed to ship safely; defer nice-to-haves.
+7. **Preserve requirements** — Everything matches spec/legacy, or deviations are explicitly logged.
 
 Note: Plans focus on **design** (architecture, data model, interfaces, file impact). **Task breakdown** (Task 1, Task 2, dependencies, verification per task) is handled separately by `/create-tasks`.
 
@@ -82,6 +88,7 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 8. **Iteration hygiene (verification-first):** At the start of each review round, first verify whether previously flagged P0/P1 issues are resolved in the updated plan and any provided author-context. For each prior issue, decide if it is resolved, partially resolved, or still unresolved. Only after completing this verification step should you flag genuinely new issues. Do not re-raise issues already addressed unless the plan clearly regressed or you can point to a specific remaining gap. In later iterations where most high-severity issues are resolved, be conservative about promoting new concerns to P1; prefer P2 unless there is a concrete, high-likelihood failure on the main happy path.
 9. **Author-context awareness:** Input may include an author-context note summarizing which findings were resolved, which were false positives, and any constraints. Treat items explicitly marked as "Resolved" as resolved unless the updated plan clearly contradicts them. If there is ambiguity between the updated plan and author-context, default to trusting author-context and classify any residual concern as P2 or a clarifying question rather than P1. Do not re-flag such items unless you can point to a specific remaining gap or regression.
 10. **Avoid scope creep:** Do not demand exhaustive detail beyond what's required to implement and ship safely.
+11. **Requirement fidelity bias:** Actively check for requirement rewrites (lists shortened, thresholds changed, renamed states) and flag them when not explicitly justified.
 
 ### Comment Guidelines
 
@@ -100,6 +107,7 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 - Missing migrations, config changes, or environment setup for data or behavioral changes.
 - Circular dependencies between steps or unclear ordering for risky operations.
 - High-risk changes without any verification or monitoring plan.
+- Plan rewrites enumerations/constants/thresholds from spec/legacy without an explicit deviation log.
 - **Gameable acceptance criteria** (see below)
 - **Parallel/duplicate infrastructure** (see below)
 

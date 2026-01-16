@@ -33,6 +33,8 @@ Treat subagents as separate focused reasoning passes within your single response
 
 **Using more tokens via subagents IMPROVES quality. Do NOT sacrifice review thoroughness to save tokens.**
 
+**Input hygiene**: When handing inputs to subagents, wrap them in XML tags (e.g., `<plan_items>`, `<task_summaries>`, `<dependencies>`) to reduce ambiguity and parsing errors.
+
 ### The Cardinal Rule: NO STRAGGLERS
 
 > **Completing ALL tasks MUST result in completing the FULL and COMPLETE plan.**
@@ -193,6 +195,8 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 4. **Task Format Compliance**: Every task includes required sections (Goal, Context, Scope, Changes, AC, Verification)
 5. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
 6. **Graph Integrity**: Every task is reachable from `bd ready` via dependency completions
+7. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
+8. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
 
 **Verdict is FAIL if ANY blocking gate has issues. You MUST fix blocking issues and re-run validation. Do NOT stop until verdict is PASS.**
 
@@ -200,7 +204,7 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 
 ## Review Goals
 
-This review ensures six critical properties of the task graph:
+This review ensures eight critical properties of the task graph:
 
 ### 1. Plan Coverage (No Stragglers) — MOST CRITICAL
 
@@ -214,6 +218,17 @@ Ensure that completing ALL tasks results in completion of the plan:
 - All phases from the plan have corresponding tasks
 - Every task traces back to at least one plan item (no orphan work)
 - Rollup check: if you close all tasks, is the feature done?
+
+### 1b. Requirement Fidelity & Consistency (Spec/Legacy → Plan → Tasks)
+
+**Why this matters**: Silent rewrites of requirements cause implementation drift even when all tasks are closed.
+
+Verify that:
+- **Consistency Audit** is present and compares spec/legacy → plan (if referenced)
+- **Deviation Log** exists for any mismatch, with explicit approval status
+- **Requirements Snapshot** includes objectives, AC, MUST/SHALL obligations 
+- **Tasks do not rewrite requirements**: any change in list items, thresholds, counts, or states is a FAIL unless logged as an approved deviation
+- **"needs-followup" is blocking**: tasks cannot be closed if marked with unresolved followups, TODOs, or similar placeholders
 
 ### 2. Dependency Correctness
 

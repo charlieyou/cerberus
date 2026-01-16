@@ -41,10 +41,12 @@ Use clear, explicit instructions and structured outputs to reduce ambiguity and 
 - Ask clarifying questions rather than guessing when plan details are ambiguous or missing.
 - Separate **context** from **requirements** from **output format**.
 - Be explicit about required output formats and include short, representative examples.
+- Prefer explicit, minimal examples for any non-trivial output schema (tables, logs, coverage maps).
 - Use clear headings and bullet lists; avoid unstructured paragraphs for requirements.
 - Avoid contradicting instructions; if conflicts exist, call them out and resolve before generating tasks.
 - Prefer precise, concrete language; avoid vague qualifiers like "maybe" or "as needed".
 - Put instructions before context, and use clear delimiters (e.g., `###` or `"""`) to separate them.
+- Be specific about desired outcome, length, format, and style; provide a minimal example output where possible.
 - If you forbid something, say what to do instead (positive instruction over negative-only).
 - Use checklists/tables for multi-step validation; avoid burying gates in prose.
 - Treat `CLAUDE.md` (if present) as authoritative for repo-specific conventions and constraints.
@@ -119,6 +121,30 @@ Before generating tasks, verify all referenced files:
    - Extract entity definitions from data model
    - Extract API signatures from contracts
 
+### Phase 2b: Consistency Audit (Spec → Plan)
+
+**Goal**: Prevent requirement drift between spec/legacy → plan → tasks.
+
+1. **Build a Requirements Snapshot** from the plan (verbatim):
+   - Objectives, Acceptance Criteria, MUST/SHALL obligations
+   - Explicit Non-Goals and constraints
+
+2. **Cross-check against spec/legacy** (if referenced):
+   - If plan omits or rewrites any spec/legacy requirement, flag as **Deviation**
+   - If any deviation is not explicitly acknowledged in the plan, **abort**
+   - If a referenced spec/legacy artifact is missing, **abort** rather than inferring
+
+3. **Create a Consistency Audit table** (required output):
+   - Columns: Item | Spec/Legacy | Plan | Status | Notes
+
+4. **Create a Deviation Log** (required output):
+   - Each deviation must include: source, change, rationale, and explicit user approval status
+   - If no deviations, output "None"
+
+5. **Freeze requirements for task generation**:
+   - Tasks MUST inherit plan requirements verbatim
+   - Any task-level rewrite of enumerations/constants/thresholds/AC text is **forbidden** unless recorded in the Deviation Log
+
 ### Phase 3: Task Decomposition
 
 Generate tasks following these rules:
@@ -180,6 +206,7 @@ Generate tasks following these rules:
 #### Plan → Task Mapping
 
 - **Setup/Foundation phases**: Derive from `Prerequisites` and infra/config items in `High-Level Approach`
+- **System Wiring phase**: If any end-to-end flow or cross-layer data/config/template propagation is introduced, create at least one dedicated wiring task tagged `[system-wiring]`
 - **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3), applying TDD ordering within each story
 - **File assignments**: Use `File Impact Summary` to assign `Primary Files` to each task
 - **AC → task mapping**: Use `Acceptance Criteria Coverage` table to ensure every AC has exactly one primary owner task (supporting tasks may reference ACs but must not claim ownership)
@@ -292,6 +319,7 @@ These describe the structure of the *generated tasks*, not the workflow phases a
 
 - **Setup**: Project init, dependencies
 - **Foundation**: Blocking prerequisites
+- **System Wiring**: Dedicated wiring/integration tasks for end-to-end flows
 - **User Stories**: In priority order (P1, P2, P3...)
 - **Polish**: Cross-cutting cleanup
 
@@ -373,12 +401,46 @@ Split and re-estimate until all pass.
 
 Provide the following **required** artifacts after task specs:
 
+**Requirements Snapshot** (required):
+
+```markdown
+| Requirement Type | Source | Text (verbatim) |
+|------------------|--------|----------------|
+| Objective | Plan | ... |
+| AC | Plan | ... |
+| MUST/SHALL | Plan | ... |
+```
+
+**Consistency Audit** (required):
+
+```markdown
+| Item | Spec/Legacy | Plan | Status | Notes |
+|------|-------------|------|--------|-------|
+| AC #3: ... | ... | ... | Match/Deviation | ... |
+```
+
+**Deviation Log** (required):
+
+```markdown
+| Source | Deviation | Rationale | Approved? |
+|--------|-----------|-----------|-----------|
+| Spec AC #3 | ... | ... | Yes/No |
+```
+
 **Obligation Coverage** (required):
 
 ```markdown
 | Plan Clause | Task(s) | Verification |
 |------------|---------|--------------|
 | "MUST ... " | T001 | Unit test X + integration test Y |
+```
+
+**System Wiring Coverage** (required when applicable):
+
+```markdown
+| Flow | Wiring Task(s) | Verification |
+|------|----------------|--------------|
+| config → DI → runtime | T002 [system-wiring] | Integration test |
 ```
 
 **Propagation Map** (required for new/repurposed inputs/fields/signals):
@@ -414,6 +476,8 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **File overlap** | Hard | No two parallel tasks share files | Add dependency |
 | **AC coverage** | Hard | Every spec AC maps to exactly one primary task (if spec present) | Add task or reassign |
 | **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary (if spec present) | Reassign ownership |
+| **Consistency audit** | Hard | Spec/legacy → plan matches, or deviations logged + approved | Add deviations or abort |
+| **Requirement freeze** | Hard | Tasks mirror plan requirements verbatim (ACs/enums/constants/thresholds) | Rewrite tasks to match plan |
 | **Dependencies complete** | Hard | When uncertain, add the dep | Add dependency |
 | **One outcome per task** | Hard | No bundled multi-behavior tasks | Split task |
 | **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 3 ACs | MUST split |
@@ -423,6 +487,7 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **Negative-case coverage** | Hard | Rejection/error/invalid inputs have explicit negative tests | Add negative tests |
 | **Merge/precedence semantics** | Hard | Merge/override/precedence/defaults have explicit tests | Add tests |
 | **End-to-end wiring** | Hard | New data/config/templates have wiring maps; tasks cover each hop | Add wiring map + missing tasks/deps |
+| **System wiring coverage** | Hard | End-to-end flows include a `[system-wiring]` task | Add wiring task |
 | **Adapter/bridge coverage** | Hard | Field changes mapped across all adapters/mappers/DI builders | Add/update adapter tasks |
 | **Config override test** | Hard | New config values have override tests reaching runtime | Add override test |
 | **Template lifecycle** | Hard | New templates are loaded, passed through, and used | Add missing lifecycle steps |
@@ -446,6 +511,8 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 6. **Sizing Compliant**: All tasks within hard limits (12 files / 3 subsystems / 3 ACs)
 7. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
 8. **Wiring Complete**: New data/config/templates have wiring maps and coverage
+9. **Consistency Audit Passes**: Spec/legacy → plan matches, or deviations logged + approved
+10. **System Wiring Covered**: Each end-to-end flow has a `[system-wiring]` task
 
 **Tasks may ONLY be output when all success criteria are met.**
 
