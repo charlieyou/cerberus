@@ -248,10 +248,6 @@ Tasks must have correct dependency relationships:
 - Setup/foundation before feature work
 - Integration tests exist before implementation tasks that turn them green
 
-**Chain Length:**
-- Keep dependency chains ≤ 4 tasks
-- Flag chains exceeding 4 for restructuring into parallel work
-
 ### 3. Agent Completability
 
 **Why this matters**: Ensures any agent can execute tasks without back-and-forth clarification, reducing stalls and misimplementations. Vague tasks lead to incorrect implementations that require rework.
@@ -791,7 +787,7 @@ None
 | **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able | Split or reclassify |
 | **Reachability** | BLOCKING | Every task reachable from `bd ready` | Fix blocking dependencies |
 | **Integration tests** | WARNING | Each feature has `[integration-path-test]` task | Add integration test task |
-| **Chain length** | BLOCKING | Dependency chains ≤ 4 tasks | Restructure into parallel work |
+
 | **Duplicates** | WARNING | Each piece of work in exactly one task | Merge tasks |
 | **Config tests** | WARNING | New config values have override tests | Add override test |
 | **Wiring maps** | WARNING | New data/config/templates have wiring maps | Add wiring map |
