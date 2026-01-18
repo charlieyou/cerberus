@@ -306,7 +306,7 @@ These rules prevent cross-layer gaps where changes are made in one layer but wir
 
 #### Parallelization & Dependencies
 
-**Dependency notation**: `T002 → T001` means "T002 depends on T001" (T001 must complete before T002 can start). This matches `bd dep add T002 T001`.
+**Dependency notation**: `T002 → T001` means "T002 depends on T001" (T001 must complete before T002 can start). This matches `br dep add T002 T001`.
 
 - **File overlap = dependency** — tasks touching same file cannot parallelize
 - **Central file contention**: If many tasks overlap a central file (e.g., `main.py`, `container.ts`), create a dedicated "shared foundation" task for that file, then parallelize downstream tasks that no longer touch it
@@ -541,27 +541,27 @@ Use the **beads skill** to create issues. Follow these patterns:
 ##### Issue Creation Flow
 
 1. **De-duplicate first**: 
-   - Check `bd list --status open` for existing related issues
-   - Use `bd search "<keywords>"` to find potential overlaps
-   - Use `bd list --title-contains "<phrase>"` for exact matches
-   - **If existing issue matches**: Update its description with new context via `bd update <id> --description "..."` instead of creating duplicate
+   - Check `br list --status open` for existing related issues
+   - Use `br search "<keywords>"` to find potential overlaps
+   - Use `br list --title-contains "<phrase>"` for exact matches
+   - **If existing issue matches**: Update its description with new context via `br update <id> --description "..."` instead of creating duplicate
    - **If partial overlap**: Note relationship in description, ensure dependency exists
 
 2. **Create epic** (if 3+ tasks):
    ```bash
-   bd create "Epic: [Feature Name]" -p 1 --type epic --description "..."
+   br create "Epic: [Feature Name]" -p 1 --type epic --description "..."
    # Returns EPIC-ID
    ```
 
 3. **Create tasks with --parent**:
    ```bash
-   bd create "[T001] Task title" -p 2 --type task --parent EPIC-ID --description "..."
+   br create "[T001] Task title" -p 2 --type task --parent EPIC-ID --description "..."
    # Returns TASK-ID
    ```
 
 4. **Add dependencies** (file overlap or logical order):
    ```bash
-   bd dep add <blocked-task> <blocker-task>
+   br dep add <blocked-task> <blocker-task>
    ```
    
    **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
@@ -569,7 +569,7 @@ Use the **beads skill** to create issues. Follow these patterns:
 
 5. **Verify the task graph**:
    ```bash
-   bd ready
+   br ready
    ```
 
 #### If no `--beads` flag (default):

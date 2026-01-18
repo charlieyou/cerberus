@@ -194,7 +194,7 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 3. **Agent Completability**: Every task passes the completability checklist (clear goal, concrete verification, objective ACs)
 4. **Task Format Compliance**: Every task includes required sections (Goal, Context, Scope, Changes, AC, Verification)
 5. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
-6. **Graph Integrity**: Every task is reachable from `bd ready` via dependency completions
+6. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
 7. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
 8. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
 
@@ -306,13 +306,13 @@ Mechanical sweeps additionally require:
 
 ### 6. Graph Integrity
 
-**Why this matters**: Guarantees there are no dead or unreachable tasks and that work can actually flow from `bd ready` to "plan complete". Orphan tasks waste effort; unreachable tasks never get done.
+**Why this matters**: Guarantees there are no dead or unreachable tasks and that work can actually flow from `br ready` to "plan complete". Orphan tasks waste effort; unreachable tasks never get done.
 
 The task graph must be well-formed:
 
 - Every task traces to at least one plan objective or is justified as infra/support
 - Dependency graph is acyclic (no circular dependencies)
-- Every task is reachable from `bd ready` via some sequence of dependency completions
+- Every task is reachable from `br ready` via some sequence of dependency completions
 - Parent-child relationships match epic structure
 - Each piece of work appears in exactly one task (no duplicates)
 
@@ -362,7 +362,7 @@ If these artifacts exist, load them and verify consistency with recomputed state
 **State to build**: `plan_items`, `tasks`
 
 1. **Determine task source**:
-   - If `--beads` flag: Load from beads (`bd list --status open`)
+   - If `--beads` flag: Load from beads (`br list --status open`)
    - Otherwise: Load from `TODO.md` in plan directory
 
 2. **Load the plan** (required for coverage check):
@@ -450,7 +450,7 @@ If these artifacts exist, load them and verify consistency with recomputed state
    - Missing dependency → **BLOCKING**
    ```
    Issue: T001 and T003 both touch src/auth/session.ts but have no dependency
-   Fix: bd dep add T003 T001
+   Fix: br dep add T003 T001
    ```
 
 3. **Verify logical dependencies**:
@@ -541,7 +541,7 @@ Exceeds hard limits → **BLOCKING**
 **6a. Graph Integrity:**
 
 1. **Orphan detection**: Tasks with no parent AND no plan mapping
-2. **Reachability check**: From `bd ready`, trace which tasks can eventually be reached
+2. **Reachability check**: From `br ready`, trace which tasks can eventually be reached
 3. **Duplicate detection**: Tasks with similar titles/files/changes
 4. **Epic consistency**: Child tasks have parent relationship, epic completion = all children complete
 
@@ -659,7 +659,7 @@ For each issue found:
 
 Example fix (if beads):
 ```bash
-bd dep add T003 T001  # T001 must complete before T003
+br dep add T003 T001  # T001 must complete before T003
 ```
 ```
 
@@ -740,7 +740,7 @@ None
 - **Iterations used**: 3
 - **Fixes applied**:
   - Iteration 1: Created T008 for missing "revoke tokens" objective, created T009 for missing "refresh token expiry" AC
-  - Iteration 2: Added dependency `bd dep add T005 T002` (file overlap), split T003 into T003a + T003b (sizing)
+  - Iteration 2: Added dependency `br dep add T005 T002` (file overlap), split T003 into T003a + T003b (sizing)
   - Iteration 3: Consolidated T004 ACs from 5 → 3
 ```
 
@@ -785,7 +785,7 @@ None
 | **Task format** | BLOCKING | All required sections present | Add missing sections |
 | **Sizing: standard** | BLOCKING | Tasks ≤ 12 files, ≤ 3 subsystems, ≤ 3 ACs | Split task |
 | **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able | Split or reclassify |
-| **Reachability** | BLOCKING | Every task reachable from `bd ready` | Fix blocking dependencies |
+| **Reachability** | BLOCKING | Every task reachable from `br ready` | Fix blocking dependencies |
 | **Integration tests** | WARNING | Each feature has `[integration-path-test]` task | Add integration test task |
 
 | **Duplicates** | WARNING | Each piece of work in exactly one task | Merge tasks |
@@ -798,7 +798,7 @@ None
 
 **After review PASSES:**
 - Tasks are ready for execution via `/implement` or manual work
-- Run `bd ready` to see which tasks can start immediately
+- Run `br ready` to see which tasks can start immediately
 
 **After review FAILS:**
 - You MUST fix all BLOCKING issues immediately (do not stop)
@@ -809,16 +809,16 @@ None
 **Common fix commands (if using beads):**
 ```bash
 # Add missing dependency
-bd dep add <blocked-task> <blocker-task>
+br dep add <blocked-task> <blocker-task>
 
 # Update task description
-bd update <task-id> --description "..."
+br update <task-id> --description "..."
 
 # Add missing task
-bd create "Task title" -p 1 --parent <epic-id> --description "..."
+br create "Task title" -p 1 --parent <epic-id> --description "..."
 
 # View task for editing
-bd show <task-id>
+br show <task-id>
 ```
 
 ---
@@ -877,7 +877,7 @@ When you encounter blocking issues, apply fixes to your internal state immediate
 When you "fix" an issue inside this command:
 
 **If `--beads` is enabled**:
-- Record the `bd ...` commands you would execute under `### Applied Fixes`
+- Record the `br ...` commands you would execute under `### Applied Fixes`
 - For re-validation, assume those commands have been applied
 - Update your internal `tasks` and `dependency_graph` state to match
 
@@ -890,24 +890,24 @@ The goal is: after all iterations complete, the final report reflects a valid, e
 
 ### Fix Execution (Beads Mode)
 
-When `--beads` flag is set, execute fixes using bd commands:
+When `--beads` flag is set, execute fixes using br commands:
 
 ```bash
 # Split oversized task (example: T009 with 6 subsystems)
-bd update T009 --description "[narrowed scope: subsystems A, B only]..."
-bd create "T009b: [remaining scope: subsystems C, D]" -p 2 --parent <epic> --description "..."
-bd create "T009c: [remaining scope: subsystems E, F]" -p 2 --parent <epic> --description "..."
-bd dep add T009b T009   # If sequential
-bd dep add T009c T009   # If sequential
+br update T009 --description "[narrowed scope: subsystems A, B only]..."
+br create "T009b: [remaining scope: subsystems C, D]" -p 2 --parent <epic> --description "..."
+br create "T009c: [remaining scope: subsystems E, F]" -p 2 --parent <epic> --description "..."
+br dep add T009b T009   # If sequential
+br dep add T009c T009   # If sequential
 
 # Consolidate ACs (example: T012 with 5 ACs → 3)
-bd update T012 --description "[consolidated ACs: 1. Combined AC, 2. Combined AC, 3. Combined AC]..."
+br update T012 --description "[consolidated ACs: 1. Combined AC, 2. Combined AC, 3. Combined AC]..."
 
 # Add missing dependency
-bd dep add <blocked> <blocker>
+br dep add <blocked> <blocker>
 
 # Create missing coverage task
-bd create "Task for uncovered AC" -p 1 --parent <epic> --description "..."
+br create "Task for uncovered AC" -p 1 --parent <epic> --description "..."
 ```
 
 ### Fix Execution (TODO.md Mode)
