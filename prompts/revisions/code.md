@@ -2,14 +2,36 @@ Please revise the **code** to address the following issues:
 
 ${ISSUES}
 
-## Fixing Strategy
+## Fixing Strategy (MANDATORY)
 
-Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files.
+**YOU MUST use the Task tool to spawn sub-agents to fix issues.** Delegate each fix to a sub-agent. This preserves your context for self-review and ensures focused, high-quality fixes.
 
-Example:
+**For each finding (or tightly related cluster in the same file/function):**
+1. Call the Task tool with the specific issue details
+2. Wait for the sub-agent to complete and review its changes
+3. Run sub-agents **sequentially** (one at a time) to avoid edit conflicts
+
+**Parent responsibilities:** After each sub-agent completes, verify its changes address the issue. If conflicts arise or changes are incomplete, spawn a follow-up Task. You orchestrate; sub-agents execute.
+
+**Task sub-agent format:**
 ```
-Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")
+Task(
+  description="Fix [P1] Missing null check in process_user",
+  prompt="Fix this code review issue:
+
+Issue: [P1] Missing null check in process_user
+File: src/handlers/user.py lines 45-50
+Problem: user.profile accessed without null check causes AttributeError when profile is None.
+
+Instructions:
+1. Read the file to understand the context
+2. Add appropriate null handling
+3. Verify the fix doesn't break existing behavior
+4. Report what you changed"
+)
 ```
+
+Now call the Task tool (not in a code block) using the structure above for each finding.
 
 ## Communicating with Reviewers
 

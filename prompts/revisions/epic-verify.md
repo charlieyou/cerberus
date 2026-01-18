@@ -2,14 +2,37 @@ Please revise the **code** to satisfy the following unmet acceptance criteria:
 
 ${ISSUES}
 
-## Fixing Strategy
+## Fixing Strategy (MANDATORY)
 
-Use the Task tool to spawn sub-agents to fix each issue. For each unmet criterion listed above, launch a separate sub-agent with a clear description of the specific criterion to implement. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files.
+**YOU MUST use the Task tool to spawn sub-agents to implement fixes.** Delegate each unmet criterion to a sub-agent. This preserves your context for self-review and ensures focused, high-quality implementations.
 
-Example:
+**For each unmet criterion (or tightly related cluster in the same area):**
+1. Call the Task tool with the specific criterion details
+2. Wait for the sub-agent to complete and review its changes
+3. Run sub-agents **sequentially** (one at a time) to avoid edit conflicts
+
+**Parent responsibilities:** After each sub-agent completes, verify its changes satisfy the criterion. If conflicts arise or changes are incomplete, spawn a follow-up Task. You orchestrate; sub-agents execute.
+
+**Task sub-agent format:**
 ```
-Task(description="Implement [criterion name]", prompt="Implement this acceptance criterion: [full details]. Edit the relevant files.")
+Task(
+  description="Implement AC: User receives error message on invalid input",
+  prompt="Implement this acceptance criterion:
+
+Criterion: User receives error message on invalid input
+Epic: User Registration Flow
+Current behavior: Form silently fails on invalid email format
+Expected: Display 'Please enter a valid email address' error message
+
+Instructions:
+1. Find the registration form validation code
+2. Add email validation with appropriate error message
+3. Verify the fix works for the expected scenarios
+4. Report what you changed"
+)
 ```
+
+Now call the Task tool (not in a code block) using the structure above for each unmet criterion.
 
 ## Communicating with Reviewers
 

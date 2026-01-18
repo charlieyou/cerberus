@@ -2,23 +2,47 @@ Please revise **${PLAN_PATH}** to address the following issues:
 
 ${ISSUES}
 
-## Fixing Strategy
+## Fixing Strategy (MANDATORY)
 
-Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files.
+**YOU MUST use the Task tool to spawn sub-agents to fix issues.** Delegate each fix to a sub-agent. This preserves your context for self-review and ensures focused, high-quality fixes.
 
-Example:
+**For each finding (or tightly related cluster in the same section):**
+1. Call the Task tool with the specific issue details
+2. Wait for the sub-agent to complete and review its changes
+3. Run sub-agents **sequentially** (one at a time) to avoid edit conflicts
+
+**Parent responsibilities:** After each sub-agent completes, verify its changes address the issue. If conflicts arise or changes are incomplete, spawn a follow-up Task. You orchestrate; sub-agents execute.
+
+**If the plan is unstructured:** Spawn a first Task to refactor it into the standard template (see below), then proceed finding-by-finding. On later iterations, avoid large structural refactors; keep changes localized.
+
+**Task sub-agent format:**
 ```
-Task(description="Fix [P1] issue in [section]", prompt="Revise the plan at ${PLAN_PATH} to fix this issue: [full details]. Make the smallest change necessary.")
+Task(
+  description="Fix [P1] Missing rollback strategy in deployment section",
+  prompt="Fix this plan review issue:
+
+Plan file: ${PLAN_PATH}
+Issue: [P1] Missing rollback strategy in deployment section
+Section: Technical Design > Deployment
+Problem: The plan describes the deployment steps but lacks rollback procedures if deployment fails.
+
+Instructions:
+1. Read the plan file to understand the current structure
+2. Add rollback strategy to the deployment section
+3. Make the smallest change necessary to address this issue
+4. Report what you changed"
+)
 ```
 
-**IMPORTANT:**
+Now call the Task tool (not in a code block) using the structure above for each finding.
+
+**Constraints for sub-agents:**
 - Edit ONLY the plan file at `${PLAN_PATH}`
 - Do NOT edit `latest.md` or any artifact/snapshot files
 - Make the **smallest, most focused changes** necessary to resolve these issues
 - Avoid introducing new architectures or abstractions not required by the findings
 
-While revising, ensure the plan follows the standard template structure:
-
+**Standard template structure:**
 - Context & Goals
 - Scope & Non-Goals
 - Assumptions & Constraints
@@ -28,9 +52,6 @@ While revising, ensure the plan follows the standard template structure:
 - Risks, Edge Cases & Breaking Changes
 - Testing & Validation (including mapping to risky areas)
 - Open Questions (if anything remains unclear)
-
-If the current plan is unstructured, first refactor it into this template **once**, then apply the requested fixes.
-On later iterations, avoid large structural refactors; keep changes localized to the sections needed to address the current issues.
 
 ## Communicating with Reviewers
 
