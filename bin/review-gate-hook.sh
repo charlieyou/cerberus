@@ -222,6 +222,28 @@ review_gate_check() {
         fi
     }
 
+    # --- Helper: Extract epic-path from state for epic-verify ---
+    extract_epic_path_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local path
+            path=$(jq -r '.mode.epic_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ -n "$path" && "$path" != "null" ]]; then
+                echo "$path"
+            fi
+        fi
+    }
+
+    # --- Helper: Extract diff args from state for epic-verify ---
+    extract_epic_diff_args_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            local args
+            args=$(jq -r '.mode.diff_args // empty' "$STATE_FILE" 2>/dev/null || echo "")
+            if [[ -n "$args" && "$args" != "null" ]]; then
+                echo "$args"
+            fi
+        fi
+    }
+
     # --- Helper: Extract agents list from artifact frontmatter ---
     extract_agents() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -416,6 +438,38 @@ review_gate_check() {
                 fi
             else
                 log "review-gate: spec missing spec_path, falling back to artifact"
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   REVIEW_TYPE="$detected_type" \
+                   "$0" spawn ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            fi
+        # For epic-verify, re-run verification with saved epic path and diff args
+        elif [[ "$detected_type" == "epic-verify" ]]; then
+            local epic_path diff_args
+            epic_path=$(extract_epic_path_from_state)
+            diff_args=$(extract_epic_diff_args_from_state)
+            log "review-gate: epic-verify re-spawn with epic_path='$epic_path' diff_args='$diff_args'"
+
+            if [[ -n "$epic_path" && -f "$epic_path" ]]; then
+                # Parse diff_args into array safely
+                local -a args_array
+                if [[ -n "$diff_args" ]]; then
+                    read -r -a args_array <<< "$diff_args"
+                fi
+
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   "$0" spawn-epic-verify ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$epic_path" ${args_array[@]+"${args_array[@]}"} >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            else
+                log "review-gate: epic-verify missing epic_path, falling back to artifact"
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
@@ -1008,8 +1062,20 @@ review_gate_check() {
                     verdict="UNCLEAR"
                 fi
 
-                # Only collect findings from non-PASS reviews
-                if [[ "$verdict" != "PASS" ]]; then
+                # Collect findings from non-PASS reviews, or P2/P3 findings from PASS reviews
+                local dominated_by_pass=false
+                if [[ "$verdict" == "PASS" ]]; then
+                    # For PASS verdicts, only include if there are P2/P3 findings
+                    local p2p3_findings
+                    p2p3_findings=$(echo "$result" | jq -r '.findings // [] | map(select(.priority >= 2)) | .[] | "[P\(.priority)] " + (.title // "No title") + ": " + (.body // "")' 2>/dev/null || echo "")
+                    if [[ -n "$p2p3_findings" ]]; then
+                        all_issues+=$'### '"$reviewer ($verdict - minor issues)"$'\n'
+                        while IFS= read -r finding; do
+                            all_issues+="- $finding"$'\n'
+                        done <<< "$p2p3_findings"
+                        all_issues+=$'\n'
+                    fi
+                else
                     local findings
                     findings=$(echo "$result" | jq -r '.findings // [] | .[] | (.title // "No title") + ": " + (.body // "")' 2>/dev/null || echo "")
 
@@ -1310,6 +1376,28 @@ Please revise **$spec_display** to address the following issues:
 $issues
 
 **After updating the spec, STOP immediately.** The stop hook will spawn the next review round.
+INSTRUCTIONS
+                fi
+                ;;
+            epic-verify)
+                local template result commit_instructions
+                commit_instructions=$(generate_commit_instructions "$mode_diff_args")
+                if template=$(resolve_revision_template "epic-verify"); then
+                    result=$(substitute_template "$template" '${ISSUES}' "$issues")
+                    result=$(substitute_template "$result" '${DIFF_ARGS}' "$mode_diff_args")
+                    result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
+                    echo "$result"
+                else
+                    # Fallback if template not found
+                    cat <<INSTRUCTIONS
+Please revise the **code** to satisfy the following unmet acceptance criteria:
+
+$issues
+
+**Commit Policy ($mode_diff_args):**
+$commit_instructions
+
+**After fixing the code, STOP immediately.** The stop hook will automatically re-run epic verification.
 INSTRUCTIONS
                 fi
                 ;;
