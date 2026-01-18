@@ -1,14 +1,14 @@
-Please revise the **code** to address the following issues:
+Please revise the **code** to satisfy the following unmet acceptance criteria:
 
 ${ISSUES}
 
 ## Fixing Strategy
 
-Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files.
+Use the Task tool to spawn sub-agents to fix each issue. For each unmet criterion listed above, launch a separate sub-agent with a clear description of the specific criterion to implement. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files.
 
 Example:
 ```
-Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")
+Task(description="Implement [criterion name]", prompt="Implement this acceptance criterion: [full details]. Edit the relevant files.")
 ```
 
 ## Communicating with Reviewers
@@ -19,7 +19,7 @@ Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details].
 - There are **non-obvious constraints** (scope, product decisions) justifying keeping something as-is
 - You have **questions for reviewers** ("we considered A vs B; please confirm B is acceptable")
 
-**Do NOT use author-context instead of fixing** clear, correct issues.
+**Do NOT use author-context instead of implementing** clear, correct issues.
 
 When you believe a previously flagged issue is now resolved, briefly note this in author-context. This gives reviewers a checklist to verify.
 
@@ -41,4 +41,4 @@ After all sub-agents complete their fixes:
 **Commit Policy (${DIFF_ARGS}):**
 ${COMMIT_INSTRUCTIONS}
 
-**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run the external review.
+**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.

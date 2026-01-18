@@ -1310,6 +1310,87 @@ INFO
         esac
     }
 
+    # --- Shared fallback sections (DRY) ---
+    _fallback_fixing_strategy() {
+        local strategy_line="$1"
+        local example_line="$2"
+        cat <<SECTION
+## Fixing Strategy
+
+$strategy_line
+
+Example:
+\`\`\`
+$example_line
+\`\`\`
+SECTION
+    }
+
+    _fallback_plan_important() {
+        local plan_display="$1"
+        cat <<SECTION
+
+**IMPORTANT:**
+- Edit ONLY the plan file at \`$plan_display\`
+- Do NOT edit \`latest.md\` or any artifact/snapshot files
+- Make the **smallest, most focused changes** necessary to resolve these issues
+- Avoid introducing new architectures or abstractions not required by the findings
+
+While revising, ensure the plan follows the standard template structure:
+
+- Context & Goals
+- Scope & Non-Goals
+- Assumptions & Constraints
+- Prerequisites
+- High-Level Approach
+- Technical Design (architecture, data model, interfaces, file impact summary)
+- Risks, Edge Cases & Breaking Changes
+- Testing & Validation (including mapping to risky areas)
+- Open Questions (if anything remains unclear)
+
+If the current plan is unstructured, first refactor it into this template **once**, then apply the requested fixes.
+On later iterations, avoid large structural refactors; keep changes localized to the sections needed to address the current issues.
+SECTION
+    }
+
+    _fallback_author_context() {
+        local action="${1:-fixing}"
+        cat <<'SECTION'
+## Communicating with Reviewers
+
+**When to use author-context:**
+- Reviewers flagged a **false positive** (decision is intentional or already correct)
+- A finding was **addressed this iteration** and you want to prevent re-flagging
+- There are **non-obvious constraints** (scope, product decisions) justifying keeping something as-is
+- You have **questions for reviewers** ("we considered A vs B; please confirm B is acceptable")
+SECTION
+        echo ""
+        echo "**Do NOT use author-context instead of $action** clear, correct issues."
+        cat <<'SECTION'
+
+When you believe a previously flagged issue is now resolved, briefly note this in author-context. This gives reviewers a checklist to verify.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
+```
+
+Keep it to 1-2 paragraphs max. Update each iteration to reflect current state; do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.
+SECTION
+    }
+
+    _fallback_self_review() {
+        cat <<'SECTION'
+## Self-Review Before Stopping
+
+After all sub-agents complete their fixes:
+1. Review the changes made by each sub-agent
+2. Verify the fixes address the original issues
+3. Check for any obvious regressions or new issues introduced
+4. Set author-context if there are false positives or clarifications for reviewers
+5. Only then finalize and STOP
+SECTION
+    }
+
     # --- Format revision instructions based on trigger type ---
     format_revision_instructions() {
         local trigger_source="$1"
@@ -1329,16 +1410,26 @@ INFO
                     echo "$result"
                 else
                     # Fallback if template not found
-                    cat <<INSTRUCTIONS
+                    cat <<HEADER
 Please revise the **code** to address the following issues:
 
 $issues
 
+HEADER
+                    _fallback_fixing_strategy \
+                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
+                        'Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")'
+                    echo ""
+                    _fallback_author_context
+                    echo ""
+                    _fallback_self_review
+                    cat <<FOOTER
+
 **Commit Policy ($mode_diff_args):**
 $commit_instructions
 
-**After fixing the code, STOP immediately.** The stop hook will automatically re-run the review.
-INSTRUCTIONS
+**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run the external review.
+FOOTER
                 fi
                 ;;
             plan-review-iterative)
@@ -1346,18 +1437,28 @@ INSTRUCTIONS
                 [[ -z "$plan_display" ]] && plan_display="the plan"
                 local template result
                 if template=$(resolve_revision_template "plan"); then
-                    # Replace specific placeholders first to prevent injection
                     result=$(substitute_template "$template" '${PLAN_PATH}' "$plan_display")
                     result=$(substitute_template "$result" '${ISSUES}' "$issues")
                     echo "$result"
                 else
-                    cat <<INSTRUCTIONS
+                    cat <<HEADER
 Please revise **$plan_display** to address the following issues:
 
 $issues
 
-**After updating the plan, STOP immediately.** The stop hook will spawn the next review round.
-INSTRUCTIONS
+HEADER
+                    _fallback_fixing_strategy \
+                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
+                        "Task(description=\"Fix [P1] issue in [section]\", prompt=\"Revise the plan at $plan_display to fix this issue: [full details]. Make the smallest change necessary.\")"
+                    _fallback_plan_important "$plan_display"
+                    echo ""
+                    _fallback_author_context
+                    echo ""
+                    _fallback_self_review
+                    cat <<FOOTER
+
+**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
+FOOTER
                 fi
                 ;;
             spec)
@@ -1365,18 +1466,27 @@ INSTRUCTIONS
                 [[ -z "$spec_display" ]] && spec_display="the spec"
                 local template result
                 if template=$(resolve_revision_template "spec"); then
-                    # Replace specific placeholders first to prevent injection
                     result=$(substitute_template "$template" '${SPEC_PATH}' "$spec_display")
                     result=$(substitute_template "$result" '${ISSUES}' "$issues")
                     echo "$result"
                 else
-                    cat <<INSTRUCTIONS
+                    cat <<HEADER
 Please revise **$spec_display** to address the following issues:
 
 $issues
 
-**After updating the spec, STOP immediately.** The stop hook will spawn the next review round.
-INSTRUCTIONS
+HEADER
+                    _fallback_fixing_strategy \
+                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
+                        "Task(description=\"Fix [P1] issue in [section]\", prompt=\"Revise the spec at $spec_display to fix this issue: [full details]. Make the smallest change necessary.\")"
+                    echo ""
+                    _fallback_author_context
+                    echo ""
+                    _fallback_self_review
+                    cat <<FOOTER
+
+**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
+FOOTER
                 fi
                 ;;
             epic-verify)
@@ -1388,27 +1498,46 @@ INSTRUCTIONS
                     result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
                     echo "$result"
                 else
-                    # Fallback if template not found
-                    cat <<INSTRUCTIONS
+                    cat <<HEADER
 Please revise the **code** to satisfy the following unmet acceptance criteria:
 
 $issues
 
+HEADER
+                    _fallback_fixing_strategy \
+                        "Use the Task tool to spawn sub-agents to fix each issue. For each unmet criterion listed above, launch a separate sub-agent with a clear description of the specific criterion to implement. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
+                        'Task(description="Implement [criterion name]", prompt="Implement this acceptance criterion: [full details]. Edit the relevant files.")'
+                    echo ""
+                    _fallback_author_context "implementing"
+                    echo ""
+                    _fallback_self_review
+                    cat <<FOOTER
+
 **Commit Policy ($mode_diff_args):**
 $commit_instructions
 
-**After fixing the code, STOP immediately.** The stop hook will automatically re-run epic verification.
-INSTRUCTIONS
+**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.
+FOOTER
                 fi
                 ;;
             *)
-                cat <<INSTRUCTIONS
+                cat <<HEADER
 Please revise the artifact to address the following issues:
 
 $issues
 
-**After updating the artifact, STOP immediately.** The stop hook will spawn the next review round.
-INSTRUCTIONS
+HEADER
+                _fallback_fixing_strategy \
+                    "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
+                    'Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")'
+                echo ""
+                _fallback_author_context
+                echo ""
+                _fallback_self_review
+                cat <<FOOTER
+
+**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
+FOOTER
                 ;;
         esac
     }
