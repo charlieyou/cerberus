@@ -863,7 +863,7 @@ USAGE
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
-        echo "<!-- review-type: code-review-iterative -->"
+        echo "<!-- review-type: code -->"
         echo "<!-- diff-args: $diff_args_str -->"
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
@@ -914,7 +914,7 @@ USAGE
     if [[ -n "$mode" ]]; then
         mode_arg=(--mode "$mode")
     fi
-    # NOTE: Do not pass --context-file to spawn for code-review-iterative.
+    # NOTE: Do not pass --context-file to spawn for code.
     # Task context is already injected into the prompt via ${CONTEXT} template variable.
     # Passing it to spawn would duplicate it and mislabel it as Author Context.
     local -a consensus_arg=()
@@ -923,7 +923,7 @@ USAGE
     fi
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
-    REVIEW_TYPE="code-review-iterative" \
+    REVIEW_TYPE="code" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
     "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 }
@@ -1126,7 +1126,7 @@ USAGE
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
-        echo "<!-- review-type: plan-review-iterative -->"
+        echo "<!-- review-type: plan -->"
         echo "<!-- plan-path: $plan_path -->"
         echo "<!-- plan-sha: $plan_sha -->"
         if [[ -n "$max_rounds" ]]; then
@@ -1266,9 +1266,9 @@ JSON only, no markdown code fences:
     fi
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
-    REVIEW_TYPE="plan-review-iterative" \
+    REVIEW_TYPE="plan" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="plan-review-iterative" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "$0" spawn --type="plan" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -2360,8 +2360,8 @@ USAGE
 
         # Map iterative review types to their base template names
         case "$type" in
-            code-review-iterative) type="code" ;;
-            plan-review-iterative) type="plan" ;;
+            code) ;;
+            plan) ;;
         esac
 
         local project_root
@@ -2689,11 +2689,11 @@ SCHEMA
     local mode_plan_path=""
 
     case "$trigger_source" in
-        code-review-iterative)
+        code)
             mode_type="code-diff"
             mode_diff_args="${REVIEW_GATE_DIFF_ARGS:-}"
             ;;
-        plan-review-iterative)
+        plan)
             mode_type="plan"
             mode_plan_path="$artifact_path"
             ;;

@@ -644,7 +644,7 @@ test_max_rounds_zero_auto_resolves() {
     mkdir -p "$review_dir/reviews"
 
     cat > "$artifact_path" <<'EOF'
-<!-- review-type: code-review-iterative -->
+<!-- review-type: code -->
 <!-- diff-args: --commit deadbeef -->
 <!-- max-rounds: 0 -->
 EOF

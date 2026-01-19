@@ -357,11 +357,11 @@ review_gate_check() {
             log "review-gate: using consensus '$consensus_mode'"
         fi
 
-        # For code-review-iterative, re-fetch the diff from current args
-        if [[ "$detected_type" == "code-review-iterative" ]]; then
+        # For code, re-fetch the diff from current args
+        if [[ "$detected_type" == "code" ]]; then
             local diff_args
             diff_args=$(extract_diff_args)
-            log "review-gate: code-review-iterative re-spawn with diff_args='$diff_args'"
+            log "review-gate: code re-spawn with diff_args='$diff_args'"
 
             # Parse diff_args into array safely (no eval to avoid command injection)
             # Note: This splits on whitespace, so args with spaces won't round-trip.
@@ -376,8 +376,8 @@ review_gate_check() {
                "$0" spawn-code-review ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "${args_array[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
-        # For plan-review-iterative, re-read the plan file to capture edits
-        elif [[ "$detected_type" == "plan-review-iterative" ]]; then
+        # For plan, re-read the plan file to capture edits
+        elif [[ "$detected_type" == "plan" ]]; then
             local plan_path
             plan_path=$(extract_plan_path_from_state)
             # Ignore state plan_path if it points to the artifact (legacy gates)
@@ -385,7 +385,7 @@ review_gate_check() {
                 plan_path=""
             fi
             [[ -z "$plan_path" ]] && plan_path=$(extract_plan_path)
-            log "review-gate: plan-review-iterative re-spawn with plan_path='$plan_path'"
+            log "review-gate: plan re-spawn with plan_path='$plan_path'"
 
             if [[ -n "$plan_path" && -f "$plan_path" ]]; then
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
@@ -396,7 +396,7 @@ review_gate_check() {
                     spawn_success=true
                 fi
             else
-                log "review-gate: plan-review-iterative missing plan_path, falling back to artifact"
+                log "review-gate: plan missing plan_path, falling back to artifact"
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
@@ -634,7 +634,7 @@ review_gate_check() {
         local file_changed=false
 
         # Check if underlying file changed (for informational logging only)
-        if [[ "$detected_type" == "plan-review-iterative" ]]; then
+        if [[ "$detected_type" == "plan" ]]; then
             local plan_path stored_plan_sha current_plan_sha
             plan_path=$(jq -r '.mode.plan_path // empty' "$STATE_FILE" 2>/dev/null || echo "")
 
@@ -1292,85 +1292,35 @@ INFO
         esac
     }
 
-    # --- Shared fallback sections (DRY) ---
-    _fallback_fixing_strategy() {
-        local strategy_line="$1"
-        local example_line="$2"
-        cat <<SECTION
-## Fixing Strategy
-
-$strategy_line
-
-Example:
-\`\`\`
-$example_line
-\`\`\`
-SECTION
-    }
-
-    _fallback_plan_important() {
-        local plan_display="$1"
-        cat <<SECTION
-
-**IMPORTANT:**
-- Edit ONLY the plan file at \`$plan_display\`
-- Do NOT edit \`latest.md\` or any artifact/snapshot files
-- Make the **smallest, most focused changes** necessary to resolve these issues
-- Avoid introducing new architectures or abstractions not required by the findings
-
-While revising, ensure the plan follows the standard template structure:
-
-- Context & Goals
-- Scope & Non-Goals
-- Assumptions & Constraints
-- Prerequisites
-- High-Level Approach
-- Technical Design (architecture, data model, interfaces, file impact summary)
-- Risks, Edge Cases & Breaking Changes
-- Testing & Validation (including mapping to risky areas)
-- Open Questions (if anything remains unclear)
-
-If the current plan is unstructured, first refactor it into this template **once**, then apply the requested fixes.
-On later iterations, avoid large structural refactors; keep changes localized to the sections needed to address the current issues.
-SECTION
-    }
-
-    _fallback_author_context() {
-        local action="${1:-fixing}"
-        cat <<'SECTION'
-## Communicating with Reviewers
-
-**When to use author-context:**
-- Reviewers flagged a **false positive** (decision is intentional or already correct)
-- A finding was **addressed this iteration** and you want to prevent re-flagging
-- There are **non-obvious constraints** (scope, product decisions) justifying keeping something as-is
-- You have **questions for reviewers** ("we considered A vs B; please confirm B is acceptable")
-SECTION
-        echo ""
-        echo "**Do NOT use author-context instead of $action** clear, correct issues."
-        cat <<'SECTION'
-
-When you believe a previously flagged issue is now resolved, briefly note this in author-context. This gives reviewers a checklist to verify.
-
-```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
-```
-
-Keep it to 1-2 paragraphs max. Update each iteration to reflect current state; do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.
-SECTION
-    }
-
-    _fallback_self_review() {
-        cat <<'SECTION'
-## Self-Review Before Stopping
-
-After all sub-agents complete their fixes:
-1. Review the changes made by each sub-agent
-2. Verify the fixes address the original issues
-3. Check for any obvious regressions or new issues introduced
-4. Set author-context if there are false positives or clarifications for reviewers
-5. Only then finalize and STOP
-SECTION
+    # --- Map trigger source to revision template type ---
+    # Some trigger sources (healthcheck, architecture-review, etc.) don't have
+    # dedicated revision templates, so we map them to the closest match.
+    map_trigger_to_template() {
+        local trigger="$1"
+        local mode_type="$2"
+        case "$trigger" in
+            code|plan|spec|epic-verify)
+                echo "$trigger"
+                ;;
+            healthcheck|architecture-review|create-tasks)
+                # Document-based reviews use plan template
+                echo "plan"
+                ;;
+            ""|null|artifact|auto|manual)
+                # Infer from mode_type
+                case "$mode_type" in
+                    code-diff) echo "code" ;;
+                    plan) echo "plan" ;;
+                    spec) echo "spec" ;;
+                    epic-verify) echo "epic-verify" ;;
+                    *) echo "plan" ;;  # Default to plan for document reviews
+                esac
+                ;;
+            *)
+                log "review-gate: WARNING: unknown trigger_source '$trigger' (mode=$mode_type); defaulting to 'plan'"
+                echo "plan"
+                ;;
+        esac
     }
 
     # --- Format revision instructions based on trigger type ---
@@ -1381,139 +1331,49 @@ SECTION
         local mode_spec_path="${4:-}"
         local mode_diff_args="${5:-}"
 
-        case "$trigger_source" in
-            code-review-iterative)
+        # Get mode_type from state for mapping
+        local mode_type=""
+        if [[ -f "$STATE_FILE" ]]; then
+            mode_type=$(jq -r '.mode.type // empty' "$STATE_FILE" 2>/dev/null || echo "")
+        fi
+
+        local template_type
+        template_type=$(map_trigger_to_template "$trigger_source" "$mode_type")
+        log "review-gate: mapping trigger '$trigger_source' (mode=$mode_type) to template '$template_type'"
+
+        case "$template_type" in
+            code)
                 local template result commit_instructions
                 commit_instructions=$(generate_commit_instructions "$mode_diff_args")
-                if template=$(resolve_revision_template "code"); then
-                    result=$(substitute_template "$template" '${ISSUES}' "$issues")
-                    result=$(substitute_template "$result" '${DIFF_ARGS}' "$mode_diff_args")
-                    result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
-                    echo "$result"
-                else
-                    # Fallback if template not found
-                    cat <<HEADER
-Please revise the **code** to address the following issues:
-
-$issues
-
-HEADER
-                    _fallback_fixing_strategy \
-                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
-                        'Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")'
-                    echo ""
-                    _fallback_author_context
-                    echo ""
-                    _fallback_self_review
-                    cat <<FOOTER
-
-**Commit Policy ($mode_diff_args):**
-$commit_instructions
-
-**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run the external review.
-FOOTER
-                fi
+                template=$(resolve_revision_template "code") || { log "review-gate: FATAL: code revision template not found"; return 1; }
+                result=$(substitute_template "$template" '${ISSUES}' "$issues")
+                result=$(substitute_template "$result" '${DIFF_ARGS}' "$mode_diff_args")
+                result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
+                echo "$result"
                 ;;
-            plan-review-iterative)
+            plan)
                 local plan_display="$mode_plan_path"
                 [[ -z "$plan_display" ]] && plan_display="the plan"
                 local template result
-                if template=$(resolve_revision_template "plan"); then
-                    result=$(substitute_template "$template" '${PLAN_PATH}' "$plan_display")
-                    result=$(substitute_template "$result" '${ISSUES}' "$issues")
-                    echo "$result"
-                else
-                    cat <<HEADER
-Please revise **$plan_display** to address the following issues:
-
-$issues
-
-HEADER
-                    _fallback_fixing_strategy \
-                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
-                        "Task(description=\"Fix [P1] issue in [section]\", prompt=\"Revise the plan at $plan_display to fix this issue: [full details]. Make the smallest change necessary.\")"
-                    _fallback_plan_important "$plan_display"
-                    echo ""
-                    _fallback_author_context
-                    echo ""
-                    _fallback_self_review
-                    cat <<FOOTER
-
-**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
-FOOTER
-                fi
+                template=$(resolve_revision_template "plan") || { log "review-gate: FATAL: plan revision template not found"; return 1; }
+                result=$(substitute_template "$template" '${PLAN_PATH}' "$plan_display")
+                result=$(substitute_template "$result" '${ISSUES}' "$issues")
+                echo "$result"
                 ;;
             spec)
                 local spec_display="$mode_spec_path"
                 [[ -z "$spec_display" ]] && spec_display="the spec"
                 local template result
-                if template=$(resolve_revision_template "spec"); then
-                    result=$(substitute_template "$template" '${SPEC_PATH}' "$spec_display")
-                    result=$(substitute_template "$result" '${ISSUES}' "$issues")
-                    echo "$result"
-                else
-                    cat <<HEADER
-Please revise **$spec_display** to address the following issues:
-
-$issues
-
-HEADER
-                    _fallback_fixing_strategy \
-                        "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
-                        "Task(description=\"Fix [P1] issue in [section]\", prompt=\"Revise the spec at $spec_display to fix this issue: [full details]. Make the smallest change necessary.\")"
-                    echo ""
-                    _fallback_author_context
-                    echo ""
-                    _fallback_self_review
-                    cat <<FOOTER
-
-**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
-FOOTER
-                fi
+                template=$(resolve_revision_template "spec") || { log "review-gate: FATAL: spec revision template not found"; return 1; }
+                result=$(substitute_template "$template" '${SPEC_PATH}' "$spec_display")
+                result=$(substitute_template "$result" '${ISSUES}' "$issues")
+                echo "$result"
                 ;;
             epic-verify)
                 local template result
-                if template=$(resolve_revision_template "epic-verify"); then
-                    result=$(substitute_template "$template" '${ISSUES}' "$issues")
-                    echo "$result"
-                else
-                    cat <<HEADER
-Please revise the **code** to satisfy the following unmet acceptance criteria:
-
-$issues
-
-HEADER
-                    _fallback_fixing_strategy \
-                        "Use the Task tool to spawn sub-agents to fix each issue. For each unmet criterion listed above, launch a separate sub-agent with a clear description of the specific criterion to implement. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
-                        'Task(description="Implement [criterion name]", prompt="Implement this acceptance criterion: [full details]. Edit the relevant files.")'
-                    echo ""
-                    _fallback_author_context "implementing"
-                    echo ""
-                    _fallback_self_review
-                    cat <<FOOTER
-
-**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.
-FOOTER
-                fi
-                ;;
-            *)
-                cat <<HEADER
-Please revise the artifact to address the following issues:
-
-$issues
-
-HEADER
-                _fallback_fixing_strategy \
-                    "Use the Task tool to spawn sub-agents to fix each issue. For each finding listed above, launch a separate sub-agent with a clear description of the specific issue to fix. **Run sub-agents sequentially** (one at a time) to avoid conflicts when multiple issues affect the same files." \
-                    'Task(description="Fix [P1] issue title", prompt="Fix this issue: [full details]. Edit the relevant files.")'
-                echo ""
-                _fallback_author_context
-                echo ""
-                _fallback_self_review
-                cat <<FOOTER
-
-**After updating and self-reviewing, STOP immediately.** The stop hook will spawn the next review round.
-FOOTER
+                template=$(resolve_revision_template "epic-verify") || { log "review-gate: FATAL: epic-verify revision template not found"; return 1; }
+                result=$(substitute_template "$template" '${ISSUES}' "$issues")
+                echo "$result"
                 ;;
         esac
     }

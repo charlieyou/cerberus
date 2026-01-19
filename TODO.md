@@ -41,8 +41,8 @@ Task review should use multi-models
 
 * dont pass a diff directly to the code review, agents should explore themselves?
 
-## BD Groom Command
+## Task gen + review
 
-* Batch small issues
+* add the spec/plan link into every issue
 
 ## Test Posture Review
