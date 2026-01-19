@@ -192,11 +192,12 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 1. **Plan Coverage**: Every plan objective, AC, and MUST/SHALL obligation has at least one owning task, AND every task maps to at least one plan item (or is justified as infra/support)
 2. **Dependency Correctness**: Dependency graph is acyclic and tasks sharing files have explicit dependencies
 3. **Agent Completability**: Every task passes the completability checklist (clear goal, concrete verification, objective ACs)
-4. **Task Format Compliance**: Every task includes required sections (Goal, Context, Scope, Changes, AC, Verification)
-5. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
-6. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
-7. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
-8. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
+4. **Task Format Compliance**: Every task includes required sections (Source Documents, Goal, Context, Scope, Changes, AC, Verification)
+5. **Source Document Links**: Every task has plan links (+ spec links if spec exists) with line numbers pointing to relevant sections
+6. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
+7. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
+8. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
+9. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
 
 **Verdict is FAIL if ANY blocking gate has issues. You MUST fix blocking issues and re-run validation. Do NOT stop until verdict is PASS.**
 
@@ -204,7 +205,7 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 
 ## Review Goals
 
-This review ensures eight critical properties of the task graph:
+This review ensures nine critical properties of the task graph:
 
 ### 1. Plan Coverage (No Stragglers) — MOST CRITICAL
 
@@ -277,6 +278,7 @@ Each task must be completable by an agent with no external clarification:
 
 Each task must include required sections:
 
+- [ ] **Source Documents**: Links to plan and spec with line numbers (e.g., `plan.md#L45-L67`). Multiple links when task spans multiple sections. "N/A" for spec if none exists.
 - [ ] **Goal**: What this task accomplishes (1-2 sentences)
 - [ ] **Context**: Why this matters, relevant background
 - [ ] **Scope**: In/Out boundaries
@@ -287,6 +289,26 @@ Each task must include required sections:
 Conditional sections (required when applicable):
 - [ ] **Wiring Map**: Required when introducing new data/config/templates
 - [ ] **Notes for Agent**: Required when there are edge cases or gotchas
+
+**Source Document Links Validation**:
+- Every task MUST have `**Source Documents**:` section
+- Each link MUST include line numbers in format `#L<start>` or `#L<start>-L<end>`
+- Each link MUST include a label after "—" that matches a heading/title in the referenced range
+- Plan: At least one plan link required for every task
+- Spec: At least one spec link required IF spec exists (see Spec Exists Rule below); otherwise "Spec: N/A"
+- Tasks spanning multiple sections MUST list each link separately (no cramming unrelated ranges)
+
+**Spec Exists Rule**: A spec exists if ANY of these are true:
+- The plan explicitly references a spec path
+- A `*-spec.md` file exists in the same directory as the plan
+- A spec path was provided as input
+
+**Line Number Validity Check**:
+- Verify referenced files exist
+- Verify line ranges are within file bounds
+- Verify labels match text actually present in the referenced range (heading/title/AC sentence); do not accept invented labels
+- Line numbers MUST be derived by reading the actual file contents; never guess or approximate
+- If the referenced range doesn't contain the claimed label/section, it's BLOCKING
 
 ### 5. Sizing Compliance
 
@@ -777,6 +799,7 @@ None
 | **Done criteria** | BLOCKING | Every task has concrete verification commands | Add verification |
 | **Objective ACs** | BLOCKING | All ACs are measurable and testable | Rewrite subjective ACs |
 | **Task format** | BLOCKING | All required sections present | Add missing sections |
+| **Source document links** | BLOCKING | Every task has `**Source Documents**:` with valid plan link(s), spec link(s) if spec exists per Spec Exists Rule, line numbers in `#L<n>` or `#L<n>-L<m>` format, and labels matching text actually present in referenced range | Add/fix links per Spec Exists Rule and Line Number Validity Check |
 | **Sizing: standard** | BLOCKING | Tasks ≤ 12 files, ≤ 3 subsystems, ≤ 3 ACs | Split task |
 | **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able | Split or reclassify |
 | **Reachability** | BLOCKING | Every task reachable from `br ready` | Fix blocking dependencies |
@@ -865,6 +888,7 @@ When you encounter blocking issues, apply fixes to your internal state immediate
 | **Missing verification** | Update task in `tasks` with concrete verification commands |
 | **Subjective AC** | Rewrite AC in task with measurable, testable criteria |
 | **Missing required section** | Update task in `tasks` with the missing section |
+| **Missing/invalid source document links** | Add `**Source Documents**:` section; each link must have `#L<n>` line numbers and a label matching content at those lines; include spec links if spec exists per Spec Exists Rule, else "Spec: N/A" |
 
 ### Fix Semantics
 

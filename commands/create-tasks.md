@@ -323,7 +323,28 @@ These describe the structure of the *generated tasks*, not the workflow phases a
 
 ### Phase 4: Generate Task Specs
 
-For each task, create a rich specification:
+For each task, create a rich specification.
+
+**Source Document Links (Hard Gate)**:
+
+Every task MUST include a `**Source Documents**:` section. This is validated in Phase 5.
+
+**Requirements**:
+1. **Plan links**: At least one link to the plan with line numbers (e.g., `plan.md#L45-L67`). Include multiple links when a task spans Technical Design, File Impact Summary, Testing Strategy, etc.
+2. **Spec links**: At least one link to the spec with line numbers if a spec exists. Use "Spec: N/A" only when **no spec exists per the Spec Exists Rule below**.
+3. **Section labels**: Each link MUST include a label matching a heading/title found near that line range (e.g., "— Section: Authentication Flow").
+
+**Line Number Accuracy (Anti-Guessing Rule)**:
+- Line numbers MUST be derived by reading the actual file contents; never guess or approximate.
+- If you cannot locate the relevant section, ask a clarifying question or abort task generation.
+- The label after "—" must match text actually present in the referenced line range.
+
+**Spec Exists Rule**: A spec exists if ANY of these are true:
+- The plan explicitly references a spec path
+- A `*-spec.md` file exists in the same directory as the plan
+- A spec path was provided as input
+
+**Why this matters**: These links enable agents executing tasks to quickly reference original requirements without searching. Accurate line numbers prevent "fake compliance" where links exist but don't point to relevant content.
 
 ```markdown
 ### [T001] Title
@@ -335,6 +356,13 @@ For each task, create a rich specification:
 **Primary Files**: path1.ts, path2.ts
 **Subsystems**: auth, api (list all subsystems touched)
 **Dependencies**: T000 (if any)
+
+**Source Documents**:
+- Plan: [plan-name.md#L45-L67](path/to/plan-name.md#L45-L67) — Section: Technical Design
+- Plan: [plan-name.md#L120-L135](path/to/plan-name.md#L120-L135) — Section: File Impact Summary
+- Spec: [spec-name.md#L12-L34](path/to/spec-name.md#L12-L34) — US1: User can login
+- Spec: [spec-name.md#L50-L55](path/to/spec-name.md#L50-L55) — AC3: Session timeout
+<!-- Use "Spec: N/A" if no spec exists per the Spec Exists Rule above -->
 
 **Goal**:
 What this task accomplishes (1-2 sentences)
@@ -491,6 +519,7 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **Template lifecycle** | Hard | New templates are loaded, passed through, and used | Add missing lifecycle steps |
 | **Missing referenced artifacts** | Hard | Plan-referenced docs/specs exist (or declared `New` with prereq task) | Abort or add prereq task |
 | **Integration path test** | Hard | At least one task marked `[integration-path-test]` per feature | Add integration test task |
+| **Source document links** | Hard | Every task has `**Source Documents**:` with valid plan link(s), spec link(s) if spec exists per Spec Exists Rule, line numbers in `#L<n>` or `#L<n>-L<m>` format, and labels matching text actually present in referenced range | Read files to get accurate line numbers; add labels matching section headings |
 | **Sizing: target** | Advisory | Aim for 3-8 files, 1-2 subsystems | Consider splitting if outside range |
 
 **Hard gates** block output. **Advisory** checks are recommendations.
