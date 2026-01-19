@@ -99,7 +99,7 @@ Treat subagents as separate focused reasoning passes within your single response
 │ - Every objective owned │     │ MUST verify:            │
 │ - Every AC owned        │     │ - No unsafe file overlaps│
 │ - Every MUST/SHALL owned│     │ - No cycles             │
-│ - No orphan tasks       │     │ - Chains ≤ 4            │
+│ - No orphan tasks       │     │ - All tasks reachable   │
 │ - Rollup simulation     │     │ - All tasks reachable   │
 └─────────────────────────┘     └─────────────────────────┘
                               │
@@ -142,7 +142,7 @@ Treat subagents as separate focused reasoning passes within your single response
 
 4. **Spawn Global Graph Subagent** that:
    - Receives `file_task_map`, `dependency_graph`, parent/epic relationships
-   - Checks file overlap deps, chain lengths, cycles, reachability
+   - Checks file overlap deps, cycles, reachability
    - Returns explicit PASS/FAIL for graph integrity
 
 5. **Run Final No Stragglers Gate** with full visibility before producing verdict:
@@ -190,7 +190,7 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 **This review PASSES when ALL of the following are true:**
 
 1. **Plan Coverage**: Every plan objective, AC, and MUST/SHALL obligation has at least one owning task, AND every task maps to at least one plan item (or is justified as infra/support)
-2. **Dependency Correctness**: Dependency graph is acyclic, within chain length limits (≤4), and tasks sharing files have explicit dependencies
+2. **Dependency Correctness**: Dependency graph is acyclic and tasks sharing files have explicit dependencies
 3. **Agent Completability**: Every task passes the completability checklist (clear goal, concrete verification, objective ACs)
 4. **Task Format Compliance**: Every task includes required sections (Goal, Context, Scope, Changes, AC, Verification)
 5. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
@@ -458,15 +458,7 @@ If these artifacts exist, load them and verify consistency with recomputed state
    - Skeleton tasks before implementation
    - Integration test tasks before "turn tests green" tasks
 
-4. **Check chain length**:
-   - Trace longest dependency path
-   - Flag if > 4 tasks deep → **WARNING**
-   ```
-   Issue: Chain T001 → T002 → T003 → T004 → T005 is 5 tasks (max 4)
-   Fix: Restructure T003-T005 into parallel tasks
-   ```
-
-5. **Detect cycles**:
+4. **Detect cycles**:
    - Run cycle detection on dependency graph
    - Circular dependency → **BLOCKING**
 
@@ -581,7 +573,7 @@ For tasks with new config/data/templates:
 ### 2. Dependency Correctness
 - File overlap violations: N
 - Missing logical deps: N
-- Chain length violations: N (max: 4)
+- Long chains (advisory): [list or "none"]
 - Circular dependencies: [list or "none"]
 - **Status**: PASS / FAIL
 
@@ -686,7 +678,7 @@ br dep add T003 T001  # T001 must complete before T003
 ### 2. Dependency Correctness
 - File overlap violations: 0
 - Missing logical deps: 0
-- Chain length violations: 0 (max chain: 3)
+- Long chains (advisory): none
 - Circular dependencies: none
 - **Status**: PASS
 
@@ -722,7 +714,7 @@ This example shows the **final output** after internal iteration. Intermediate i
 ### 2. Dependency Correctness
 - File overlap violations: 0
 - Missing logical deps: 0
-- Chain length violations: 0 (max chain: 4)
+- Long chains: none
 - Circular dependencies: none
 - **Status**: PASS
 
@@ -734,7 +726,7 @@ This example shows the **final output** after internal iteration. Intermediate i
 None
 
 ### Warnings
-1. Chain T001→T002→T003→T004 could parallelize T003/T004 if split by subsystem
+1. Consider parallelizing T003/T004 if split by subsystem
 
 ### Iteration Notes
 - **Iterations used**: 3
@@ -758,8 +750,10 @@ None
 ## Verdict: FAIL (MAX_ITERATIONS_REACHED)
 
 ### Remaining Blocking Issues
-1. **Chain length**: T001→T002→T003→T004→T005→T006 (6 tasks) — requires plan restructuring
-2. **Circular dependency**: T007 ↔ T008 — cannot resolve without changing task boundaries
+1. **Circular dependency**: T007 ↔ T008 — cannot resolve without changing task boundaries
+
+### Warnings
+1. **Long chain**: T001→T002→T003→T004→T005→T006 (6 tasks) — consider restructuring for parallelism
 
 ### Iteration Notes
 - **Iterations used**: 5 (max)
@@ -863,7 +857,7 @@ When you encounter blocking issues, apply fixes to your internal state immediate
 | **Sizing: files > 12** | Split task into 2+ tasks by subsystem; update `tasks` list and `dependency_graph` |
 | **Sizing: subsystems > 3** | Split task by subsystem boundary; each new task ≤ 2 subsystems |
 | **Sizing: ACs > 3** | Consolidate ACs into 3 by grouping related behaviors; or split task |
-| **Chain length > 4** | Restructure to allow parallelism; split middle tasks to reduce chain |
+| **Long chain (advisory)** | Consider restructuring to allow parallelism; split middle tasks if beneficial |
 | **File overlap without dep** | Add dependency to `dependency_graph` |
 | **Circular dependency** | Remove one edge; restructure task boundaries if needed |
 | **Missing plan coverage** | Add new task to `tasks` list for uncovered objective/AC/obligation |
@@ -977,7 +971,7 @@ Some blocking issues may be inherent to the plan structure and unfixable without
 Example:
 ```markdown
 ### Accepted Deviations
-1. **Chain length 5 (vs max 4)**: The auth flow has inherent sequential dependencies
+1. **Long sequential chain**: The auth flow has inherent sequential dependencies
    (token → session → permission → access → audit). Parallelization would require
    plan changes. Accepted as structural constraint.
 ```

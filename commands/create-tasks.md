@@ -193,8 +193,7 @@ Generate tasks following these rules:
 
 **Dependency Rules**:
 - Required order: Skeleton+Integration → Implementation.
-- Chain-length constraint: keep dependency chains ≤ 4 tasks by splitting implementation into parallel tasks that touch different files.
-- Clarification/gate tasks (e.g., "Clarify file locations") count as Foundation phase, not toward feature chain length.
+- Clarification/gate tasks (e.g., "Clarify file locations") count as Foundation phase.
 
 **Example** (new module):
 - T001 [integration-path-test] Skeleton + Integration: add `src/foo/service.ts` + DI registration (stubs) + failing end-to-end test via `create_app()`
@@ -250,9 +249,8 @@ Size tasks by **files touched** and **subsystems crossed** — these are the bes
 
 #### Decomposition Anti-Patterns
 
-**Avoid long dependency chains:**
-- Maximum chain length: 4 tasks
-- If T001 → T002 → T003 → T004 → T005, merge or restructure to allow parallelism
+**Avoid unnecessarily long dependency chains:**
+- Prefer parallelism where possible—restructure or merge tasks to reduce sequential dependencies
 
 **Avoid vague polish/cleanup tasks:**
 - ❌ "Polish auth flow" with no concrete changes
@@ -311,7 +309,7 @@ These rules prevent cross-layer gaps where changes are made in one layer but wir
 - **File overlap = dependency** — tasks touching same file cannot parallelize
 - **Central file contention**: If many tasks overlap a central file (e.g., `main.py`, `container.ts`), create a dedicated "shared foundation" task for that file, then parallelize downstream tasks that no longer touch it
 - **Err toward more dependencies** — safer than too few
-- **Chain length limit (4)** is a heuristic; prefer restructuring (shared foundation task, re-slicing) over dropping uncertain deps
+- Prefer restructuring (shared foundation task, re-slicing) over dropping uncertain deps
 
 #### Execution Phases (in generated output)
 
@@ -507,7 +505,7 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 2. **All Hard Gates Pass**: Zero violations in Phase 5 validation table
 3. **Obligation Coverage Complete**: Obligation Coverage table shows 100% mapping with verification
 4. **AC Coverage Complete**: Every spec AC (if spec present) maps to exactly one primary owner task
-5. **Dependency Graph Valid**: No file overlaps without deps, no cycles, chains ≤ 4
+5. **Dependency Graph Valid**: No file overlaps without deps, no cycles
 6. **Sizing Compliant**: All tasks within hard limits (12 files / 3 subsystems / 3 ACs)
 7. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
 8. **Wiring Complete**: New data/config/templates have wiring maps and coverage
