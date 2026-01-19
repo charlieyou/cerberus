@@ -1699,14 +1699,8 @@ USAGE
     validate_consensus_mode "$consensus_mode"
 
     if [[ -z "$epic_path" ]]; then
-        die "Epic file path is required. Usage: ${CLI_CMD} spawn-epic-verify <epic-file>"
+        die "Epic file or criteria is required. Usage: ${CLI_CMD} spawn-epic-verify <epic-file-or-criteria>"
     fi
-
-    if [[ ! -f "$epic_path" ]]; then
-        die "Epic file not found: $epic_path"
-    fi
-
-    epic_path=$(realpath "$epic_path")
 
     # Resolve transcript and session ID if not provided
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
@@ -1731,56 +1725,33 @@ USAGE
     fi
     archive_reviews "$review_dir" "$reviews_dir" "$iter" >/dev/null 2>&1 || true
 
-    # --- Read epic content ---
-    local epic_content
-    epic_content=$(cat "$epic_path")
-
-    # --- Extract acceptance criteria from epic content ---
-    # Try to find ## Acceptance Criteria section, otherwise use full content
-    # The extraction continues until we hit another ## header (not Acceptance)
-    # Matching is case-insensitive and tolerates trailing colon/whitespace
-    local epic_criteria=""
-    if echo "$epic_content" | grep -qiE "^## *Acceptance Criteria:? *$"; then
-        # Extract from ## Acceptance Criteria until the next ## heading (or EOF)
-        epic_criteria=$(echo "$epic_content" | awk '
-            BEGIN { IGNORECASE=1 }
-            /^## *Acceptance Criteria:? *$/ { found=1; next }
-            found && /^## / { exit }
-            found { print }
-        ')
-    elif echo "$epic_content" | grep -qiE "^### *Acceptance Criteria:? *$"; then
-        # Extract from ### Acceptance Criteria until the next ### or ## heading (or EOF)
-        epic_criteria=$(echo "$epic_content" | awk '
-            BEGIN { IGNORECASE=1 }
-            /^### *Acceptance Criteria:? *$/ { found=1; next }
-            found && /^###? / { exit }
-            found { print }
-        ')
+    # --- Determine epic context (file path or raw criteria) ---
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    
+    local epic_context
+    local is_file=false
+    
+    # Check if it's a file (try both as-is and relative to project root)
+    if [[ -f "$epic_path" ]]; then
+        epic_context=$(realpath "$epic_path")
+        is_file=true
+    elif [[ -f "$project_root/$epic_path" ]]; then
+        epic_context=$(realpath "$project_root/$epic_path")
+        is_file=true
+    elif [[ "$epic_path" == */* ]] || [[ "$epic_path" == *.md ]]; then
+        # Looks like a path but doesn't exist - likely a typo
+        die "File not found: $epic_path (looks like a path but doesn't exist. Use raw criteria without path-like characters, or fix the path.)"
     else
-        # Use full content if no acceptance criteria section found
-        epic_criteria="$epic_content"
-    fi
-    # Trim leading/trailing blank lines
-    epic_criteria=$(echo "$epic_criteria" | sed -e '/./,$!d' -e :a -e '/^\s*$/{ $d; N; ba; }')
-
-    # --- Check for spec file reference in epic ---
-    local spec_content=""
-    local spec_path_found=""
-    # Look for spec references like "See specs/foo.md" or "Spec: specs/bar.md"
-    spec_path_found=$(echo "$epic_content" | grep -oE 'specs/[a-zA-Z0-9_/-]+\.md' | head -1 || true)
-    if [[ -n "$spec_path_found" ]]; then
-        local project_root
-        project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-        if [[ -f "$project_root/$spec_path_found" ]]; then
-            spec_content=$(cat "$project_root/$spec_path_found")
-        fi
+        # Raw criteria text
+        epic_context="$epic_path"
     fi
 
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
         echo "<!-- review-type: epic-verify -->"
-        echo "<!-- epic-path: $epic_path -->"
+        echo "<!-- epic-context: ${epic_context:0:100} -->"
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -1791,12 +1762,14 @@ USAGE
         echo ""
         echo "# Epic Verification (Iterative)"
         echo ""
-        echo "## Epic"
-        echo "Path: $epic_path"
-        echo ""
-        echo "## Acceptance Criteria"
-        echo ""
-        echo "$epic_criteria"
+        if [[ "$is_file" == "true" ]]; then
+            echo "## Epic File"
+            echo "Path: $epic_context"
+        else
+            echo "## Acceptance Criteria"
+            echo ""
+            echo "$epic_context"
+        fi
     } > "$artifact_path"
 
     echo "Artifact written: $artifact_path" >&2
@@ -1889,31 +1862,14 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute variables
-        local epic_tmp="${review_dir}/epic_criteria.tmp"
-        local spec_tmp="${review_dir}/spec_content.tmp"
-        local context_tmp="${review_dir}/task_context.tmp"
-        printf '%s' "$epic_criteria" > "$epic_tmp"
-        printf '%s' "${spec_content:-No spec file found.}" > "$spec_tmp"
-        printf '%s' "$epic_content" > "$context_tmp"
-        prompt_content=$(awk -v epic_file="$epic_tmp" -v spec_file="$spec_tmp" -v context_file="$context_tmp" '
-            BEGIN {
-                while ((getline line < epic_file) > 0) epic = epic (epic ? "\n" : "") line; close(epic_file)
-                while ((getline line < spec_file) > 0) spec = spec (spec ? "\n" : "") line; close(spec_file)
-                while ((getline line < context_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(context_file)
-            }
+        # Load template and substitute epic context (file path or raw criteria)
+        # Use match+printf loop to avoid gsub & and \ interpretation issues
+        local context_tmp="${review_dir}/epic_context.tmp"
+        printf '%s' "$epic_context" > "$context_tmp"
+        prompt_content=$(awk -v ctx_file="$context_tmp" '
+            BEGIN { while ((getline line < ctx_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(ctx_file) }
             {
-                while (match($0, /\$\{EPIC_CRITERIA\}/)) {
-                    printf "%s", substr($0, 1, RSTART-1)
-                    printf "%s", epic
-                    $0 = substr($0, RSTART+RLENGTH)
-                }
-                while (match($0, /\$\{SPEC_CONTENT\}/)) {
-                    printf "%s", substr($0, 1, RSTART-1)
-                    printf "%s", spec
-                    $0 = substr($0, RSTART+RLENGTH)
-                }
-                while (match($0, /\$\{CONTEXT\}/)) {
+                while (match($0, /\$\{EPIC_CONTEXT\}/)) {
                     printf "%s", substr($0, 1, RSTART-1)
                     printf "%s", ctx
                     $0 = substr($0, RSTART+RLENGTH)
@@ -1921,7 +1877,7 @@ USAGE
                 print
             }
         ' "$prompt_template_path")
-        rm -f "$epic_tmp" "$spec_tmp" "$context_tmp"
+        rm -f "$context_tmp"
     else
         die "Epic verification prompt template not found in project or built-in locations"
     fi

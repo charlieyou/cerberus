@@ -1,16 +1,17 @@
 ---
 description: Verify epic acceptance criteria against the codebase with multi-model consensus
-argument-hint: <epic-file> [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
+argument-hint: <epic-file-or-criteria> [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
 ---
 
 # Epic Verification (Iterative)
 
-Multi-model verification that checks whether the codebase satisfies an epic's acceptance criteria. External reviewers (Codex, Gemini, Claude) explore the repository using their tools to verify each criterion is implemented, and you fix the code until consensus passes.
+Multi-model verification that checks whether the codebase satisfies acceptance criteria. External reviewers (Codex, Gemini, Claude) explore the repository using their tools to verify each criterion is implemented, and you fix the code until consensus passes.
 
 ## Usage
 
 ```
-/cerberus:verify-epic docs/specs/my-epic.md                    # Verify epic criteria against codebase
+/cerberus:verify-epic docs/specs/my-epic.md                    # Verify epic file
+/cerberus:verify-epic "- Users can login\n- Sessions expire"   # Verify raw criteria
 /cerberus:verify-epic docs/specs/my-epic.md --agents codex,gemini  # Only run selected reviewers
 /cerberus:verify-epic docs/specs/my-epic.md --max-rounds 3     # Limit to 3 verification iterations
 /cerberus:verify-epic docs/specs/my-epic.md --mode max         # Use max intelligence mode
@@ -19,16 +20,15 @@ Multi-model verification that checks whether the codebase satisfies an epic's ac
 
 ## Input Requirements
 
-The epic file should contain acceptance criteria. The command will extract criteria from:
-- A `## Acceptance Criteria` section (preferred)
-- A `### Acceptance Criteria` section
-- If neither found, uses the full file content
+You can provide either:
+- **A file path** to an epic/spec file containing acceptance criteria
+- **Raw criteria text** directly (reviewers will verify these criteria against the codebase)
 
-Referenced spec files (e.g., `specs/feature.md` mentioned in the epic) will be automatically loaded and provided to reviewers.
+Reviewers will use their tools to read any referenced spec/plan files.
 
 ## How It Works
 
-1. **Parse Epic**: Extract acceptance criteria from the epic file
+1. **Determine Input**: Detect if input is a file path or raw criteria
 2. **Spawn Verification**: Run the spawn command to start verification
 3. **Reviewers Explore**: Codex, Gemini, and Claude use their tools to explore the codebase and verify each criterion
 4. **Fix Issues**: If reviewers find unmet criteria, fix the code

@@ -137,43 +137,28 @@ Questions:
 
 ---
 
-## Task Context
+## Epic Context
 
-<task_context>
-${CONTEXT}
-</task_context>
+<epic_context>
+${EPIC_CONTEXT}
+</epic_context>
 
-### Task Context Limitations
+The above contains either:
+- **A file path** (single line, looks like a path) — read it with your tools to find acceptance criteria
+- **Raw acceptance criteria** (multi-line text) — verify these directly against the codebase
 
-The task context above may include:
-- **High-level intent**: Not a replacement for acceptance criteria.
-- **Drafted skeletons / pseudo-code**: Implementations may legitimately differ to match existing patterns.
-- **Dependency references**: Some required types/functions may exist in other files or modules.
+### First Steps (mandatory)
 
-If the task context is empty, skip this section and rely on acceptance criteria, spec content, and explored code.
+1. **If the context is a file path** (single line ending in `.md` or containing `/`), read that file to find the acceptance criteria section (may be labeled "Acceptance Criteria", "Requirements", "Criteria", or similar).
+2. **If raw criteria text**, use it directly as your acceptance criteria checklist.
+3. **If a spec or plan file is referenced**, read it to understand detailed requirements.
+4. **List all acceptance criteria** you identified before starting verification.
 
-Treat skeletons as guidance, not specification. Prefer what the code actually does, verified through tracing.
+### Interpretation Rules
 
----
-
-## Epic Acceptance Criteria (primary source of truth)
-
-<epic_criteria>
-${EPIC_CRITERIA}
-</epic_criteria>
-
-**Interpretation rules**:
 - Treat each bullet/numbered item as a criterion that must be either **met**, **unmet**, or **not applicable**.
 - If a criterion is ambiguous, use the spec content (if present) to disambiguate; otherwise, require stronger code evidence before claiming "met".
 - **Exactness rule (no "superset pass")**: If a criterion or plan/spec text defines a finite set of public API shapes (type variants, record fields, function signatures, config keys, CLI flags, dependency constraints), treat it as an **exact match requirement** when the text uses exhaustive language ("exactly", "only", "must have these", or provides a closed schema). If language is ambiguous, treat missing items as P1 but extra items as P2 (non-blocking). Additions explicitly allowed by "at least", "may include", or "additional variants allowed" are not findings.
-
----
-
-## Spec Content (if available)
-
-<spec_content>
-${SPEC_CONTENT}
-</spec_content>
 
 ---
 
