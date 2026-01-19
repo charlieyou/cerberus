@@ -156,6 +156,7 @@ ${EPIC_CRITERIA}
 **Interpretation rules**:
 - Treat each bullet/numbered item as a criterion that must be either **met**, **unmet**, or **not applicable**.
 - If a criterion is ambiguous, use the spec content (if present) to disambiguate; otherwise, require stronger code evidence before claiming "met".
+- **Exactness rule (no "superset pass")**: If a criterion or plan/spec text defines a finite set of public API shapes (type variants, record fields, function signatures, config keys, CLI flags, dependency constraints), treat it as an **exact match requirement** when the text uses exhaustive language ("exactly", "only", "must have these", or provides a closed schema). If language is ambiguous, treat missing items as P1 but extra items as P2 (non-blocking). Additions explicitly allowed by "at least", "may include", or "additional variants allowed" are not findings.
 
 ---
 
@@ -164,6 +165,40 @@ ${EPIC_CRITERIA}
 <spec_content>
 ${SPEC_CONTENT}
 </spec_content>
+
+---
+
+## Plan / Design Docs (authoritative when referenced)
+
+<plan_review_rules>
+**Finding plan/spec documents:**
+1. If a plan/design doc is **normatively referenced** (e.g., "per plan", "must match", "see RFC for exact schema", "as specified in") in `<task_context>`, `<epic_criteria>`, `<spec_content>`, or Author Context: you MUST locate and open it.
+2. If **no plan doc is referenced** but acceptance criteria mention structural requirements (types, APIs, config), search `docs/` for likely plan docs using keywords: epic name, "plan", "RFC", "design", phase number, or date. Open the best match; note in summary which doc you used.
+3. Docs referenced only as **background context** (e.g., "for more info see...") are optional—do not treat as authoritative unless they define required shapes.
+
+**Using plan/spec documents:**
+1. Treat normatively-referenced docs as authoritative for **structural** requirements (types, fields, variants, signatures, config keys, dependency versions) unless they explicitly say otherwise.
+2. If a normatively-referenced doc is an **external URL** and you lack web access, record a verification gap unless the same requirements are duplicated in-repo (in acceptance criteria or spec text).
+3. If you cannot locate a normatively-referenced doc in the repo, add a **Verification gap** finding (P2) naming the missing doc.
+
+**Handling large plan/spec documents:**
+When a plan/spec doc is too large to read fully (>500 lines), use targeted extraction:
+1. **Read the table of contents / section headers first** (grep for `^#` or `^##` patterns).
+2. **Search for criterion-relevant sections** using grep with keywords from acceptance criteria (type names, function names, config keys mentioned in `<epic_criteria>`).
+3. **Read only the sections that define structures you need to verify** (e.g., "## Public Types", "## API Surface", "## Dependencies").
+4. **For each acceptance criterion**, search the doc for that criterion's keywords and read surrounding context (±50 lines).
+5. Doc size is not a reason to skip shape checks—it only changes *how* you locate sections. If you cannot find relevant sections after targeted search, that is a verification gap for that criterion (P2).
+</plan_review_rules>
+
+<shape_validation_rules>
+When validating plan/spec-defined structures, verify **shape**, not existence:
+- Sum/variant types: variant names and payload shapes must match exactly.
+- Record/object types: field names (and required/optional status) must match exactly.
+- Public functions/constructors: required parameters and return shapes must match exactly.
+- Re-exports/visibility requirements: match the required mechanism (e.g., "must be `pub import` style"), not just "re-export exists".
+- Config schemas / CLI flags: keys/flags and defaults must match exactly.
+- Dependency constraints: version ranges/constraints must match exactly when specified.
+</shape_validation_rules>
 
 ---
 
@@ -179,6 +214,15 @@ ${SPEC_CONTENT}
 ---
 
 ## Exploration Workflow (required before writing findings)
+
+**Decision procedure summary:** Open docs/manifests → enumerate criteria → search for plan docs → trace entrypoints → validate shapes exactly → produce findings with citations → apply author-context overrides → output JSON.
+
+<workflow_step_0_plan_and_manifests>
+0. **Find and open authoritative docs + manifests**:
+   - Open every referenced plan/spec/design doc (see `<plan_review_rules>`).
+   - Open the project manifest(s) relevant to dependency versions/config surface (language-specific; examples include `gleam.toml`, `package.json`, `Cargo.toml`, `pyproject.toml`, etc.).
+   - Open the defining source files for any plan-specified public APIs (do not only read re-export barrels).
+</workflow_step_0_plan_and_manifests>
 
 1. **Enumerate plan items**: List every acceptance criterion and spec requirement. Create a checklist.
 2. **Search for implementations**: Use grep/glob to find code related to each criterion. Search for function names, class names, keywords from the criteria.
@@ -215,6 +259,16 @@ For each plan item, verify and cite evidence:
 8. **Error handling matches spec**: If spec says "fail on X", verify code fails on X (not silently continues).
 9. **Edge cases handled**: Spec-mentioned edge cases (empty input, invalid values, missing config) are addressed.
 
+### Plan-vs-Code Structural Conformance (mandatory when plan/spec defines shapes)
+<plan_vs_code_diff_checklist>
+If any plan/spec defines concrete shapes, you MUST explicitly validate each of the following (as applicable) and treat mismatches as unmet criteria:
+1. **Type shapes**: Every planned public type has exactly the planned variants/fields (no missing, no extras unless explicitly allowed).
+2. **Function signatures**: Planned constructors/functions have the planned arity/params/returns (including "stub vs required args" differences).
+3. **Re-export mechanism**: If a specific re-export style is required, verify the exact mechanism.
+4. **Config/options surface**: Planned option/config fields and defaults match exactly.
+5. **Dependency constraints**: Planned dependency version constraints match manifest entries exactly.
+</plan_vs_code_diff_checklist>
+
 If a check is not applicable to this epic, skip it—don't report as unmet.
 
 ---
@@ -227,10 +281,11 @@ If a check is not applicable to this epic, skip it—don't report as unmet.
 4. **Search before claiming missing**: Before flagging something as unmet, search likely locations (entrypoints, helpers, config). State what you searched.
 5. **Describe the failure scenario**: When flagging an issue, explain what would go wrong (e.g., "calling X with empty input will crash at line Y").
 6. **Author context overrides**: Follow "Author Context Handling". Don't re-flag resolved items unless new code contradicts them.
+7. **Tests passing is not plan adherence**: Build/test success is supporting evidence only; it does not override plan/spec mismatches in public API shape, config surface, or dependency constraints.
 
-**Verification gap priority:**
-- **P1 gap**: Cannot locate any entrypoint or wiring for a core criterion after searching.
-- **P2 gap**: Complex flow exists but cannot confirm one sub-property after searching.
+**Verification gap priority (gaps are findings; verdict follows priority table):**
+- **P1 gap**: Cannot locate any entrypoint or wiring for a core criterion after searching → verdict FAIL.
+- **P2 gap**: Complex flow exists but cannot confirm one sub-property, or missing plan doc → verdict NEEDS_WORK (unless other P0/P1 exist).
 
 ---
 
@@ -279,12 +334,15 @@ Return all clear, well-supported unmet acceptance criteria (or verification gaps
 
 Before returning your JSON response, verify:
 
+0. If a plan/spec doc was referenced: Did I open it and use it for exact shape/field/version checks (or file a verification gap if missing)?
 1. For each finding: Did I quote the unmet acceptance criterion text (or clearly reference it)?
 2. For each finding: Did I cite concrete file/function evidence with line numbers (or explicitly set file fields to null)?
 3. For each finding: Did I check Author Context for this title/criterion and only override with cited contradictory lines if needed?
 4. For P0/P1 findings: Can I describe a concrete failure path that violates the criterion?
 5. If I marked something as "met" in summary reasoning: Did I actually trace it end-to-end (entrypoint → wiring → consumer/validation)?
-6. Is my verdict consistent with the priority policy below?
+6. If plan/spec defines type/field/signature/version shapes: Did I verify exact matches (no missing, no unapproved extras)?
+7. If plan/spec mentions dependency constraints: Did I verify the manifest constraints exactly?
+8. Is my verdict consistent with the priority policy below?
 
 If any check fails, revise your findings before outputting.
 
@@ -322,6 +380,8 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
 ---
 
 ## Examples
+
+**Note:** Examples show fenced JSON for readability; your actual output MUST be raw JSON only (no markdown fences).
 
 <example_1 type="all_criteria_met">
 {"findings": [], "verdict": "PASS", "summary": "All code-related acceptance criteria are satisfied with end-to-end traceability from entrypoints through runtime consumers."}
@@ -398,3 +458,51 @@ After searching: No `sync` command found in CLI registration, argument parser, o
 {"findings": [{"title": "[P1] AC-1 sync command not found in CLI", "body": "**Verification gap:** \"Add CLI command `myapp sync` to synchronize data.\"\n\n**Evidence:** Searched cli/, commands/, and argument parser setup. Found other commands (init, run, status) but no 'sync' command registered or implemented. Grep for 'sync' found only unrelated string matches.", "priority": 1, "file_path": null, "line_start": null, "line_end": null}], "verdict": "FAIL", "summary": "Core feature missing: sync command not found after searching CLI registration and command handlers."}
 ```
 </example_8>
+
+<example_9 type="plan_shape_mismatch">
+**Scenario**: Plan defines specific type variants, but implementation differs.
+
+Plan doc (`docs/phase1-plan.md`) specifies:
+```
+ErrorType must have exactly these variants:
+- NetworkError(message: String)
+- ValidationError(field: String, reason: String)
+- NotFoundError(resource: String)
+```
+
+Implementation at `src/error.gleam`:
+```gleam
+pub type ErrorType {
+  NetworkError(String)
+  ValidationError(String)  // Missing 'field' parameter
+  NotFoundError(String)
+  TimeoutError(Int)  // Extra variant not in plan
+}
+```
+
+**Correct action**: P1 finding—shape mismatch violates exact-match rule.
+
+**Correct output**:
+```json
+{"findings": [{"title": "[P1] ErrorType variants do not match plan specification", "body": "**Unmet criterion:** Plan requires ErrorType with exactly 3 variants: NetworkError(message: String), ValidationError(field: String, reason: String), NotFoundError(resource: String).\n\n**Evidence:** src/error.gleam:1-6 shows:\n- ValidationError has 1 param instead of 2 (missing 'field')\n- TimeoutError variant exists but is not in plan\n\nPer exactness rule, extra variants require explicit approval in plan.", "priority": 1, "file_path": "src/error.gleam", "line_start": 1, "line_end": 6}], "verdict": "FAIL", "summary": "Type shape mismatch: ErrorType variants differ from plan specification (missing field, extra variant)."}
+```
+</example_9>
+
+<example_10 type="dependency_version_mismatch">
+**Scenario**: Plan specifies dependency version constraints, but manifest differs.
+
+Plan doc specifies: "gleam_json >= 1.0.0 and < 2.0.0"
+
+Manifest (`gleam.toml`) shows:
+```toml
+[dependencies]
+gleam_json = "~> 0.9"
+```
+
+**Correct action**: P1 finding—dependency constraint doesn't match plan.
+
+**Correct output**:
+```json
+{"findings": [{"title": "[P1] gleam_json version constraint does not match plan", "body": "**Unmet criterion:** Plan requires gleam_json >= 1.0.0 and < 2.0.0.\n\n**Evidence:** gleam.toml shows `gleam_json = \"~> 0.9\"` which allows 0.9.x but not 1.x. This violates the plan's version floor.", "priority": 1, "file_path": "gleam.toml", "line_start": 3, "line_end": 3}], "verdict": "FAIL", "summary": "Dependency version mismatch: gleam_json constraint ~> 0.9 does not satisfy plan requirement >= 1.0.0."}
+```
+</example_10>
