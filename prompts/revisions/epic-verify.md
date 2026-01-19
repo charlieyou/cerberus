@@ -61,7 +61,4 @@ After all sub-agents complete their fixes:
 4. Set author-context if there are false positives or clarifications for reviewers
 5. Only then finalize and STOP
 
-**Commit Policy (${DIFF_ARGS}):**
-${COMMIT_INSTRUCTIONS}
-
 **After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.

@@ -69,8 +69,9 @@ Commands:
   spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until consensus passes.
 
-  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--uncommitted | --base <branch> | --commit <sha...> | <range>] <epic-file>
-    Spawn reviewers to verify epic acceptance criteria against code changes.
+  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] <epic-file>
+    Spawn reviewers to verify epic acceptance criteria against the codebase.
+    Reviewers explore the code themselves to verify criteria are met.
     Claude fixes code until all criteria pass consensus verification.
 
   wait --json [--finalize] [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
@@ -1591,11 +1592,6 @@ review_gate_spawn_epic_verify() {
     local mode=""
     local consensus_mode=""
 
-    # Diff mode args (same pattern as code-review)
-    local diff_mode="--uncommitted"
-    local diff_target=""
-    local diff_args_str="--uncommitted"
-
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
@@ -1634,40 +1630,6 @@ review_gate_spawn_epic_verify() {
                 consensus_mode="${2:-}"
                 shift 2
                 ;;
-            --uncommitted)
-                diff_mode="--uncommitted"
-                diff_args_str="--uncommitted"
-                shift
-                ;;
-            --base=*)
-                diff_mode="--base"
-                diff_target="${1#*=}"
-                diff_args_str="--base $diff_target"
-                shift
-                ;;
-            --base)
-                diff_mode="--base"
-                diff_target="${2:-}"
-                diff_args_str="--base $diff_target"
-                shift 2
-                ;;
-            --commit=*)
-                diff_mode="--commit"
-                diff_target="${1#*=}"
-                diff_args_str="--commit $diff_target"
-                shift
-                ;;
-            --commit)
-                diff_mode="--commit"
-                shift
-                local -a commit_shas=()
-                while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
-                    commit_shas+=("$1")
-                    shift
-                done
-                diff_target="${commit_shas[*]}"
-                diff_args_str="--commit $diff_target"
-                ;;
             --session-id)
                 session_id="${2:-}"
                 shift 2
@@ -1680,7 +1642,8 @@ review_gate_spawn_epic_verify() {
                 cat <<USAGE
 Usage: ${CLI_CMD} spawn-epic-verify [options] <epic-file>
 
-Spawn reviewers to verify epic acceptance criteria against code changes.
+Spawn reviewers to verify epic acceptance criteria against the codebase.
+Reviewers use their tools to explore the code and verify criteria are met.
 
 Options:
   --agents <list>           Comma-separated subset of agents: codex,gemini,claude
@@ -1689,12 +1652,6 @@ Options:
   --consensus <mode>        Consensus mode: majority (default), all, any
   --session-id <id>         Session ID for scoping
   --transcript-path <path>  Path to transcript file
-
-Diff modes (default: --uncommitted):
-  --uncommitted             Verify against uncommitted changes
-  --base <branch>           Verify changes from branch to HEAD
-  --commit <sha...>         Verify specific commits as net diff
-  <range>                   Verify a commit range (e.g., main..feature)
 
 The reviewers will verify each acceptance criterion against the code:
 - Implementation exists and is traceable
@@ -1711,26 +1668,10 @@ USAGE
                 die "Unknown option '$1'"
                 ;;
             *)
-                # Check if it looks like a commit range (contains ..)
-                # But first check if it's actually a file path (e.g., ../epic.md)
-                if [[ "$1" == *..* ]] && [[ ! -f "$1" ]]; then
-                    diff_mode="range"
-                    diff_target="$1"
-                    diff_args_str="$1"
-                    shift
-                elif [[ -z "$epic_path" ]]; then
-                    # First positional is the epic file
+                if [[ -z "$epic_path" ]]; then
                     epic_path="$1"
                     shift
-                elif [[ -f "$epic_path" ]] && git rev-parse --verify "$1" >/dev/null 2>&1; then
-                    # Second positional is a valid git ref - treat as range start
-                    # This handles: verify-epic epic.md main..feature
-                    diff_mode="range"
-                    diff_target="$1"
-                    diff_args_str="$1"
-                    shift
                 else
-                    # Unknown positional - skip with warning
                     echo "Warning: ignoring unknown argument '$1'" >&2
                     shift
                 fi
@@ -1822,38 +1763,6 @@ USAGE
     # Trim leading/trailing blank lines
     epic_criteria=$(echo "$epic_criteria" | sed -e '/./,$!d' -e :a -e '/^\s*$/{ $d; N; ba; }')
 
-    # --- Gather commit scope ---
-    local commit_scope=""
-    case "$diff_mode" in
-        --uncommitted)
-            commit_scope="Uncommitted changes (staged and unstaged)"
-            ;;
-        --base)
-            local base_sha head_sha
-            base_sha=$(git merge-base "$diff_target" HEAD 2>/dev/null || echo "$diff_target")
-            head_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "HEAD")
-            commit_scope="Changes from $diff_target ($base_sha) to HEAD ($head_sha)"
-            # Get commit list
-            local commit_list
-            commit_list=$(git log --oneline "$base_sha..HEAD" 2>/dev/null || echo "Unable to list commits")
-            commit_scope+=$'\n\nCommits:\n'"$commit_list"
-            ;;
-        --commit)
-            commit_scope="Specific commits: $diff_target"
-            local sha commit_info
-            for sha in $diff_target; do
-                commit_info=$(git log -1 --oneline "$sha" 2>/dev/null || echo "$sha: unable to get info")
-                commit_scope+=$'\n'"- $commit_info"
-            done
-            ;;
-        range)
-            commit_scope="Commit range: $diff_target"
-            local commit_list
-            commit_list=$(git log --oneline "$diff_target" 2>/dev/null || echo "Unable to list commits")
-            commit_scope+=$'\n\nCommits:\n'"$commit_list"
-            ;;
-    esac
-
     # --- Check for spec file reference in epic ---
     local spec_content=""
     local spec_path_found=""
@@ -1872,7 +1781,6 @@ USAGE
     {
         echo "<!-- review-type: epic-verify -->"
         echo "<!-- epic-path: $epic_path -->"
-        echo "<!-- diff-args: $diff_args_str -->"
         if [[ -n "$max_rounds" ]]; then
             echo "<!-- max-rounds: $max_rounds -->"
         fi
@@ -1889,10 +1797,6 @@ USAGE
         echo "## Acceptance Criteria"
         echo ""
         echo "$epic_criteria"
-        echo ""
-        echo "## Commit Scope"
-        echo ""
-        echo "$commit_scope"
     } > "$artifact_path"
 
     echo "Artifact written: $artifact_path" >&2
@@ -1988,17 +1892,14 @@ USAGE
         # Load template and substitute variables
         local epic_tmp="${review_dir}/epic_criteria.tmp"
         local spec_tmp="${review_dir}/spec_content.tmp"
-        local scope_tmp="${review_dir}/commit_scope.tmp"
         local context_tmp="${review_dir}/task_context.tmp"
         printf '%s' "$epic_criteria" > "$epic_tmp"
         printf '%s' "${spec_content:-No spec file found.}" > "$spec_tmp"
-        printf '%s' "$commit_scope" > "$scope_tmp"
         printf '%s' "$epic_content" > "$context_tmp"
-        prompt_content=$(awk -v epic_file="$epic_tmp" -v spec_file="$spec_tmp" -v scope_file="$scope_tmp" -v context_file="$context_tmp" '
+        prompt_content=$(awk -v epic_file="$epic_tmp" -v spec_file="$spec_tmp" -v context_file="$context_tmp" '
             BEGIN {
                 while ((getline line < epic_file) > 0) epic = epic (epic ? "\n" : "") line; close(epic_file)
                 while ((getline line < spec_file) > 0) spec = spec (spec ? "\n" : "") line; close(spec_file)
-                while ((getline line < scope_file) > 0) scope = scope (scope ? "\n" : "") line; close(scope_file)
                 while ((getline line < context_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(context_file)
             }
             {
@@ -2012,11 +1913,6 @@ USAGE
                     printf "%s", spec
                     $0 = substr($0, RSTART+RLENGTH)
                 }
-                while (match($0, /\$\{COMMIT_SCOPE\}/)) {
-                    printf "%s", substr($0, 1, RSTART-1)
-                    printf "%s", scope
-                    $0 = substr($0, RSTART+RLENGTH)
-                }
                 while (match($0, /\$\{CONTEXT\}/)) {
                     printf "%s", substr($0, 1, RSTART-1)
                     printf "%s", ctx
@@ -2025,7 +1921,7 @@ USAGE
                 print
             }
         ' "$prompt_template_path")
-        rm -f "$epic_tmp" "$spec_tmp" "$scope_tmp" "$context_tmp"
+        rm -f "$epic_tmp" "$spec_tmp" "$context_tmp"
     else
         die "Epic verification prompt template not found in project or built-in locations"
     fi
@@ -2084,10 +1980,8 @@ USAGE
     if [[ -f "$state_file" ]]; then
         local temp_file="${state_file}.tmp.$$"
         jq --arg epic_path "$epic_path" \
-           --arg diff_args "$diff_args_str" \
            '.mode.epic_path = $epic_path
-            | .mode.type = "epic-verify"
-            | .mode.diff_args = $diff_args' \
+            | .mode.type = "epic-verify"' \
            "$state_file" > "$temp_file"
         mv "$temp_file" "$state_file"
     fi

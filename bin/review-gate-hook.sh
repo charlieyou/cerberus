@@ -233,17 +233,6 @@ review_gate_check() {
         fi
     }
 
-    # --- Helper: Extract diff args from state for epic-verify ---
-    extract_epic_diff_args_from_state() {
-        if [[ -f "$STATE_FILE" ]]; then
-            local args
-            args=$(jq -r '.mode.diff_args // empty' "$STATE_FILE" 2>/dev/null || echo "")
-            if [[ -n "$args" && "$args" != "null" ]]; then
-                echo "$args"
-            fi
-        fi
-    }
-
     # --- Helper: Extract agents list from artifact frontmatter ---
     extract_agents() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -447,25 +436,18 @@ review_gate_check() {
                     spawn_success=true
                 fi
             fi
-        # For epic-verify, re-run verification with saved epic path and diff args
+        # For epic-verify, re-run verification with saved epic path
         elif [[ "$detected_type" == "epic-verify" ]]; then
-            local epic_path diff_args
+            local epic_path
             epic_path=$(extract_epic_path_from_state)
-            diff_args=$(extract_epic_diff_args_from_state)
-            log "review-gate: epic-verify re-spawn with epic_path='$epic_path' diff_args='$diff_args'"
+            log "review-gate: epic-verify re-spawn with epic_path='$epic_path'"
 
             if [[ -n "$epic_path" && -f "$epic_path" ]]; then
-                # Parse diff_args into array safely
-                local -a args_array
-                if [[ -n "$diff_args" ]]; then
-                    read -r -a args_array <<< "$diff_args"
-                fi
-
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-epic-verify ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$epic_path" ${args_array[@]+"${args_array[@]}"} >/dev/null 2>&1; then
+                   "$0" spawn-epic-verify ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$epic_path" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
@@ -1490,12 +1472,9 @@ FOOTER
                 fi
                 ;;
             epic-verify)
-                local template result commit_instructions
-                commit_instructions=$(generate_commit_instructions "$mode_diff_args")
+                local template result
                 if template=$(resolve_revision_template "epic-verify"); then
                     result=$(substitute_template "$template" '${ISSUES}' "$issues")
-                    result=$(substitute_template "$result" '${DIFF_ARGS}' "$mode_diff_args")
-                    result=$(substitute_template "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")
                     echo "$result"
                 else
                     cat <<HEADER
@@ -1512,9 +1491,6 @@ HEADER
                     echo ""
                     _fallback_self_review
                     cat <<FOOTER
-
-**Commit Policy ($mode_diff_args):**
-$commit_instructions
 
 **After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.
 FOOTER

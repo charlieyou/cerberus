@@ -1,19 +1,16 @@
 ---
-description: Verify epic acceptance criteria against code changes with multi-model consensus
-argument-hint: <epic-file> [--commit <sha...> | --base <branch> | <range>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
+description: Verify epic acceptance criteria against the codebase with multi-model consensus
+argument-hint: <epic-file> [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
 ---
 
 # Epic Verification (Iterative)
 
-Multi-model verification that checks whether code changes satisfy an epic's acceptance criteria. External reviewers (Codex, Gemini, Claude) analyze the repository and commits, and you fix the code until consensus passes.
+Multi-model verification that checks whether the codebase satisfies an epic's acceptance criteria. External reviewers (Codex, Gemini, Claude) explore the repository using their tools to verify each criterion is implemented, and you fix the code until consensus passes.
 
 ## Usage
 
 ```
-/cerberus:verify-epic docs/specs/my-epic.md                    # Verify against uncommitted changes
-/cerberus:verify-epic docs/specs/my-epic.md --base main        # Verify changes from main to HEAD
-/cerberus:verify-epic docs/specs/my-epic.md --commit abc123    # Verify specific commits
-/cerberus:verify-epic docs/specs/my-epic.md main..feature      # Verify a commit range
+/cerberus:verify-epic docs/specs/my-epic.md                    # Verify epic criteria against codebase
 /cerberus:verify-epic docs/specs/my-epic.md --agents codex,gemini  # Only run selected reviewers
 /cerberus:verify-epic docs/specs/my-epic.md --max-rounds 3     # Limit to 3 verification iterations
 /cerberus:verify-epic docs/specs/my-epic.md --mode max         # Use max intelligence mode
@@ -33,7 +30,7 @@ Referenced spec files (e.g., `specs/feature.md` mentioned in the epic) will be a
 
 1. **Parse Epic**: Extract acceptance criteria from the epic file
 2. **Spawn Verification**: Run the spawn command to start verification
-3. **Reviewers Verify**: Codex, Gemini, and Claude analyze the code against criteria in parallel
+3. **Reviewers Explore**: Codex, Gemini, and Claude use their tools to explore the codebase and verify each criterion
 4. **Fix Issues**: If reviewers find unmet criteria, fix the code
 5. **Re-verify**: Verification automatically re-runs after changes (unless `--max-rounds 0`)
 6. **Pass**: When consensus is reached, the gate resolves
@@ -51,7 +48,6 @@ Pass all remaining `$ARGUMENTS` directly. The CLI accepts:
 - `--max-rounds <n>` - iteration limit (default: 3, use 0 to disable)
 - `--mode <fast|smart|max>` - intelligence level
 - `--consensus <majority|all|any>` - approval threshold
-- Diff selectors: `--uncommitted`, `--base <branch>`, `--commit <sha...>`, or `<range>`
 
 **Consensus modes:**
 - `majority` (default): At least 2 reviewers PASS, or all valid reviewers PASS
@@ -67,26 +63,24 @@ Examples:
 # User: /verify-epic specs/auth-epic.md --mode fast
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/auth-epic.md --mode fast
 
-# User: /verify-epic specs/feature.md --base main
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/feature.md --base main
+# User: /verify-epic specs/feature.md --agents codex,gemini
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/feature.md --agents codex,gemini
 
-# User: /verify-epic specs/refactor.md --commit abc123 def456
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/refactor.md --commit abc123 def456
-
-# User: /verify-epic specs/feature.md main..feature
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/feature.md main..feature
+# User: /verify-epic specs/refactor.md --consensus all
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/refactor.md --consensus all
 ```
 
 ## Verification Criteria
 
-Reviewers verify each acceptance criterion by:
+Reviewers explore the codebase and verify each acceptance criterion by:
 
-1. **Tracing to code** - Can the criterion be traced to specific files/functions?
-2. **Checking correctness** - Does the implementation match the specification?
-3. **Gathering evidence** - Is there concrete proof (code paths, test coverage)?
-4. **Validating completeness** - Are all aspects of the criterion addressed?
+1. **Searching for implementations** - Use grep/glob to find relevant code
+2. **Tracing to code** - Can the criterion be traced to specific files/functions?
+3. **Checking correctness** - Does the implementation match the specification?
+4. **Gathering evidence** - Is there concrete proof (code paths, test coverage)?
+5. **Validating completeness** - Are all aspects of the criterion addressed?
 
-Non-code criteria (tests, linting, CI, docs) are explicitly out of scope.
+Non-code criteria (tests, linting, CI, docs) are explicitly out of scope unless stated in the epic.
 
 ## Revision Cycle
 
@@ -95,8 +89,6 @@ When reviewers find unmet criteria:
 1. The stop hook presents unmet criteria from each reviewer
 2. Fix the code to satisfy the criteria
 3. Verification automatically re-runs (configurable via --max-rounds)
-
-**Commit Policy:** The stop hook will tell you whether to keep changes uncommitted or create a new commit, based on the diff mode used.
 
 ## Completion
 
