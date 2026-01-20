@@ -30,7 +30,10 @@ Reviewers will use their tools to read any referenced spec/plan files.
 
 1. **Determine Input**: Detect if input is a file path or raw criteria
 2. **Spawn Verification**: Run the spawn command to start verification
-3. **Reviewers Explore**: Codex, Gemini, and Claude use their tools to explore the codebase and verify each criterion
+3. **Reviewers Explore**: Each reviewer (Codex, Gemini, Claude) uses a subagent architecture:
+   - **Phase 1**: Read epic/spec to enumerate all acceptance criteria
+   - **Phase 2**: Spawn verification subagents to explore codebase in parallel
+   - **Phase 3**: Collect subagent results and produce final verdict
 4. **Fix Issues**: If reviewers find unmet criteria, fix the code
 5. **Re-verify**: Verification automatically re-runs after changes (unless `--max-rounds 0`)
 6. **Pass**: When consensus is reached, the gate resolves
@@ -70,15 +73,38 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/feature.md --agent
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify specs/refactor.md --consensus all
 ```
 
-## Verification Criteria
+## Verification Architecture
 
-Reviewers explore the codebase and verify each acceptance criterion by:
+Each reviewer uses a **subagent architecture** for thorough codebase exploration:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    COORDINATOR (Reviewer)                    │
+│                                                              │
+│  Phase 1: Read epic/spec, enumerate ALL acceptance criteria  │
+│  Phase 2: Spawn verification subagents (parallel when safe)  │
+│  Phase 3: Collect results, produce final JSON verdict        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│ Verify Subagent │ │ Verify Subagent │ │ Verify Subagent │
+│ (AC-1, AC-2)    │ │ (AC-3, AC-4)    │ │ (AC-5, AC-6)    │
+│                 │ │                 │ │                 │
+│ Uses: grep,     │ │ Uses: grep,     │ │ Uses: grep,     │
+│ glob, Read,     │ │ glob, Read,     │ │ glob, Read,     │
+│ finder          │ │ finder          │ │ finder          │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
+```
+
+Each subagent verifies its assigned criteria by:
 
 1. **Searching for implementations** - Use grep/glob to find relevant code
-2. **Tracing to code** - Can the criterion be traced to specific files/functions?
-3. **Checking correctness** - Does the implementation match the specification?
-4. **Gathering evidence** - Is there concrete proof (code paths, test coverage)?
-5. **Validating completeness** - Are all aspects of the criterion addressed?
+2. **Tracing entrypoints** - Find where the feature is invoked
+3. **Following code paths** - Verify wiring from entrypoint to implementation
+4. **Checking correctness** - Does the implementation match the specification?
+5. **Gathering evidence** - Cite specific file:line references
 
 Non-code criteria (tests, linting, CI, docs) are explicitly out of scope unless stated in the epic.
 
