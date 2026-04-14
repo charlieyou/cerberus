@@ -5,6 +5,10 @@
 - Typecheck verification: `PLUGINS=all amp plugins list` confirms plugin loads; `PLUGINS=all amp plugins exec <plugin> <event> --data '{}'` tests execution
 - Sanitize thread IDs with `id.replace(/[^a-zA-Z0-9._-]/g, '_')` for filesystem paths
 - Export shared utilities (getPluginRoot, loadPrompt, resolveThreadStateDir) from cerberus.ts for use by future library modules
+- Gate library lives at `.amp/plugins/lib/gate.ts` — exports createGateState, save/load/active gate helpers, and GateLock/withGateLock for locking
+- Gate state is scoped per thread+gateId: `.tmp/cerberus/<thread>/<gateId>/gate-state.json`
+- Active gate pointer: `.tmp/cerberus/<thread>/active-gate` — plain text file with the gate ID
+- Run tests with `bun test ./.amp/plugins/lib/gate.test.ts` (note leading `./` required)
 
 ---
 
@@ -20,4 +24,19 @@ Thread: https://ampcode.com/threads/T-019d8cea-ac82-716a-bb16-77ca42893cca
   - `import.meta.dir` points to `.amp/plugins/`, so resolve `../..` to get project root
   - `PLUGINS=all amp plugins list` is the quickest way to verify a plugin is valid and active
   - The spike plugin at `cerberus-spike.ts` is still present for reference — don't break it
+---
+
+## 2025-04-14 - US-004
+Thread: https://ampcode.com/threads/T-019d8cf4-598f-7208-8ebe-8c6d926722db
+- Implemented review gate storage and locking library at `.amp/plugins/lib/gate.ts`
+- GateState type models: version, status, triggerSource, reviewers, consensus, decision, iteration, timestamps, lastTurnId
+- Active gate tracking via plain-text pointer file per thread
+- GateLock class with stale-lock detection (30s) and withGateLock convenience wrapper
+- 18 tests covering read/write, active gate, and lock behavior in `.amp/plugins/lib/gate.test.ts`
+- Files changed: `.amp/plugins/lib/gate.ts` (new), `.amp/plugins/lib/gate.test.ts` (new)
+- **Learnings for future iterations:**
+  - Bun test requires `./` prefix for dotfile paths (e.g., `bun test ./.amp/...`)
+  - Gate state is scoped under `<thread>/<gateId>/` subdirs to support multiple gates per thread
+  - Lock uses write-then-verify pattern for basic mutual exclusion (not atomic on all filesystems but sufficient for single-machine plugin use)
+  - The bash implementation stores gate-state.json at session level; the TS version nests under gateId for cleaner separation
 ---
