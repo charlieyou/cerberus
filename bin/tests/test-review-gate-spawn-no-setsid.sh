@@ -40,6 +40,7 @@ PROMPT_FILE="$TEST_DIR/review.prompt"
 SCHEMA_FILE="$TEST_DIR/review-schema.json"
 RUNNER_BASH="${BASH:-/bin/bash}"
 PATH_BASH_MARKER="$TEST_DIR/path-bash-used"
+NOHUP_PID_FILE="$TEST_DIR/nohup.pid"
 TOUCH_BIN="$(command -v touch)"
 MKDIR_BIN="$(command -v mkdir)"
 SLEEP_BIN="$(command -v sleep)"
@@ -55,6 +56,7 @@ EOF
 
 cat > "$FAKE_BIN/nohup" <<EOF
 #!$RUNNER_BASH
+echo "\$$" > "$NOHUP_PID_FILE"
 exec "\$@"
 EOF
 
@@ -110,6 +112,21 @@ if [[ -f "$REVIEWS_DIR/codex.done" ]]; then
     log_fail "reviewer finished before the spawning shell exited"
 fi
 
+for ((i = 0; i < 20; i++)); do
+    if [[ -f "$NOHUP_PID_FILE" ]]; then
+        break
+    fi
+    "$SLEEP_BIN" 0.1
+done
+
+if [[ ! -f "$NOHUP_PID_FILE" ]]; then
+    log_fail "expected nohup wrapper to record the detached process pid"
+fi
+
+detached_pid=$("$CAT_BIN" "$NOHUP_PID_FILE")
+kill -TERM "$detached_pid" 2>/dev/null || true
+kill -HUP "$detached_pid" 2>/dev/null || true
+
 for ((i = 0; i < 40; i++)); do
     if [[ -f "$REVIEWS_DIR/codex.done" ]]; then
         break
@@ -118,7 +135,7 @@ for ((i = 0; i < 40; i++)); do
 done
 
 if [[ ! -f "$REVIEWS_DIR/codex.done" ]]; then
-    log_fail "expected codex.done to be created without setsid"
+    log_fail "expected codex.done to be created without setsid even after TERM/HUP"
 fi
 
 if [[ -f "$PATH_BASH_MARKER" ]]; then

@@ -50,7 +50,9 @@ cat > "$TEST_HOME/.claude/settings.json" <<EOF
   "allowlist": [
     "Bash(/tmp/keep-me:*)",
     "Bash($TEST_HOME/.claude/plugins/cache/cerberus/cerberus/1.2.3/bin/review-gate:*)"
-  ]
+  ],
+  "notes": "$TEST_HOME/.claude/plugins/cache/cerberus/cerberus/should-not-change",
+  "other_path": "/usr/local/bin/tool"
 }
 EOF
 
@@ -92,6 +94,10 @@ if ! grep -q 'Bash(/tmp/keep-me:\*)' "$TEST_HOME/.claude/settings.json"; then
     log_fail "expected unrelated allowlist entry to remain unchanged"
 fi
 
+if ! grep -q "$TEST_HOME/.claude/plugins/cache/cerberus/cerberus/should-not-change" "$TEST_HOME/.claude/settings.json"; then
+    log_fail "expected non-allowlist strings containing the cache prefix to remain unchanged"
+fi
+
 log_pass "update-plugin rewrites allowlist paths and preserves valid JSON"
 
 cat > "$INVALID_TEST_HOME/.claude/settings.json" <<EOF
@@ -102,13 +108,21 @@ cat > "$INVALID_TEST_HOME/.claude/settings.json" <<EOF
 }
 EOF
 
-cat > "$INVALID_TEST_HOME/.claude/plugins/installed_plugins.json" <<'EOF'
-{invalid json
+cat > "$INVALID_TEST_HOME/.claude/plugins/installed_plugins.json" <<EOF
+{
+  "plugins": {
+    "cerberus@cerberus": [
+      {"version": "$PLUGIN_VERSION"}
+    ]
+  }
+}
 EOF
 
 original_invalid_settings=$(cat "$INVALID_TEST_HOME/.claude/settings.json")
 
-log_test "update-plugin leaves settings unchanged when rewritten JSON is invalid"
+printf '{invalid json' > "$INVALID_TEST_HOME/.claude/settings.json"
+
+log_test "update-plugin leaves settings unchanged when settings.json is invalid"
 
 set +e
 HOME="$INVALID_TEST_HOME" PATH="$FAKE_BIN:$TOOL_PATH:/usr/bin:/bin" "$UPDATE_PLUGIN" >/dev/null 2>&1
@@ -116,11 +130,13 @@ status=$?
 set -e
 
 if [[ "$status" -eq 0 ]]; then
-    log_fail "expected update-plugin to fail when rewrite produces invalid JSON"
+    log_fail "expected update-plugin to fail when settings.json is invalid"
 fi
 
-if [[ "$(cat "$INVALID_TEST_HOME/.claude/settings.json")" != "$original_invalid_settings" ]]; then
-    log_fail "expected settings.json to remain unchanged after validation failure"
+if [[ "$(cat "$INVALID_TEST_HOME/.claude/settings.json")" != '{invalid json' ]]; then
+    log_fail "expected invalid settings.json to remain unchanged after rewrite failure"
 fi
 
-log_pass "update-plugin rejects invalid rewritten JSON without overwriting settings"
+printf '%s' "$original_invalid_settings" > "$INVALID_TEST_HOME/.claude/settings.json"
+
+log_pass "update-plugin rejects invalid settings.json without overwriting it"

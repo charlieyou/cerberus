@@ -550,14 +550,26 @@ spawn_reviewer() {
     spawn_detached_review_shell() {
         local script="$1"
         local bash_bin="${BASH:-/bin/bash}"
+        local old_hup old_int old_term child_pid
 
         if command -v setsid >/dev/null 2>&1; then
             nohup setsid "$bash_bin" -c "$script" </dev/null >/dev/null 2>&1 &
             return
         fi
 
-        nohup "$bash_bin" -c "trap '' HUP INT TERM; $script" </dev/null >/dev/null 2>&1 &
-        disown "$!" 2>/dev/null || true
+        old_hup=$(trap -p HUP || true)
+        old_int=$(trap -p INT || true)
+        old_term=$(trap -p TERM || true)
+
+        trap '' HUP INT TERM
+        nohup "$bash_bin" -c "$script" </dev/null >/dev/null 2>&1 &
+        child_pid=$!
+
+        if [[ -n "$old_hup" ]]; then eval "$old_hup"; else trap - HUP; fi
+        if [[ -n "$old_int" ]]; then eval "$old_int"; else trap - INT; fi
+        if [[ -n "$old_term" ]]; then eval "$old_term"; else trap - TERM; fi
+
+        disown "$child_pid" 2>/dev/null || true
     }
 
     # Ensure reviews directory exists
