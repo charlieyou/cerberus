@@ -14,6 +14,8 @@
 - Reviewer runners: `.amp/plugins/lib/runners.ts` — runReviewer(opts) for single, runAllReviewers(opts) for parallel execution
 - Runner ExecFn type is `(cmd, opts) => Promise<{stdout,stderr,exitCode}>` — inject ctx.$ or mock in tests
 - Runner results written to `<thread>/<gateId>/reviews/<reviewer>.json` + `.done`/`.failed` sentinels
+- Commands: `amp.registerCommand(id, { title, category, description }, handler)` — handler receives `ctx` with `.thread`, `.ui`, `.$`
+- `ctx.ui.input()` returns `undefined` when cancelled — always guard with `if (x === undefined) return`
 
 ---
 
@@ -95,3 +97,18 @@ Thread: https://ampcode.com/threads/T-019d8cf7-407a-7480-ba2f-dee023b8c114
     - formatReviewFeedback handles three branches: auto_approve, max-rounds-reached, and requires_decision (with blocking/informational split)
     - The bash implementation also has `collect_issues`, `collect_blocking_issues`, `collect_informational_findings` — all ported as TypeScript equivalents
   ---
+
+## 2025-04-14 - US-008
+Thread: https://ampcode.com/threads/T-019d8d00-fef6-746e-97d4-12cd70560540
+- Registered `review-code` command under the Cerberus category in `.amp/plugins/cerberus.ts`
+- Command collects review options via 5 sequential `ctx.ui.input` prompts: diff mode, intelligence mode, reviewers, consensus mode, and max rounds
+- Creates a new gate via `createGateState`, sets it as active gate, and spawns reviewers with `runAllReviewers`
+- Runner results written via `writeRunnerResult` and gate state updated with output file references
+- Added `parseReviewers` helper for comma-separated reviewer input validation
+- Files changed: `.amp/plugins/cerberus.ts` (modified)
+- **Learnings for future iterations:**
+  - `amp.registerCommand` takes (id, metadata, handler) — metadata needs `title`, `category`, `description`
+  - `ctx.ui.input` returns `undefined` when cancelled — always check before proceeding
+  - `ctx.$` is the shell exec function available in command context; wrap it to match the `ExecFn` signature for runners
+  - GateState doesn't currently store consensus mode or maxRounds — future stories (US-009) will need to extend GateState or store these in a separate config file
+---
