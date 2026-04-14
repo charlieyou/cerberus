@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Updates the cerberus plugin and fixes allowlist paths in settings.json
 
 set -e
@@ -29,12 +29,43 @@ echo "==> New bin path: $NEW_BIN_PATH"
 # Update settings.json: replace any cerberus version path with the new one
 # Match pattern: /home/cyou/.claude/plugins/cache/cerberus/cerberus/<version>/bin/<script>
 if [[ -f "$SETTINGS_FILE" ]]; then
-    # Use sed to replace version numbers in cerberus paths
-    ESCAPED_CACHE=$(printf '%s\n' "$PLUGIN_CACHE" | sed 's/[[\.*^$()+?{|]/\\&/g')
-    
     # Replace pattern: cache/cerberus/cerberus/<old-version>/bin/ with new version
-    sed -i -E "s|($ESCAPED_CACHE)/[^/]+/bin/|\\1/$NEW_VERSION/bin/|g" "$SETTINGS_FILE"
-    
+    TMP_SETTINGS_FILE=$(mktemp)
+    SETTINGS_CONTENT=$(cat "$SETTINGS_FILE")
+    UPDATED_CONTENT=""
+    REMAINING_CONTENT="$SETTINGS_CONTENT"
+    PATH_PREFIX="$PLUGIN_CACHE/"
+    REPLACEMENT_PREFIX="$PLUGIN_CACHE/$NEW_VERSION/bin/"
+
+    while [[ "$REMAINING_CONTENT" == *"$PATH_PREFIX"* ]]; do
+        PREFIX_CONTENT="${REMAINING_CONTENT%%"$PATH_PREFIX"*}"
+        AFTER_PREFIX="${REMAINING_CONTENT#*"$PATH_PREFIX"}"
+
+        if [[ "$AFTER_PREFIX" != *"/bin/"* ]]; then
+            break
+        fi
+
+        AFTER_BIN="${AFTER_PREFIX#*"/bin/"}"
+        UPDATED_CONTENT+="$PREFIX_CONTENT$REPLACEMENT_PREFIX"
+        REMAINING_CONTENT="$AFTER_BIN"
+    done
+
+    if [[ "$UPDATED_CONTENT" == "" ]]; then
+        UPDATED_CONTENT="$SETTINGS_CONTENT"
+    elif [[ -n "$REMAINING_CONTENT" ]]; then
+        UPDATED_CONTENT+="$REMAINING_CONTENT"
+    fi
+
+    printf '%s' "$UPDATED_CONTENT" > "$TMP_SETTINGS_FILE"
+
+    if ! jq empty "$TMP_SETTINGS_FILE" >/dev/null 2>&1; then
+        rm -f "$TMP_SETTINGS_FILE"
+        echo "Error: Rewritten settings are invalid JSON"
+        exit 1
+    fi
+
+    mv "$TMP_SETTINGS_FILE" "$SETTINGS_FILE"
+
     echo "==> Updated settings.json allowlist paths"
 else
     echo "Warning: $SETTINGS_FILE not found"

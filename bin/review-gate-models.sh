@@ -317,7 +317,7 @@ repair_review_output() {
 extract_last_json_object() {
     local file="$1"
     local debug="${2:-false}"
-    python - "$file" "$debug" <<'PY'
+    python3 - "$file" "$debug" <<'PY'
 import json, sys
 
 path = sys.argv[1]
@@ -547,6 +547,19 @@ spawn_reviewer() {
     local prompt_file="$3"
     local schema_file="$4"
 
+    spawn_detached_review_shell() {
+        local script="$1"
+        local bash_bin="${BASH:-/bin/bash}"
+
+        if command -v setsid >/dev/null 2>&1; then
+            nohup setsid "$bash_bin" -c "$script" </dev/null >/dev/null 2>&1 &
+            return
+        fi
+
+        nohup "$bash_bin" -c "trap '' HUP INT TERM; $script" </dev/null >/dev/null 2>&1 &
+        disown "$!" 2>/dev/null || true
+    }
+
     # Ensure reviews directory exists
     mkdir -p "$REVIEWS_DIR"
 
@@ -579,13 +592,13 @@ spawn_reviewer() {
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_MODEL="$gemini_model" \
-            nohup setsid bash -c '
+            spawn_detached_review_shell '
                 if gemini -m "$REVIEW_MODEL" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
                 fi
-            ' >/dev/null 2>&1 &
+            '
             ;;
         codex)
             echo "Spawning codex reviewer (model: $codex_model, reasoning: $codex_reasoning)..." >&2
@@ -595,13 +608,14 @@ spawn_reviewer() {
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_SCHEMA="$schema_file" \
             REVIEW_MODEL="$codex_model" \
-            nohup setsid bash -c '
-                if codex exec -m "$REVIEW_MODEL" -c model_reasoning_effort=\"'"$codex_reasoning"'\" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+            REVIEW_REASONING="$codex_reasoning" \
+            spawn_detached_review_shell '
+                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
                 fi
-            ' >/dev/null 2>&1 &
+            '
             ;;
         claude)
             echo "Spawning claude reviewer (model: $claude_model)..." >&2
@@ -612,7 +626,7 @@ spawn_reviewer() {
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_MODEL="$claude_model" \
-            nohup setsid bash -c '
+            spawn_detached_review_shell '
                 read -r -a claude_allowed_tools <<< "$CLAUDE_ALLOWED_TOOLS"
                 read -r -a claude_disallowed_tools <<< "$CLAUDE_DISALLOWED_TOOLS"
                 if claude -p --model "$REVIEW_MODEL" --output-format json \
@@ -623,7 +637,7 @@ spawn_reviewer() {
                 else
                     touch "$REVIEW_FAIL"
                 fi
-            ' >/dev/null 2>&1 &
+            '
             ;;
         *)
             echo "Unknown reviewer: $name" >&2
