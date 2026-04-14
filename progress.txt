@@ -9,6 +9,8 @@
 - Gate state is scoped per thread+gateId: `.tmp/cerberus/<thread>/<gateId>/gate-state.json`
 - Active gate pointer: `.tmp/cerberus/<thread>/active-gate` — plain text file with the gate ID
 - Run tests with `bun test ./.amp/plugins/lib/gate.test.ts` (note leading `./` required)
+- Model resolution: `.amp/plugins/lib/models.ts` — resolveModels(mode, env) returns per-reviewer model/effort settings
+- Review JSON parsing: `.amp/plugins/lib/review-json.ts` — parseReviewOutput(text) is the all-in-one entry point
 
 ---
 
@@ -39,4 +41,17 @@ Thread: https://ampcode.com/threads/T-019d8cf4-598f-7208-8ebe-8c6d926722db
   - Gate state is scoped under `<thread>/<gateId>/` subdirs to support multiple gates per thread
   - Lock uses write-then-verify pattern for basic mutual exclusion (not atomic on all filesystems but sufficient for single-machine plugin use)
   - The bash implementation stores gate-state.json at session level; the TS version nests under gateId for cleaner separation
+---
+
+## 2025-04-14 - US-005
+Thread: https://ampcode.com/threads/T-019d8cf7-407a-7480-ba2f-dee023b8c114
+- Implemented model resolution in `.amp/plugins/lib/models.ts` — normalizeMode, resolveModels for fast/smart/max with env var overrides
+- Implemented review JSON parsing in `.amp/plugins/lib/review-json.ts` — extractLastJsonObject, unwrapReviewJson, validateReviewResult, parseReviewOutput
+- 11 model tests + 30 review-json tests all passing
+- Files changed: `.amp/plugins/lib/models.ts` (new), `.amp/plugins/lib/models.test.ts` (new), `.amp/plugins/lib/review-json.ts` (new), `.amp/plugins/lib/review-json.test.ts` (new)
+- **Learnings for future iterations:**
+  - `extractLastJsonObject` scans for all `{` chars and tries JSON.parse at each — prefers review candidates (objects with `verdict`, `structured_output`, or `response` keys) over generic objects
+  - Model resolution uses two-tier env vars: `*_OVERRIDE` takes precedence over base `*` var, which takes precedence over mode defaults
+  - The `findJsonEnd` helper does brace-depth tracking with string/escape awareness for reliable JSON boundary detection
+  - `unwrapReviewJson` handles three wrapper types: `structured_output` (codex), `response` (gemini), `result` (claude) — in that order
 ---
