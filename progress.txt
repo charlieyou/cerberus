@@ -74,4 +74,24 @@ Thread: https://ampcode.com/threads/T-019d8cf7-407a-7480-ba2f-dee023b8c114
   - Claude reviewer uses --allowedTools/--disallowedTools flags for read-only enforcement
   - Codex uses `-s read-only` plus `--output-schema` for structured output
   - Runner results follow the same `.json` + `.done`/`.failed` sentinel pattern as the bash implementation
+  - Consensus library: `.amp/plugins/lib/consensus.ts` — evaluateConsensus(inputs, mode) for majority/all/any; formatReviewFeedback for markdown output
+  - Blocking = P0/P1 findings; any FAIL verdict or P0/P1 finding forces requires_decision regardless of consensus mode
+  - Majority mode: all-PASS or 2+ PASS with only P2/P3 findings → auto_approve; otherwise requires_decision
+     ---
+
+  ## 2025-04-14 - US-007
+  Thread: https://ampcode.com/threads/T-019d8cfd-40a0-770d-be19-d493b928df65
+  - Implemented consensus evaluation and review feedback formatting at `.amp/plugins/lib/consensus.ts`
+  - `evaluateConsensus(inputs, mode)` supports majority, all, and any consensus modes
+  - FAIL verdicts and P0/P1 findings always force `requires_decision` regardless of mode
+  - Majority mode: all-PASS or 2+ PASS with only P2/P3 → auto_approve
+  - `formatReviewFeedback` produces markdown with results table, blocking issues, informational items, and round counter
+  - Helpers: `isBlocking`, `collectBlockingFindings`, `collectAllFindings`, `formatResultsTable`, `formatBlockingIssues`, `formatInformationalFindings`
+  - 34 tests covering all consensus modes, P0/P1 blocking, feedback formatting, max-round, and mixed-verdict scenarios
+  - Files changed: `.amp/plugins/lib/consensus.ts` (new), `.amp/plugins/lib/consensus.test.ts` (new)
+  - **Learnings for future iterations:**
+    - Consensus logic mirrors bash `calculate_consensus` in review-gate-hook.sh (lines 916-1072)
+    - ReviewerInput type decouples consensus from RunnerResult — can be built from gate state or runner output
+    - formatReviewFeedback handles three branches: auto_approve, max-rounds-reached, and requires_decision (with blocking/informational split)
+    - The bash implementation also has `collect_issues`, `collect_blocking_issues`, `collect_informational_findings` — all ported as TypeScript equivalents
   ---
