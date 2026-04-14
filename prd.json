@@ -1,0 +1,220 @@
+{
+  "project": "Cerberus",
+  "branchName": "ralph/amp-plugin-migration",
+  "description": "Port the Cerberus Claude Code plugin to an Amp plugin using the @ampcode/plugin API while preserving review gates, reviewer orchestration, and command-driven workflows.",
+  "userStories": [
+    {
+      "id": "US-003",
+      "title": "Add the production Cerberus plugin entry point",
+      "description": "As a developer, I want a real Amp plugin entry point so the migration has a stable place to register commands, hooks, and shared runtime utilities.",
+      "acceptanceCriteria": [
+        "Add .amp/plugins/cerberus.ts with the required Amp experimental header and default export",
+        "Register the initial session.start handler and shared plugin root/path resolution helpers",
+        "The plugin can resolve bundled prompt files relative to the plugin root",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Implement review gate storage and locking",
+      "description": "As a developer, I want file-backed gate storage keyed by thread and gate ID so Cerberus can safely persist review sessions across turns and restarts.",
+      "acceptanceCriteria": [
+        "Implement thread-scoped active-gate and gate-state persistence under the Cerberus state directory",
+        "Gate state stores status, iteration counters, reviewer selection, timestamps, and turn dedupe fields",
+        "Implement a lock or lease mechanism that prevents overlapping gate mutations for the same gate",
+        "Automated tests cover gate read/write and lock behavior",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Port model selection and review JSON parsing helpers",
+      "description": "As a developer, I want the review helper logic in TypeScript so reviewer output and intelligence modes are handled consistently without relying on bash utilities.",
+      "acceptanceCriteria": [
+        "Implement model resolution for fast, smart, and max modes including environment variable overrides",
+        "Implement helpers to extract, unwrap, and validate the last JSON object from reviewer output",
+        "Automated tests cover malformed wrapper text and model override scenarios",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Implement reviewer process runners",
+      "description": "As a developer, I want TypeScript reviewer runners so Cerberus can spawn Codex, Gemini, and Claude reviews in parallel through ctx.$ with predictable timeouts and output capture.",
+      "acceptanceCriteria": [
+        "Implement reviewer runners for codex, gemini, and claude using ctx.$",
+        "Reviewer execution supports parallel runs, per-reviewer timeouts, and overall failure reporting",
+        "Runner results are written in the structure expected by the gate evaluation flow",
+        "Automated tests mock CLI execution and cover success, timeout, and parse-failure cases",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Implement consensus evaluation and review feedback formatting",
+      "description": "As a developer, I want consensus and feedback logic in TypeScript so the gate can decide whether to pass, fail, or continue with actionable reviewer feedback.",
+      "acceptanceCriteria": [
+        "Implement majority, all, and any consensus modes for PASS, FAIL, and NEEDS_WORK verdicts",
+        "Blocking severity handling distinguishes P0 and P1 findings from non-blocking notes",
+        "Review feedback formatter produces markdown suitable for an agent continuation message",
+        "Automated tests cover pass, fail, max-round, and mixed-verdict scenarios",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Add the review-code command scaffold",
+      "description": "As a user, I want a Review Code command in Amp so I can configure a Cerberus review from the command palette without manual file editing.",
+      "acceptanceCriteria": [
+        "Register the review-code command under the Cerberus category",
+        "The command collects the required review options through ctx.ui input prompts",
+        "Invoking the command creates a new gate and starts the first reviewer run using the selected options",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Implement the agent.end turn-end gate",
+      "description": "As a user, I want Cerberus to intercept review turns at agent.end so failed consensus can continue the thread with review feedback instead of silently stopping.",
+      "acceptanceCriteria": [
+        "The agent.end handler loads the active gate for the current thread and ignores unrelated turns",
+        "The handler uses locking plus turn dedupe or equivalent idempotency protection before mutating gate state",
+        "Pending reviewer runs wait with a bounded timeout and only advance when results are ready",
+        "Failed consensus returns an Amp continue action with formatted review feedback while successful consensus allows completion",
+        "Automated tests cover duplicate turns, pending reviewers, pass, and continue flows",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Add gate clearing and stale gate recovery",
+      "description": "As a user, I want to clear or recover stuck Cerberus gates so abandoned or outdated review sessions do not block later work in the same thread.",
+      "acceptanceCriteria": [
+        "Register a clear-gate command that resolves the active gate and records the reason",
+        "Cerberus can detect stale pending gates and surface a recovery or cleanup path",
+        "Manual gate resolution leaves the thread in a non-blocking terminal state",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Persist code review scope and archive prior iterations",
+      "description": "As a developer, I want each code review session to remember its original scope and archive previous reviewer outputs so later rounds can converge without losing context.",
+      "acceptanceCriteria": [
+        "Persist original code review scope including diff mode, diff target, exclusions, and focus area",
+        "Before each new review round, move prior reviewer outputs into an iteration archive directory",
+        "Subsequent rounds include the archived context needed for iterative convergence",
+        "Automated tests cover scope persistence and archive directory creation",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Register review management tools",
+      "description": "As an agent, I want first-class Cerberus review tools so I can spawn reviews, inspect gate status, and resolve gates during automated workflows.",
+      "acceptanceCriteria": [
+        "Register cerberus_spawn_review with validated inputs for review type, reviewers, mode, consensus, and max rounds",
+        "Register cerberus_gate_status and cerberus_resolve_gate with outputs that reflect the underlying gate state",
+        "Tool execution reuses the shared review gate library rather than duplicating business logic",
+        "Automated tests cover tool input validation and happy-path execution",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Implement prompt loading and generation tooling",
+      "description": "As an agent, I want Cerberus generation tooling and prompt loading utilities so multi-model spec and plan generation can run from the Amp plugin without bash templates.",
+      "acceptanceCriteria": [
+        "Implement prompt file loading relative to the plugin root for bundled markdown assets",
+        "Register cerberus_generate for the initial generator types defined in the migration plan",
+        "Template substitution is implemented in TypeScript for the prompts used by the generator flow",
+        "Automated tests cover prompt resolution and generator input validation",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Register the remaining Cerberus commands",
+      "description": "As a user, I want the rest of the Cerberus review and generator commands available from the Amp command palette so the migrated plugin covers the existing command surface.",
+      "acceptanceCriteria": [
+        "Register review-plan, review-spec, verify-epic, create-spec, create-plan, create-tasks, healthcheck, and architecture-review commands",
+        "Each command uses shared input handling and shared orchestration helpers where applicable",
+        "Command metadata places all commands under the Cerberus category with accurate descriptions",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Add integration coverage for the vertical slice",
+      "description": "As a developer, I want integration tests around the review-code flow so the new Amp plugin behavior stays reliable as the rest of the migration lands.",
+      "acceptanceCriteria": [
+        "Add integration tests that cover review spawn, agent.end gating, feedback continuation, fix iteration, and passing consensus",
+        "Reviewer subprocesses are mocked so the tests are deterministic and fast",
+        "Test coverage includes at least one stale or timeout recovery path",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Document regression comparison against the Claude Code plugin",
+      "description": "As a developer, I want a regression comparison between the legacy Claude Code plugin and the new Amp plugin so behavior differences are explicit before rollout.",
+      "acceptanceCriteria": [
+        "Run the same representative review scenarios through both plugins",
+        "Document expected upgrades, pending backfills, and true regressions in a comparison artifact",
+        "Any remaining true regressions are clearly called out with follow-up work identified",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

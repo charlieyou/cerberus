@@ -1,0 +1,23 @@
+## Codebase Patterns
+- Plugin entry points live in `.amp/plugins/` and require the `// @i-know-the-amp-plugin-api-is-wip-and-very-experimental-right-now` header
+- Use `import.meta.dir` to resolve plugin root; prompts live in `prompts/` relative to project root
+- State directory: `.tmp/cerberus/<thread-id>/` for per-thread gate persistence
+- Typecheck verification: `PLUGINS=all amp plugins list` confirms plugin loads; `PLUGINS=all amp plugins exec <plugin> <event> --data '{}'` tests execution
+- Sanitize thread IDs with `id.replace(/[^a-zA-Z0-9._-]/g, '_')` for filesystem paths
+- Export shared utilities (getPluginRoot, loadPrompt, resolveThreadStateDir) from cerberus.ts for use by future library modules
+
+---
+
+## 2025-04-14 - US-003
+Thread: https://ampcode.com/threads/T-019d8cea-ac82-716a-bb16-77ca42893cca
+- Implemented production Cerberus plugin entry point at `.amp/plugins/cerberus.ts`
+- Registered `session.start` handler, exported shared path resolution helpers (getPluginRoot, getPromptsDir, getStateDir, loadPrompt, resolveThreadStateDir)
+- Verified prompt loading works (tested with `generators/healthcheck.md`)
+- Plugin loads successfully with `PLUGINS=all amp plugins list`
+- Files changed: `.amp/plugins/cerberus.ts` (new)
+- **Learnings for future iterations:**
+  - `@ampcode/plugin` types are resolved by Amp's Bun runtime — no `package.json` or `tsconfig.json` needed in this repo
+  - `import.meta.dir` points to `.amp/plugins/`, so resolve `../..` to get project root
+  - `PLUGINS=all amp plugins list` is the quickest way to verify a plugin is valid and active
+  - The spike plugin at `cerberus-spike.ts` is still present for reference — don't break it
+---
