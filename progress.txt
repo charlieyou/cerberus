@@ -11,6 +11,9 @@
 - Run tests with `bun test ./.amp/plugins/lib/gate.test.ts` (note leading `./` required)
 - Model resolution: `.amp/plugins/lib/models.ts` — resolveModels(mode, env) returns per-reviewer model/effort settings
 - Review JSON parsing: `.amp/plugins/lib/review-json.ts` — parseReviewOutput(text) is the all-in-one entry point
+- Reviewer runners: `.amp/plugins/lib/runners.ts` — runReviewer(opts) for single, runAllReviewers(opts) for parallel execution
+- Runner ExecFn type is `(cmd, opts) => Promise<{stdout,stderr,exitCode}>` — inject ctx.$ or mock in tests
+- Runner results written to `<thread>/<gateId>/reviews/<reviewer>.json` + `.done`/`.failed` sentinels
 
 ---
 
@@ -54,4 +57,21 @@ Thread: https://ampcode.com/threads/T-019d8cf7-407a-7480-ba2f-dee023b8c114
   - Model resolution uses two-tier env vars: `*_OVERRIDE` takes precedence over base `*` var, which takes precedence over mode defaults
   - The `findJsonEnd` helper does brace-depth tracking with string/escape awareness for reliable JSON boundary detection
   - `unwrapReviewJson` handles three wrapper types: `structured_output` (codex), `response` (gemini), `result` (claude) — in that order
----
+  ---
+
+  ## 2025-04-14 - US-006
+  Thread: https://ampcode.com/threads/T-019d8cfa-7f8d-725e-964a-f86be58c05d0
+  - Implemented reviewer process runners at `.amp/plugins/lib/runners.ts`
+  - `buildReviewerCommand` builds CLI args+env for codex, gemini, claude matching bash `spawn_reviewer`
+  - `runReviewer` executes via injected ExecFn, handles exit codes, parse failures, and timeouts
+  - `runAllReviewers` runs reviewers in parallel via Promise.all with shared model resolution
+  - `writeRunnerResult` / `readRunnerOutput` for gate-compatible file persistence
+  - 21 tests covering command building, success/failure/timeout, parallel execution, and file I/O
+  - Files changed: `.amp/plugins/lib/runners.ts` (new), `.amp/plugins/lib/runners.test.ts` (new)
+  - **Learnings for future iterations:**
+  - ExecFn abstraction makes runners fully testable without spawning real processes
+  - Gemini needs GEMINI_CLI_SYSTEM_SETTINGS_PATH env var pointing to `config/gemini-readonly-settings.json`
+  - Claude reviewer uses --allowedTools/--disallowedTools flags for read-only enforcement
+  - Codex uses `-s read-only` plus `--output-schema` for structured output
+  - Runner results follow the same `.json` + `.done`/`.failed` sentinel pattern as the bash implementation
+  ---
