@@ -181,7 +181,7 @@ test_extract_gemini_telemetry() {
     actual_session=$(printf '%s' "$actual" | jq -r '.session_id')
     actual_model=$(printf '%s' "$actual" | jq -r '.model')
     
-    if [[ "$actual_agent" == "gemini" && "$actual_session" == "gemini-session-456" && "$actual_model" == "gemini-2.5-pro" ]]; then
+    if [[ "$actual_agent" == "gemini" && "$actual_session" == "gemini-session-456" && "$actual_model" == "gemini-3.1-pro-preview" ]]; then
         log_pass "gemini telemetry extraction matches expected"
     else
         log_fail "gemini telemetry mismatch (agent=$actual_agent, session=$actual_session, model=$actual_model)"

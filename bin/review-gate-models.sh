@@ -67,19 +67,19 @@ resolve_intelligence_mode() {
             ;;
         smart)
             CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-high}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-pro-preview}}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3.1-pro-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
             ;;
         max)
             CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-xhigh}"
-            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-pro-preview}}"
+            GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3.1-pro-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
             PROMPT_ULTRATHINK="true"
             ;;
     esac
 
     # Codex model does not vary by mode.
-    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL_OVERRIDE:-${CODEX_MODEL:-gpt-5.2}}"
+    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL_OVERRIDE:-${CODEX_MODEL:-gpt-5.4}}"
 }
 
 # Read-only tool policy for external CLIs.
@@ -182,10 +182,10 @@ repair_review_output() {
             [[ -z "$model" ]] && model="haiku"
             ;;
         codex)
-            [[ -z "$model" ]] && model="gpt-5.1-codex-mini"
+            [[ -z "$model" ]] && model="gpt-5.4-mini"
             ;;
         gemini)
-            [[ -z "$model" ]] && model="gemini-2.5-flash-lite"
+            [[ -z "$model" ]] && model="gemini-3.1-flash-lite-preview"
             ;;
         *)
             rg_log "review-gate: repair_json unknown provider '$provider'"

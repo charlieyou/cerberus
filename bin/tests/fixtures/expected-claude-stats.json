@@ -1,7 +1,7 @@
 {
   "agent": "claude",
   "session_id": "abc123-session",
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-6",
   "tokens": {
     "input": 1500,
     "output": 350,

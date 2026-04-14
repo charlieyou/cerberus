@@ -10,7 +10,7 @@
   "duration_api_ms": 4200,
   "total_cost_usd": 0.0125,
   "modelUsage": {
-    "claude-sonnet-4-20250514": {
+    "claude-sonnet-4-6": {
       "input": 1500,
       "output": 350,
       "cached": 200

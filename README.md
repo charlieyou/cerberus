@@ -175,8 +175,8 @@ All review and generator commands accept `--mode <fast|smart|max>` to trade off 
 | Mode | Codex reasoning | Gemini model | Claude model | Prompt |
 |------|-----------------|--------------|--------------|--------|
 | fast | medium | `gemini-3-flash-preview` | `sonnet` | - |
-| smart | high | `gemini-3-pro-preview` | `opus` | - |
-| max | xhigh | `gemini-3-pro-preview` | `opus` | `ultrathink` |
+| smart | high | `gemini-3.1-pro-preview` | `opus` | - |
+| max | xhigh | `gemini-3.1-pro-preview` | `opus` | `ultrathink` |
 
 Examples:
 
@@ -335,8 +335,8 @@ Model override variables (override the mode-based defaults):
 
 | Variable | Description |
 |----------|-------------|
-| `CODEX_MODEL_OVERRIDE` | Override Codex model (default: `gpt-5.2`) |
-| `GEMINI_MODEL_OVERRIDE` | Override Gemini model (e.g., `gemini-2.5-pro`) |
+| `CODEX_MODEL_OVERRIDE` | Override Codex model (default: `gpt-5.4`) |
+| `GEMINI_MODEL_OVERRIDE` | Override Gemini model (e.g., `gemini-3.1-pro-preview`) |
 | `CLAUDE_MODEL_OVERRIDE` | Override Claude model (e.g., `sonnet`) |
 | `CODEX_REASONING_EFFORT_OVERRIDE` | Override Codex reasoning effort (`medium`/`high`/`xhigh`) |
 

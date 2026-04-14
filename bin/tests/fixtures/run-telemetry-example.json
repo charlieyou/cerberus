@@ -14,7 +14,7 @@
     },
     "total_cost_usd": 0.0375,
     "agents_used": ["claude", "gemini"],
-    "models_used": ["claude-sonnet-4-20250514", "gemini-2.5-pro"],
+    "models_used": ["claude-sonnet-4-6", "gemini-3.1-pro-preview"],
     "tools_used": {
       "Read": 8,
       "Grep": 4,
