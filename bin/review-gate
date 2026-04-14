@@ -2266,7 +2266,7 @@ USAGE
                 created_at=$(jq -r '.created_at // ""' "$STATE_FILE" 2>/dev/null || echo "")
                 if [[ -n "$created_at" ]]; then
                     local created_epoch now_epoch
-                    created_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo 0)
+                    created_epoch=$(iso8601_to_epoch "$created_at")
                     now_epoch=$(date +%s)
                     age_seconds=$((now_epoch - created_epoch))
 
@@ -3011,7 +3011,7 @@ USAGE
             created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
             epoch=0
             if [[ -n "$created_at" ]]; then
-                epoch=$(date -d "$created_at" +%s 2>/dev/null || echo 0)
+                epoch=$(iso8601_to_epoch "$created_at")
             fi
             if [[ "$epoch" -eq 0 ]]; then
                 epoch=$(stat -c %Y "$state_file" 2>/dev/null || stat -f %m "$state_file" 2>/dev/null || echo 0)
@@ -3063,8 +3063,16 @@ USAGE
     local start_time
     start_time=$(date +%s)
     local timed_out="false"
+    local resolved_early="false"
 
     while true; do
+        local state_status
+        state_status=$(jq -r '.status // ""' "$state_file" 2>/dev/null || echo "")
+        if [[ "$state_status" == "resolved" ]]; then
+            resolved_early="true"
+            break
+        fi
+
         local all_done="true"
         local reviewer
         for reviewer in $reviewers; do
@@ -3225,6 +3233,17 @@ USAGE
     if [[ "$timed_out" == "true" ]]; then
         status="timeout"
         consensus_verdict=""
+    elif [[ "$resolved_early" == "true" ]]; then
+        status="resolved"
+        if [[ "$valid_verdict_count" -eq 0 ]]; then
+            consensus_verdict="ERROR"
+        elif [[ "$has_fail" -gt 0 ]]; then
+            consensus_verdict="FAIL"
+        elif [[ "$has_needs" -gt 0 ]]; then
+            consensus_verdict="NEEDS_WORK"
+        else
+            consensus_verdict="PASS"
+        fi
     else
         status="complete"
         # Treat as ERROR if no valid verdicts (regardless of parse errors)

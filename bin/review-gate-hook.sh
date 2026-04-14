@@ -660,7 +660,7 @@ review_gate_check() {
         log "review-gate: state file exists"
         CREATED_AT=$(jq -r '.created_at // ""' "$STATE_FILE" 2>/dev/null || echo "")
         if [[ -n "$CREATED_AT" ]]; then
-            CREATED_EPOCH=$(date -d "$CREATED_AT" +%s 2>/dev/null || echo 0)
+            CREATED_EPOCH=$(iso8601_to_epoch "$CREATED_AT")
             NOW_EPOCH=$(date +%s)
             AGE_SECONDS=$((NOW_EPOCH - CREATED_EPOCH))
             log "review-gate: state age ${AGE_SECONDS}s"

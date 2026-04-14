@@ -52,6 +52,43 @@ get_review_base_dir() {
     resolve_review_dir "" "${1:-}"
 }
 
+iso8601_to_epoch() {
+    local timestamp="${1:-}"
+    local epoch=""
+
+    if [[ -z "$timestamp" ]]; then
+        echo 0
+        return 0
+    fi
+
+    epoch=$(python3 - "$timestamp" <<'PY' 2>/dev/null || true
+import datetime
+import sys
+
+timestamp = sys.argv[1]
+
+try:
+    dt = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(1)
+
+print(int(dt.timestamp()))
+PY
+)
+    if [[ "$epoch" =~ ^[0-9]+$ ]]; then
+        echo "$epoch"
+        return 0
+    fi
+
+    epoch=$(date -d "$timestamp" +%s 2>/dev/null || true)
+    if [[ "$epoch" =~ ^[0-9]+$ ]]; then
+        echo "$epoch"
+        return 0
+    fi
+
+    echo 0
+}
+
 # Archive previous reviews to a timestamped directory
 archive_reviews() {
     local review_dir="$1"
@@ -222,7 +259,7 @@ find_active_gate() {
                 decided_at=$(jq -r '.decision.decided_at // ""' "$state_file" 2>/dev/null || echo "")
                 if [[ -n "$decided_at" ]]; then
                     local decided_epoch now_epoch age_seconds
-                    decided_epoch=$(date -d "$decided_at" +%s 2>/dev/null || echo 0)
+                    decided_epoch=$(iso8601_to_epoch "$decided_at")
                     now_epoch=$(date +%s)
                     age_seconds=$((now_epoch - decided_epoch))
                     if [[ $age_seconds -lt 1800 ]]; then
