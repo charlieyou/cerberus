@@ -902,30 +902,28 @@ USAGE
     echo "$prompt_content" > "$prompt_file"
 
     # --- Spawn reviewers using existing infrastructure ---
-    local -a agents_arg=()
+    local -a spawn_cmd=("$0" "spawn")
     if [[ -n "$agents_csv" ]]; then
-        agents_arg=(--agents "$agents_csv")
+        spawn_cmd+=(--agents "$agents_csv")
     fi
-    local -a max_rounds_arg=()
     if [[ -n "$max_rounds" ]]; then
-        max_rounds_arg=(--max-rounds "$max_rounds")
+        spawn_cmd+=(--max-rounds "$max_rounds")
     fi
-    local -a mode_arg=()
     if [[ -n "$mode" ]]; then
-        mode_arg=(--mode "$mode")
+        spawn_cmd+=(--mode "$mode")
     fi
     # NOTE: Do not pass --context-file to spawn for code.
     # Task context is already injected into the prompt via ${CONTEXT} template variable.
     # Passing it to spawn would duplicate it and mislabel it as Author Context.
-    local -a consensus_arg=()
     if [[ -n "$consensus_mode" ]]; then
-        consensus_arg=(--consensus "$consensus_mode")
+        spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "${spawn_cmd[@]}"
 }
 
 review_gate_spawn_plan_review() {
@@ -1244,31 +1242,28 @@ JSON only, no markdown code fences:
     echo "$prompt_content" > "$prompt_file"
 
     # --- Spawn reviewers using existing infrastructure ---
-    local -a agents_arg=()
+    local -a spawn_cmd=("$0" "spawn" "--type=plan")
     if [[ -n "$agents_csv" ]]; then
-        agents_arg=(--agents "$agents_csv")
+        spawn_cmd+=(--agents "$agents_csv")
     fi
-    local -a max_rounds_arg=()
     if [[ -n "$max_rounds" ]]; then
-        max_rounds_arg=(--max-rounds "$max_rounds")
+        spawn_cmd+=(--max-rounds "$max_rounds")
     fi
-    local -a mode_arg=()
     if [[ -n "$mode" ]]; then
-        mode_arg=(--mode "$mode")
+        spawn_cmd+=(--mode "$mode")
     fi
-    local -a context_file_arg=()
     if [[ -n "$context_file" ]]; then
-        context_file_arg=(--context-file "$context_file")
+        spawn_cmd+=(--context-file "$context_file")
     fi
-    local -a consensus_arg=()
     if [[ -n "$consensus_mode" ]]; then
-        consensus_arg=(--consensus "$consensus_mode")
+        spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="plan" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "${spawn_cmd[@]}"
 
     # Update state to include plan path in mode
     local state_file="$review_dir/gate-state.json"
@@ -1541,31 +1536,28 @@ JSON only, no markdown code fences:
     echo "$prompt_content" > "$prompt_file"
 
     # --- Spawn reviewers using existing infrastructure ---
-    local -a agents_arg=()
+    local -a spawn_cmd=("$0" "spawn" "--type=spec")
     if [[ -n "$agents_csv" ]]; then
-        agents_arg=(--agents "$agents_csv")
+        spawn_cmd+=(--agents "$agents_csv")
     fi
-    local -a max_rounds_arg=()
     if [[ -n "$max_rounds" ]]; then
-        max_rounds_arg=(--max-rounds "$max_rounds")
+        spawn_cmd+=(--max-rounds "$max_rounds")
     fi
-    local -a mode_arg=()
     if [[ -n "$mode" ]]; then
-        mode_arg=(--mode "$mode")
+        spawn_cmd+=(--mode "$mode")
     fi
-    local -a context_file_arg=()
     if [[ -n "$context_file" ]]; then
-        context_file_arg=(--context-file "$context_file")
+        spawn_cmd+=(--context-file "$context_file")
     fi
-    local -a consensus_arg=()
     if [[ -n "$consensus_mode" ]]; then
-        consensus_arg=(--consensus "$consensus_mode")
+        spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="spec" "${context_file_arg[@]}" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "${spawn_cmd[@]}"
 
     # Update state to include spec path in mode
     local state_file="$review_dir/gate-state.json"
@@ -1909,27 +1901,25 @@ USAGE
     echo "$prompt_content" > "$prompt_file"
 
     # --- Spawn reviewers using existing infrastructure ---
-    local -a agents_arg=()
+    local -a spawn_cmd=("$0" "spawn" "--type=epic-verify")
     if [[ -n "$agents_csv" ]]; then
-        agents_arg=(--agents "$agents_csv")
+        spawn_cmd+=(--agents "$agents_csv")
     fi
-    local -a max_rounds_arg=()
     if [[ -n "$max_rounds" ]]; then
-        max_rounds_arg=(--max-rounds "$max_rounds")
+        spawn_cmd+=(--max-rounds "$max_rounds")
     fi
-    local -a mode_arg=()
     if [[ -n "$mode" ]]; then
-        mode_arg=(--mode "$mode")
+        spawn_cmd+=(--mode "$mode")
     fi
-    local -a consensus_arg=()
     if [[ -n "$consensus_mode" ]]; then
-        consensus_arg=(--consensus "$consensus_mode")
+        spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="epic-verify" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
-    "$0" spawn --type="epic-verify" "${agents_arg[@]}" "${max_rounds_arg[@]}" "${mode_arg[@]}" "${consensus_arg[@]}" "$artifact_path"
+    "${spawn_cmd[@]}"
 
     # Update state to include epic path in mode
     local state_file="$review_dir/gate-state.json"
@@ -2528,29 +2518,41 @@ PROMPT
         agents_list=(gemini codex claude)
     fi
 
-    # Validate and dedupe agents list
-    local -A agents_seen=()
-    local -a agents_final=()
-    local -A agents_allowed=([codex]=1 [gemini]=1 [claude]=1)
+    # Validate and dedupe agents list without associative arrays so this works
+    # with the Bash 3.2 that ships on macOS.
+    local agents_final_csv=""
     local agent
     for agent in "${agents_list[@]}"; do
         if [[ -z "$agent" ]]; then
             die "Invalid agents list (empty entry). Use comma-separated names: codex,gemini,claude"
         fi
-        if [[ -z "${agents_allowed[$agent]:-}" ]]; then
-            die "Unknown agent '$agent'. Valid: codex, gemini, claude"
-        fi
-        if [[ -z "${agents_seen[$agent]:-}" ]]; then
-            agents_final+=("$agent")
-            agents_seen[$agent]=1
-        fi
+
+        case "$agent" in
+            codex|gemini|claude)
+                ;;
+            *)
+                die "Unknown agent '$agent'. Valid: codex, gemini, claude"
+                ;;
+        esac
+
+        case ",${agents_final_csv}," in
+            *,"$agent",*)
+                ;;
+            *)
+                if [[ -n "$agents_final_csv" ]]; then
+                    agents_final_csv+=",$agent"
+                else
+                    agents_final_csv="$agent"
+                fi
+                ;;
+        esac
     done
 
-    if [[ ${#agents_final[@]} -eq 0 ]]; then
+    if [[ -z "$agents_final_csv" ]]; then
         die "Agents list cannot be empty"
     fi
 
-    agents_list=("${agents_final[@]}")
+    IFS=',' read -r -a agents_list <<< "$agents_final_csv"
 
     preflight_check
 

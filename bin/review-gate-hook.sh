@@ -324,17 +324,13 @@ review_gate_check() {
         local spawn_success=false
         local agents_csv
         agents_csv=$(extract_agents)
-        local -a agents_arg=()
         if [[ -n "$agents_csv" ]]; then
-            agents_arg=(--agents "$agents_csv")
             log "review-gate: using agents filter '$agents_csv'"
         fi
         local max_rounds
         max_rounds=$(extract_max_rounds)
-        local -a max_rounds_arg=()
         if [[ -n "$max_rounds" ]]; then
             if [[ "$max_rounds" =~ ^[0-9]+$ ]] && [[ "$max_rounds" -ge 1 ]]; then
-                max_rounds_arg=(--max-rounds "$max_rounds")
                 log "review-gate: using max-rounds '$max_rounds'"
             else
                 log "review-gate: invalid max-rounds '$max_rounds' (ignoring)"
@@ -343,17 +339,13 @@ review_gate_check() {
 
         local mode
         mode=$(extract_intelligence_mode)
-        local -a mode_arg=()
         if [[ -n "$mode" ]]; then
-            mode_arg=(--mode "$mode")
             log "review-gate: using mode '$mode'"
         fi
 
         local consensus_mode
         consensus_mode=$(jq -r '.config.consensus_mode // ""' "$STATE_FILE" 2>/dev/null || echo "")
-        local -a consensus_arg=()
         if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
-            consensus_arg=(--consensus "$consensus_mode")
             log "review-gate: using consensus '$consensus_mode'"
         fi
 
@@ -369,11 +361,28 @@ review_gate_check() {
             local -a args_array
             read -r -a args_array <<< "$diff_args"
 
+            local -a spawn_cmd=("$0" "spawn-code-review")
+            if [[ -n "$agents_csv" ]]; then
+                spawn_cmd+=(--agents "$agents_csv")
+            fi
+            if [[ -n "$max_rounds" ]]; then
+                spawn_cmd+=(--max-rounds "$max_rounds")
+            fi
+            if [[ -n "$mode" ]]; then
+                spawn_cmd+=(--mode "$mode")
+            fi
+            if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                spawn_cmd+=(--consensus "$consensus_mode")
+            fi
+            if [[ -n "$diff_args" ]]; then
+                spawn_cmd+=("${args_array[@]}")
+            fi
+
             if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-               "$0" spawn-code-review ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "${args_array[@]}" >/dev/null 2>&1; then
+               "${spawn_cmd[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         # For plan, re-read the plan file to capture edits
@@ -388,21 +397,49 @@ review_gate_check() {
             log "review-gate: plan re-spawn with plan_path='$plan_path'"
 
             if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+                local -a spawn_cmd=("$0" "spawn-plan-review")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$plan_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-plan-review ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$plan_path" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
                 log "review-gate: plan missing plan_path, falling back to artifact"
+                local -a spawn_cmd=("$0" "spawn")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -418,21 +455,49 @@ review_gate_check() {
             log "review-gate: spec re-spawn with spec_path='$spec_path'"
 
             if [[ -n "$spec_path" && -f "$spec_path" ]]; then
+                local -a spawn_cmd=("$0" "spawn-spec-review")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$spec_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-spec-review ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$spec_path" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
                 log "review-gate: spec missing spec_path, falling back to artifact"
+                local -a spawn_cmd=("$0" "spawn")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
@@ -443,31 +508,73 @@ review_gate_check() {
             log "review-gate: epic-verify re-spawn with epic_path='$epic_path'"
 
             if [[ -n "$epic_path" && -f "$epic_path" ]]; then
+                local -a spawn_cmd=("$0" "spawn-epic-verify")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$epic_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
-                   "$0" spawn-epic-verify ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$epic_path" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             else
                 log "review-gate: epic-verify missing epic_path, falling back to artifact"
+                local -a spawn_cmd=("$0" "spawn")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                    CLAUDE_SESSION_ID="$SESSION_ID" \
                    REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                    REVIEW_TYPE="$detected_type" \
-                   "$0" spawn ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$ARTIFACT_FILE" >/dev/null 2>&1; then
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
                     spawn_success=true
                 fi
             fi
         else
+            local -a spawn_cmd=("$0" "spawn")
+            if [[ -n "$agents_csv" ]]; then
+                spawn_cmd+=(--agents "$agents_csv")
+            fi
+            if [[ -n "$max_rounds" ]]; then
+                spawn_cmd+=(--max-rounds "$max_rounds")
+            fi
+            if [[ -n "$mode" ]]; then
+                spawn_cmd+=(--mode "$mode")
+            fi
+            if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                spawn_cmd+=(--consensus "$consensus_mode")
+            fi
+            spawn_cmd+=("$ARTIFACT_FILE")
             if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
                CLAUDE_SESSION_ID="$SESSION_ID" \
                REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                REVIEW_TYPE="$detected_type" \
-               "$0" spawn ${agents_arg[@]+"${agents_arg[@]}"} ${max_rounds_arg[@]+"${max_rounds_arg[@]}"} ${mode_arg[@]+"${mode_arg[@]}"} ${consensus_arg[@]+"${consensus_arg[@]}"} "$ARTIFACT_FILE" >/dev/null 2>&1; then
+               "${spawn_cmd[@]}" >/dev/null 2>&1; then
                 spawn_success=true
             fi
         fi
