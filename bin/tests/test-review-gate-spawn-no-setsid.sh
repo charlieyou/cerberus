@@ -41,6 +41,7 @@ SCHEMA_FILE="$TEST_DIR/review-schema.json"
 RUNNER_BASH="${BASH:-/bin/bash}"
 PATH_BASH_MARKER="$TEST_DIR/path-bash-used"
 NOHUP_PID_FILE="$TEST_DIR/nohup.pid"
+CODEX_ARGS_FILE="$TEST_DIR/codex.args"
 TOUCH_BIN="$(command -v touch)"
 MKDIR_BIN="$(command -v mkdir)"
 SLEEP_BIN="$(command -v sleep)"
@@ -72,6 +73,7 @@ EOF
 
 cat > "$FAKE_BIN/codex" <<EOF
 #!$RUNNER_BASH
+printf '%s\n' "\$*" > "$CODEX_ARGS_FILE"
 "$SLEEP_BIN" 1
 printf '{"verdict":"PASS","summary":"ok","findings":[]}'
 EOF
@@ -144,6 +146,15 @@ fi
 
 if [[ -f "$REVIEWS_DIR/codex.failed" ]]; then
     log_fail "did not expect codex.failed to be created"
+fi
+
+if [[ ! -f "$CODEX_ARGS_FILE" ]]; then
+    log_fail "expected fake codex to record its arguments"
+fi
+
+codex_args=$("$CAT_BIN" "$CODEX_ARGS_FILE")
+if [[ "$codex_args" != *"--skip-git-repo-check"* ]]; then
+    log_fail "expected codex to receive --skip-git-repo-check, got: $codex_args"
 fi
 
 output=$("$CAT_BIN" "$REVIEWS_DIR/codex.json")

@@ -447,7 +447,7 @@ review_gate_generate() {
             local codex_failed="$draft_dir/codex/codex.failed"
 
             if [[ "$codex_json_mode" == "true" ]]; then
-                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --json "$prompt_content" > "$codex_raw" 2>&1; then
+                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check --json "$prompt_content" > "$codex_raw" 2>&1; then
                     extract_codex_content "$codex_raw" > "$codex_draft"
                     safe_extract_telemetry codex "$codex_raw" > "$codex_stats"
                     touch "$codex_done"
@@ -456,7 +456,7 @@ review_gate_generate() {
                 fi
             else
                 # Fallback to text mode
-                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only "$prompt_content" > "$codex_draft" 2>&1; then
+                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check "$prompt_content" > "$codex_draft" 2>&1; then
                     _emit_empty_telemetry codex > "$codex_stats"
                     touch "$codex_done"
                 else

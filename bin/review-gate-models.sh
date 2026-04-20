@@ -267,7 +267,7 @@ repair_review_output() {
                 temp_schema="$schema_path"
                 printf '%s\n' "$schema_text" > "$schema_path"
             fi
-            if codex exec -m "$model" -s read-only --output-schema "$schema_path" - < "$prompt_file" > "$out_file" 2>&1; then
+            if codex exec -m "$model" -s read-only --skip-git-repo-check --output-schema "$schema_path" - < "$prompt_file" > "$out_file" 2>&1; then
                 repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
                 if [[ -n "$repaired" ]]; then
                     repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
@@ -622,7 +622,7 @@ spawn_reviewer() {
             REVIEW_MODEL="$codex_model" \
             REVIEW_REASONING="$codex_reasoning" \
             spawn_detached_review_shell '
-                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
