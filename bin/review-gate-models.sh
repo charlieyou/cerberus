@@ -267,14 +267,23 @@ repair_review_output() {
                 temp_schema="$schema_path"
                 printf '%s\n' "$schema_text" > "$schema_path"
             fi
-            if codex exec -m "$model" -s read-only --skip-git-repo-check --output-schema "$schema_path" - < "$prompt_file" > "$out_file" 2>&1; then
-                repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
+            local jsonl_file="${out_file}.jsonl"
+            if codex exec -m "$model" -s read-only --skip-git-repo-check \
+                --output-schema "$schema_path" --json -o "$out_file" \
+                - < "$prompt_file" > "$jsonl_file" 2>&1; then
+                if [[ -s "$out_file" ]]; then
+                    repaired=$(jq -c '.' "$out_file" 2>/dev/null || true)
+                fi
+                if [[ -z "$repaired" ]]; then
+                    repaired=$(extract_codex_agent_message "$jsonl_file" 2>/dev/null || true)
+                fi
                 if [[ -n "$repaired" ]]; then
                     repaired=$(unwrap_review_json "$repaired" 2>/dev/null || echo "")
                 fi
             else
                 rg_log "review-gate: repair_json codex failed (model=$model)"
             fi
+            rm -f "$jsonl_file"
             [[ -n "$temp_schema" ]] && rm -f "$temp_schema"
             ;;
         gemini)
@@ -311,6 +320,44 @@ repair_review_output() {
 
     rg_log "review-gate: repair_json success reviewer=$reviewer"
     printf '%s' "$repaired"
+}
+
+# Extract the last agent_message text from a codex --json JSONL file.
+# The verdict produced under `codex exec --output-schema` lands as the text of
+# the final item.completed event with item.type=="agent_message". This is
+# different from extract_last_json_object, which filters top-level objects for
+# a direct verdict field — a test that no JSONL event satisfies.
+extract_codex_agent_message() {
+    local file="$1"
+    [[ -s "$file" ]] || return 1
+
+    local text
+    text=$(jq -s -r '
+        map(select(
+            (.type // "") == "item.completed" and
+            (.item.type // "") == "agent_message"
+        ))
+        | if length == 0 then empty else .[-1].item.text // empty end
+    ' "$file" 2>/dev/null || true)
+
+    [[ -z "$text" ]] && return 1
+
+    # Preferred: text is the structured verdict JSON (schema-enforced).
+    local parsed
+    if parsed=$(printf '%s' "$text" | jq -c '.' 2>/dev/null); then
+        [[ -n "$parsed" ]] && { printf '%s' "$parsed"; return 0; }
+    fi
+
+    # Fallback: text is prose with an embedded verdict — fish out the last
+    # review-like object via the existing scanner.
+    local tmp
+    tmp=$(mktemp)
+    printf '%s' "$text" > "$tmp"
+    parsed=$(extract_last_json_object "$tmp" "false" 2>/dev/null || true)
+    rm -f "$tmp"
+
+    [[ -z "$parsed" ]] && return 1
+    printf '%s' "$parsed"
 }
 
 # Extract the last JSON object from a file.
@@ -403,26 +450,36 @@ extract_json() {
 
     case "$reviewer" in
         codex)
-            # Codex output is complex - use smart JSON extraction directly
-            # This finds the LAST review-like JSON object in the file
-            rg_log "review-gate: extract_json codex using extract_last_json_object"
+            # New format (codex --json -o FILE): FILE is pure JSON matching the schema.
+            # Legacy format (plain stdout): TUI transcript; use extract_last_json_object.
+            # If the primary file is empty (codex crashed before writing -o), pull the
+            # verdict out of the sibling .jsonl by reading the last agent_message.
+            rg_log "review-gate: extract_json codex trying direct jq on $file"
+            if [[ -s "$file" ]]; then
+                json=$(jq -c '.' "$file" 2>/dev/null || true)
+            fi
 
-            # Capture debug output to log file
-            local debug_output
-            debug_output=$(extract_last_json_object "$file" "true" 2>&1 >/dev/null || true)
-            while IFS= read -r line; do
-                [[ -n "$line" ]] && rg_log "review-gate: $line"
-            done <<< "$debug_output"
+            if [[ -z "$json" ]]; then
+                rg_log "review-gate: extract_json codex falling back to extract_last_json_object"
+                local debug_output
+                debug_output=$(extract_last_json_object "$file" "true" 2>&1 >/dev/null || true)
+                while IFS= read -r line; do
+                    [[ -n "$line" ]] && rg_log "review-gate: $line"
+                done <<< "$debug_output"
+                json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+            fi
 
-            # Get actual result (without debug)
-            json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+            if [[ -z "$json" && -f "${file%.json}.jsonl" ]]; then
+                rg_log "review-gate: extract_json codex falling back to sibling .jsonl agent_message"
+                json=$(extract_codex_agent_message "${file%.json}.jsonl" 2>/dev/null || true)
+            fi
 
             if [[ -n "$json" ]]; then
                 rg_log "review-gate: extract_json codex extracted len=${#json}"
                 local preview="${json:0:200}"
                 rg_log "review-gate: extract_json codex preview: $preview"
             else
-                rg_log "review-gate: extract_json codex extract_last_json_object FAILED (empty result)"
+                rg_log "review-gate: extract_json codex FAILED (empty result)"
             fi
             ;;
         gemini)
@@ -581,6 +638,7 @@ spawn_reviewer() {
     local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
 
     local output_file="$REVIEWS_DIR/${name}.json"
+    local transcript_file="$REVIEWS_DIR/${name}.jsonl"
     local sentinel_file="$REVIEWS_DIR/${name}.done"
     local failed_file="$REVIEWS_DIR/${name}.failed"
 
@@ -615,6 +673,7 @@ spawn_reviewer() {
         codex)
             echo "Spawning codex reviewer (model: $codex_model, reasoning: $codex_reasoning)..." >&2
             REVIEW_OUT="$output_file" \
+            REVIEW_JSONL="$transcript_file" \
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
@@ -622,7 +681,7 @@ spawn_reviewer() {
             REVIEW_MODEL="$codex_model" \
             REVIEW_REASONING="$codex_reasoning" \
             spawn_detached_review_shell '
-                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" - < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"

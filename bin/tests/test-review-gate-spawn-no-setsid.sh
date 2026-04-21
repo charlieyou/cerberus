@@ -75,7 +75,29 @@ cat > "$FAKE_BIN/codex" <<EOF
 #!$RUNNER_BASH
 printf '%s\n' "\$*" > "$CODEX_ARGS_FILE"
 "$SLEEP_BIN" 1
-printf '{"verdict":"PASS","summary":"ok","findings":[]}'
+# Parse -o <file> / --output-last-message <file> (mirrors real codex behavior).
+out_file=""
+prev=""
+for arg in "\$@"; do
+    if [[ "\$prev" == "-o" || "\$prev" == "--output-last-message" ]]; then
+        out_file="\$arg"
+        prev=""
+        continue
+    fi
+    prev="\$arg"
+done
+verdict='{"verdict":"PASS","summary":"ok","findings":[]}'
+if [[ -n "\$out_file" ]]; then
+    printf '%s' "\$verdict" > "\$out_file"
+    # --json emits JSONL events to stdout; emit a minimal turn envelope.
+    printf '{"type":"thread.started","thread_id":"test"}\n'
+    printf '{"type":"turn.started"}\n'
+    printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\\\\"verdict\\\\":\\\\"PASS\\\\",\\\\"summary\\\\":\\\\"ok\\\\",\\\\"findings\\\\":[]}"}}\n'
+    printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+else
+    # Legacy single-output path (no -o flag).
+    printf '%s' "\$verdict"
+fi
 EOF
 
 chmod +x "$FAKE_BIN/bash" "$FAKE_BIN/nohup" "$FAKE_BIN/mkdir" "$FAKE_BIN/touch" "$FAKE_BIN/codex"
@@ -157,9 +179,26 @@ if [[ "$codex_args" != *"--skip-git-repo-check"* ]]; then
     log_fail "expected codex to receive --skip-git-repo-check, got: $codex_args"
 fi
 
+if [[ "$codex_args" != *"--json"* ]]; then
+    log_fail "expected codex to receive --json, got: $codex_args"
+fi
+
+if [[ "$codex_args" != *"-o "* ]]; then
+    log_fail "expected codex to receive -o, got: $codex_args"
+fi
+
 output=$("$CAT_BIN" "$REVIEWS_DIR/codex.json")
 if [[ "$output" != *'"verdict":"PASS"'* ]]; then
-    log_fail "expected reviewer output to be written, got: $output"
+    log_fail "expected reviewer verdict to be written to .json, got: $output"
+fi
+
+if [[ ! -f "$REVIEWS_DIR/codex.jsonl" ]]; then
+    log_fail "expected JSONL transcript at codex.jsonl"
+fi
+
+jsonl_contents=$("$CAT_BIN" "$REVIEWS_DIR/codex.jsonl")
+if [[ "$jsonl_contents" != *'"turn.completed"'* ]]; then
+    log_fail "expected codex.jsonl to contain turn.completed, got: ${jsonl_contents:0:200}"
 fi
 
 log_pass "spawn_reviewer launches successfully without setsid"

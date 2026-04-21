@@ -220,27 +220,42 @@ extract_codex_telemetry() {
     # Codex --json gives JSONL with thread_id, turn.completed.usage for tokens,
     # item.started/completed events for tool calls
     # Real format: {"type":"turn.completed","usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N}}
+    # Tool calls in current CLI (0.122.x): item.completed with .item.type == "command_execution"
+    # Older/MCP-style tool calls: .item.type == "function_call" or top-level .type == "tool_use"
     local extracted
     extracted=$(jq -s -c '
         # Collect all lines into array, extract relevant data
         . as $lines |
-        
+
         # Find thread_id from any line that has it
         ($lines | map(select(.thread_id)) | .[0].thread_id // null) as $thread_id |
-        
-        # Find model from any line
+
+        # Find model from any line (new CLI does not emit it in JSONL; "unknown" is expected)
         ($lines | map(select(.model)) | .[0].model // "unknown") as $model |
-        
+
         # Sum up tokens from turn.completed events or usage objects (handle both old and new formats)
         ($lines | map(select(.usage)) | map(.usage) | add // {}) as $usage |
-        
-        # Count tool calls from item events
-        ($lines | map(select(.item.type == "function_call" or .type == "tool_use")) | length) as $tool_count |
-        
+
+        # Tool-call predicate: item-wrapped (new) or flat (legacy)
+        def is_tool_call:
+            (.item.type // "") as $it
+            | ($it == "command_execution" or $it == "function_call")
+              or .type == "tool_use";
+
+        # Tool-call name: normalize shell executions to "shell"; keep explicit names otherwise
+        def tool_call_name:
+            if (.item.type // "") == "command_execution" then "shell"
+            else (.item.name // .name // "unknown")
+            end;
+
+        # Count item.completed tool calls only (skip item.started to avoid double-counting)
+        ($lines | map(select(
+            (.type // "") != "item.started" and is_tool_call
+        )) | length) as $tool_count |
+
         # Extract tool names and count them
         ($lines | map(
-            select(.item.type == "function_call" or .type == "tool_use") |
-            .item.name // .name // "unknown"
+            select((.type // "") != "item.started" and is_tool_call) | tool_call_name
         ) | group_by(.) | map({key: .[0], value: {calls: length, tokens: 0}}) | from_entries) as $tools |
         
         {
@@ -657,7 +672,13 @@ safe_extract_telemetry() {
             result=$(extract_claude_telemetry "$raw_file" 2>/dev/null) || result=""
             ;;
         codex)
-            result=$(extract_codex_telemetry "$raw_file" 2>/dev/null) || result=""
+            # New invocation writes the clean verdict JSON to foo.json and the
+            # full JSONL transcript to foo.jsonl. Telemetry lives in the JSONL.
+            local codex_source="$raw_file"
+            if [[ "$raw_file" == *.json && -f "${raw_file%.json}.jsonl" ]]; then
+                codex_source="${raw_file%.json}.jsonl"
+            fi
+            result=$(extract_codex_telemetry "$codex_source" 2>/dev/null) || result=""
             ;;
         gemini)
             result=$(extract_gemini_telemetry "$raw_file" 2>/dev/null) || result=""

@@ -902,6 +902,13 @@ review_gate_check() {
             if [[ -f "$output_file" ]]; then
                 cp "$output_file" "$agent_dir/review.json" 2>/dev/null || true
             fi
+
+            # Archive the JSONL transcript as raw.jsonl so safe_extract_telemetry's
+            # sibling-lookup works on archived files (it strips .json and appends .jsonl).
+            local transcript_file="${output_file%.json}.jsonl"
+            if [[ -f "$transcript_file" ]]; then
+                cp "$transcript_file" "$agent_dir/raw.jsonl" 2>/dev/null || true
+            fi
         done
     }
 
