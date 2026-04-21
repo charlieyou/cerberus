@@ -567,7 +567,7 @@ review_gate_generate() {
     echo "Waiting for generators to complete..." >&2
     local wait_start
     wait_start=$(date +%s)
-    local timeout=900  # 15 minutes
+    local timeout=1800  # 30 minutes
 
     while true; do
         local codex_complete=false

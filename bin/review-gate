@@ -2888,7 +2888,7 @@ review_gate_wait() {
 
     local json_mode="false"
     local finalize="false"
-    local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-600}"
+    local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
     local session_key="${REVIEW_GATE_SESSION_KEY:-}"
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"

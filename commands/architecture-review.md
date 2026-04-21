@@ -15,10 +15,7 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 
 ### 1. Spawn Generators
 
-Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout based on mode:
-- `--mode fast`: 300000ms (5 minutes)
-- `--mode smart`: 600000ms (10 minutes)
-- `--mode max`: 900000ms (15 minutes)
+Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout to 1800000ms (30 minutes) to match the generator's internal ceiling, regardless of mode.
 
 The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 

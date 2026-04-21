@@ -323,7 +323,7 @@ Review defaults (precedence: CLI flag > env var > hardcoded default):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REVIEW_GATE_MAX_ROUNDS` | `3` | Max review iterations before auto-resolve |
-| `REVIEW_GATE_MAX_WAIT_SECONDS` | `600` | Max time to wait for reviewers |
+| `REVIEW_GATE_MAX_WAIT_SECONDS` | `1800` | Max time to wait for reviewers |
 | `REVIEW_GATE_POLL_INTERVAL_SECONDS` | `3` | Polling interval |
 
 Other environment variables:
