@@ -1,6 +1,6 @@
 ---
 description: Interview the user to produce a technical implementation plan (design-focused), then run multi-model generator and plan review gate
-argument-hint: [--mode <fast|smart|max>] [--from-spec <path/to/spec.md>] <feature or plan summary>
+argument-hint: [--mode <fast|smart|max>] [--max-rounds <N>] [--from-spec <path/to/spec.md>] <feature or plan summary>
 ---
 
 # Create Plan (Interview + Multi-Model Generator)
@@ -48,9 +48,11 @@ Modes control depth and rigor. Use soft budgets—exit early when quality is suf
 
 | Mode | Interview Depth | Review Rounds | Extras |
 |------|-----------------|---------------|--------|
-| fast | Until essentials filled (~60%) | 1 max | minimal |
-| smart | Until ~80% filled | up to 2 | standard |
-| max | Until ~95% filled + proactive probing | up to 3 | alternatives + detailed risk register |
+| fast | Until essentials filled (~60%) | up to 2 | minimal |
+| smart | Until ~80% filled | up to 3 | standard |
+| max | Until ~95% filled + proactive probing | up to 5 | alternatives + detailed risk register |
+
+**Override:** `--max-rounds <N>` sets the review round cap explicitly, overriding the mode default. Accepts any integer ≥ 0 (0 skips the review refinement loop entirely after the initial gate run).
 
 **Soft budget rules:**
 - Stop interviewing when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
@@ -489,10 +491,13 @@ The subagent updated the plan file in Phase 5. Confirm the [TBD] placeholders ha
 
 ### Phase 7: Review Gate with Prioritized BFS Refinement
 
-Spawn external reviewers on the plan file:
+Spawn external reviewers on the plan file. Pass `--max-rounds` so the daemon's auto-respawn limit matches the command-level cap:
+
+- If `--max-rounds <N>` was passed to this command, forward that N.
+- Otherwise forward the mode default: `fast=2`, `smart=3`, `max=5`.
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review docs/YYYY-MM-DD-FEATURE-plan.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.
@@ -554,9 +559,11 @@ Reply "enough detail" to stop, or "skip P2/P3" to focus only on blockers.
 **OK to silently fix:** Typos, formatting, and purely mechanical issues.
 
 #### Round limits by mode:
-- `fast`: 1 round (P0/P1 only)
-- `smart`: up to 2 rounds (P0-P2)
-- `max`: up to 3 rounds (all priorities)
+- `fast`: up to 2 rounds (P0/P1 only)
+- `smart`: up to 3 rounds (P0-P2)
+- `max`: up to 5 rounds (all priorities)
+
+If `--max-rounds <N>` was passed, use N instead of the mode default. Priority scope still follows the mode (fast=P0/P1, smart=P0–P2, max=all). `--max-rounds 0` skips refinement entirely — record any reviewer findings as Open Questions and exit.
 
 ## Done
 

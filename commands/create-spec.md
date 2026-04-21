@@ -1,6 +1,6 @@
 ---
 description: Interview the user to produce a feature spec, then run multi-model generator and spec review gate
-argument-hint: [--mode <fast|smart|max>] <feature description>
+argument-hint: [--mode <fast|smart|max>] [--max-rounds <N>] <feature description>
 ---
 
 # Create Spec (Interview + Multi-Model Generator)
@@ -62,9 +62,11 @@ Modes control interview depth and review rigor (orthogonal to tier).
 
 | Mode | Interview Depth | Review Rounds | Extras |
 |------|-----------------|---------------|--------|
-| fast | Until essentials filled (~60%) | 1 max | minimal |
-| smart | Until ~80% filled | up to 2 | standard |
-| max | Until ~95% filled + proactive probing | up to 3 | alternatives + risk analysis |
+| fast | Until essentials filled (~60%) | up to 2 | minimal |
+| smart | Until ~80% filled | up to 3 | standard |
+| max | Until ~95% filled + proactive probing | up to 5 | alternatives + risk analysis |
+
+**Override:** `--max-rounds <N>` sets the review round cap explicitly, overriding the mode default. Accepts any integer ≥ 0 (0 skips the review refinement loop entirely after the initial gate run).
 
 ## Input
 
@@ -447,10 +449,13 @@ The subagent updated the spec file in Phase 5. Confirm the [TBD] placeholders ha
 
 ### Phase 7: Review Gate with Prioritized BFS Refinement
 
-Spawn external reviewers on the spec file:
+Spawn external reviewers on the spec file. Pass `--max-rounds` so the daemon's auto-respawn limit matches the command-level cap:
+
+- If `--max-rounds <N>` was passed to this command, forward that N.
+- Otherwise forward the mode default: `fast=2`, `smart=3`, `max=5`.
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review docs/YYYY-MM-DD-FEATURE-spec.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-spec.md
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.
@@ -512,9 +517,11 @@ Reply "enough detail" to stop drilling into fixes, or "skip P2/P3" to focus only
 **OK to silently fix:** Typos, formatting, and purely mechanical issues.
 
 #### Round limits by mode:
-- `fast`: 1 round (P0/P1 only; leave rest as future improvements)
-- `smart`: up to 2 rounds (P0-P2)
-- `max`: up to 3 rounds (all priorities, probe for additional concerns)
+- `fast`: up to 2 rounds (P0/P1 only; leave rest as future improvements)
+- `smart`: up to 3 rounds (P0-P2)
+- `max`: up to 5 rounds (all priorities, probe for additional concerns)
+
+If `--max-rounds <N>` was passed, use N instead of the mode default. Priority scope still follows the mode (fast=P0/P1, smart=P0–P2, max=all). `--max-rounds 0` skips refinement entirely — record any reviewer findings as Open Questions and exit.
 
 ## Done
 

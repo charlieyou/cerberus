@@ -105,9 +105,11 @@ Interview the user, run multi-model generators, synthesize a spec, then run the 
 
 | Mode | Interview Depth | Review Rounds |
 |------|-----------------|---------------|
-| fast | ~60% coverage | 1 max |
-| smart | ~80% coverage | up to 2 |
-| max | ~95% + probing | up to 3 |
+| fast | ~60% coverage | up to 2 |
+| smart | ~80% coverage | up to 3 |
+| max | ~95% + probing | up to 5 |
+
+Override with `--max-rounds <N>` (e.g. `--max-rounds 0` skips the refinement loop; `--max-rounds 10` allows deeper iteration).
 
 You can also run the generator directly with a custom prompt file that includes your context:
 
@@ -138,9 +140,11 @@ Interview the user, run multi-model generators, synthesize an implementation pla
 
 | Mode | Interview Depth | Review Rounds |
 |------|-----------------|---------------|
-| fast | ~60% coverage | 1 max |
-| smart | ~80% coverage | up to 2 |
-| max | ~95% + probing | up to 3 |
+| fast | ~60% coverage | up to 2 |
+| smart | ~80% coverage | up to 3 |
+| max | ~95% + probing | up to 5 |
+
+Override with `--max-rounds <N>` (e.g. `--max-rounds 0` skips the refinement loop; `--max-rounds 10` allows deeper iteration).
 
 You can also run the generator directly:
 
