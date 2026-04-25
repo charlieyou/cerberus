@@ -46,7 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Model/reasoning tunables (caller can override).
-CODEX_TEST_MODEL="${CODEX_TEST_MODEL:-gpt-5.4}"
+CODEX_TEST_MODEL="${CODEX_TEST_MODEL:-gpt-5.5}"
 CODEX_TEST_REASONING="${CODEX_TEST_REASONING:-low}"
 # 5-minute hard cap — codex with reasoning can take ~30s even for trivial prompts.
 CODEX_TEST_TIMEOUT="${CODEX_TEST_TIMEOUT:-300}"

@@ -79,7 +79,7 @@ resolve_intelligence_mode() {
     esac
 
     # Codex model does not vary by mode.
-    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL_OVERRIDE:-${CODEX_MODEL:-gpt-5.4}}"
+    CODEX_MODEL_EFFECTIVE="${CODEX_MODEL_OVERRIDE:-${CODEX_MODEL:-gpt-5.5}}"
 }
 
 # Read-only tool policy for external CLIs.
