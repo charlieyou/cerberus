@@ -314,7 +314,38 @@ test_multiple_fix_iterations_do_not_accumulate() {
     fi
 }
 
-# Test 6: --exclude filters uncommitted diffs
+# Test 6: uncommitted diff works without excluded pathspecs
+test_uncommitted_without_exclude_creates_artifact() {
+    ((TESTS_RUN++)) || true
+    log_test "uncommitted diff works without excluded pathspecs"
+
+    setup_test_repo
+
+    echo "uncommitted change" > file.txt
+
+    export CLAUDE_SESSION_ID="test-session-$$-6"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+
+    local output
+    output=$("$REVIEW_GATE" spawn-code-review --artifact-only --uncommitted 2>&1)
+    local artifact_path
+    artifact_path=$(get_artifact_path "$output")
+
+    if [[ -f "$artifact_path" ]]; then
+        local diff_content
+        diff_content=$(extract_diff_from_artifact "$artifact_path")
+
+        if echo "$diff_content" | grep -q "uncommitted change"; then
+            log_pass "uncommitted diff artifact created"
+        else
+            log_fail "uncommitted diff missing expected content"
+        fi
+    else
+        log_fail "artifact not created at $artifact_path"
+    fi
+}
+
+# Test 7: --exclude filters uncommitted diffs
 test_exclude_uncommitted_filters_diff() {
     ((TESTS_RUN++)) || true
     log_test "--exclude filters uncommitted diffs"
@@ -330,7 +361,7 @@ test_exclude_uncommitted_filters_diff() {
     echo "keep this" > include.txt
     echo "skip this" > excluded/skip.txt
 
-    export CLAUDE_SESSION_ID="test-session-$$-6"
+    export CLAUDE_SESSION_ID="test-session-$$-7"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
@@ -352,7 +383,7 @@ test_exclude_uncommitted_filters_diff() {
     fi
 }
 
-# Test 7: --exclude filters commit diffs across re-spawn
+# Test 8: --exclude filters commit diffs across re-spawn
 test_exclude_commit_and_fix() {
     ((TESTS_RUN++)) || true
     log_test "--exclude filters commit diffs across re-spawn"
@@ -367,7 +398,7 @@ test_exclude_commit_and_fix() {
     local commit_sha
     commit_sha=$(git rev-parse HEAD)
 
-    export CLAUDE_SESSION_ID="test-session-$$-7"
+    export CLAUDE_SESSION_ID="test-session-$$-8"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
@@ -415,7 +446,7 @@ test_exclude_commit_and_fix() {
     fi
 }
 
-# Test 8: --commit mode produces net diff across non-contiguous commits (including subdirectories)
+# Test 9: --commit mode produces net diff across non-contiguous commits (including subdirectories)
 test_commit_mode_net_diff_non_contig() {
     ((TESTS_RUN++)) || true
     log_test "--commit mode produces net diff across non-contiguous commits (including subdirs)"
@@ -449,7 +480,7 @@ test_commit_mode_net_diff_non_contig() {
     local sha_c
     sha_c=$(git rev-parse HEAD)
 
-    export CLAUDE_SESSION_ID="test-session-$$-8"
+    export CLAUDE_SESSION_ID="test-session-$$-9"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
@@ -514,7 +545,7 @@ test_commit_mode_net_diff_non_contig() {
     fi
 }
 
-# Test 9: --commit fallback to per-commit diffs when net diff fails
+# Test 10: --commit fallback to per-commit diffs when net diff fails
 test_commit_mode_fallback_on_conflict() {
     ((TESTS_RUN++)) || true
     log_test "--commit falls back to per-commit diffs when net diff fails"
@@ -555,7 +586,7 @@ test_commit_mode_fallback_on_conflict() {
     # Go back to main
     git checkout -q "$main_branch"
 
-    export CLAUDE_SESSION_ID="test-session-$$-9"
+    export CLAUDE_SESSION_ID="test-session-$$-10"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local output
@@ -627,14 +658,14 @@ test_commit_mode_fallback_on_conflict() {
     fi
 }
 
-# Test 10: max-rounds=0 auto-resolves without re-spawn
+# Test 11: max-rounds=0 auto-resolves without re-spawn
 test_max_rounds_zero_auto_resolves() {
     ((TESTS_RUN++)) || true
     log_test "--max-rounds 0 auto-resolves without re-spawn"
 
     setup_test_repo
 
-    export CLAUDE_SESSION_ID="test-session-$$-8"
+    export CLAUDE_SESSION_ID="test-session-$$-11"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local artifact_path
@@ -694,14 +725,14 @@ EOF
     log_pass "auto-resolve triggered without respawn"
 }
 
-# Test 11: wait --finalize resolves the gate state
+# Test 12: wait --finalize resolves the gate state
 test_wait_finalize_resolves_gate() {
     ((TESTS_RUN++)) || true
     log_test "wait --finalize resolves gate state"
 
     setup_test_repo
 
-    export CLAUDE_SESSION_ID="test-session-$$-9"
+    export CLAUDE_SESSION_ID="test-session-$$-12"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
 
     local artifact_path
@@ -757,6 +788,7 @@ main() {
     test_range_mode_no_resolved_shas
     test_range_mode_re_evaluates_range
     test_multiple_fix_iterations_do_not_accumulate
+    test_uncommitted_without_exclude_creates_artifact
     test_exclude_uncommitted_filters_diff
     test_exclude_commit_and_fix
     test_wait_finalize_resolves_gate

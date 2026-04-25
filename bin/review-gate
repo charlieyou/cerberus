@@ -598,9 +598,17 @@ USAGE
     
     case "$diff_mode" in
         --uncommitted)
-            diff_content=$(git diff "${pathspec_args[@]}" 2>/dev/null || true)
+            if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                diff_content=$(git diff "${pathspec_args[@]}" 2>/dev/null || true)
+            else
+                diff_content=$(git diff 2>/dev/null || true)
+            fi
             local cached_diff
-            cached_diff=$(git diff --cached "${pathspec_args[@]}" 2>/dev/null || true)
+            if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                cached_diff=$(git diff --cached "${pathspec_args[@]}" 2>/dev/null || true)
+            else
+                cached_diff=$(git diff --cached 2>/dev/null || true)
+            fi
             if [[ -n "$cached_diff" ]]; then
                 if [[ -n "$diff_content" ]]; then
                     diff_content+=$'\n'"$cached_diff"
@@ -614,7 +622,11 @@ USAGE
             base_sha=$(git merge-base "$diff_target" HEAD 2>/dev/null || true)
             local head_sha
             head_sha=$(git rev-parse HEAD 2>/dev/null || true)
-            diff_content=$(git diff "${base_sha}..${head_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
+            if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                diff_content=$(git diff "${base_sha}..${head_sha}" "${pathspec_args[@]}" 2>/dev/null || true)
+            else
+                diff_content=$(git diff "${base_sha}..${head_sha}" 2>/dev/null || true)
+            fi
             ;;
         --commit)
             local commits_list="${diff_target//,/ }"
@@ -644,7 +656,11 @@ USAGE
                 local sha
                 for sha in $commits_list; do
                     local commit_diff
-                    commit_diff=$(git show "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
+                    if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                        commit_diff=$(git show "$sha" "${pathspec_args[@]}" 2>/dev/null || true)
+                    else
+                        commit_diff=$(git show "$sha" 2>/dev/null || true)
+                    fi
                     if [[ -n "$commit_diff" ]]; then
                         if [[ -n "$diff_content" ]]; then
                             diff_content+=$'\n'"$commit_diff"
@@ -657,7 +673,11 @@ USAGE
             rm -f "$net_diff_output_file" "$net_diff_reason_file"
             ;;
         range)
-            diff_content=$(git diff "$diff_target" "${pathspec_args[@]}" 2>/dev/null || true)
+            if [[ ${#pathspec_args[@]} -gt 0 ]]; then
+                diff_content=$(git diff "$diff_target" "${pathspec_args[@]}" 2>/dev/null || true)
+            else
+                diff_content=$(git diff "$diff_target" 2>/dev/null || true)
+            fi
             ;;
     esac
 
@@ -3272,7 +3292,9 @@ USAGE
         local timestamp
         timestamp=$(date -Iseconds)
 
-        local reason="wait_finalize_${consensus_verdict,,}"
+        local reason_suffix
+        reason_suffix=$(printf '%s' "$consensus_verdict" | tr '[:upper:]' '[:lower:]')
+        local reason="wait_finalize_${reason_suffix}"
 
         local review_dir plan_path spec_path artifact_path
         review_dir=$(dirname "$state_file")
