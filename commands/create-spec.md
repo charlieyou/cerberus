@@ -362,15 +362,19 @@ Create a compact context block for generators:
 
 ### Phase 4: Run Multi-Model Generators
 
-Create a temporary prompt file by concatenating the base prompt with your context:
+Create and remember a temporary prompt file for concatenating the base prompt with your context:
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mktemp /tmp/create-spec-prompt-XXXXXX.md
+export PROMPT_TMP="$(mktemp "${TMPDIR:-/tmp}/create-spec-prompt-XXXXXX")" && test -f "$PROMPT_TMP" && printf 'PROMPT_TMP=%s\n' "$PROMPT_TMP"
 ```
 
-This creates a unique temp file like `/tmp/create-spec-prompt-abc123.md`. Set `PROMPT_TMP` to the output path, then populate it:
+This creates a unique temp file like `/tmp/create-spec-prompt-abc123`. Do **not** use a top-level `PROMPT_TMP=$(mktemp ...)` assignment, and do **not** add a suffix like `.md`; BSD/macOS `mktemp` only replaces trailing `X` characters.
+
+Record the printed `PROMPT_TMP=...` value. Bash variables may not persist across separate tool calls; if you run a later command in a new shell, either substitute the printed path directly or start the command with `export PROMPT_TMP='<printed-path>' && ...`.
+
+Then populate the file:
 
 ```bash
 cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-spec.md" > "$PROMPT_TMP" && cat >> "$PROMPT_TMP" <<'EOF'
@@ -390,10 +394,10 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/spec-drafts" && ${CLAUDE_PLUGIN_ROOT}/bin/generate "${REVIEW_DIR:-/tmp}/spec-drafts" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-spec-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && "${CLAUDE_PLUGIN_ROOT}/bin/generate" "$OUTPUT_DIR" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
-The generator writes drafts to the output directory and returns their paths:
+Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by the generate script. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
 - `$OUTPUT_DIR/codex/draft.md`
 - `$OUTPUT_DIR/gemini/draft.md`
 - `$OUTPUT_DIR/claude/draft.md`
@@ -410,9 +414,10 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the spec file.
 
 Draft files to read:
-- $OUTPUT_DIR/codex/draft.md
-- $OUTPUT_DIR/gemini/draft.md
-- $OUTPUT_DIR/claude/draft.md
+[Paste the actual draft paths printed by `bin/generate`; include only existing `draft.md` files from successful generators.]
+- /actual/output/dir/codex/draft.md
+- /actual/output/dir/gemini/draft.md
+- /actual/output/dir/claude/draft.md
 
 Spec file to update: docs/YYYY-MM-DD-FEATURE-spec.md
 Tier: [S/M/L]
