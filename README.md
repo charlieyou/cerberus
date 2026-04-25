@@ -26,12 +26,12 @@ You need the following CLI tools installed:
 | `gemini` | Google Gemini reviewer | [Gemini CLI](https://ai.google.dev/gemini-api/docs/get-started/cli) |
 | `jq` | JSON processing | `apt install jq` / `brew install jq` |
 
-Verified CLI versions (January 1, 2026):
+Verified CLI versions (April 25, 2026):
 
 | Tool | Version |
 |------|---------|
 | `codex` | `codex-cli 0.77.0` |
-| `gemini` | `0.22.4` |
+| `gemini` | `0.39.1` |
 | `claude` | `2.0.76 (Claude Code)` |
 
 Missing reviewers are skipped with a warning. You can run with just one or two.
@@ -334,6 +334,7 @@ Other environment variables:
 | `REVIEW_REPAIR_ENABLED` | `true` | Attempt JSON repair on reviewer parse failures |
 | `REVIEW_REPAIR_PROVIDER` | auto | Repair model provider (`claude`, `codex`, or `gemini`). `auto`/unset picks the first available (prefers Claude). |
 | `REVIEW_REPAIR_MODEL` | `haiku` | Repair model name (provider-specific). Defaults are low-cost and do not vary with `--mode`. |
+| `GEMINI_READONLY_POLICY_PATH` | `config/gemini-readonly-policy.toml` | Gemini CLI Policy Engine rules used to keep Gemini reviewers read-only. |
 
 Model override variables (override the mode-based defaults):
 

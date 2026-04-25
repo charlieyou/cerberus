@@ -84,6 +84,7 @@ resolve_intelligence_mode() {
 
 # Read-only tool policy for external CLIs.
 GEMINI_READONLY_SETTINGS_PATH="${GEMINI_READONLY_SETTINGS_PATH:-$PLUGIN_ROOT/config/gemini-readonly-settings.json}"
+GEMINI_READONLY_POLICY_PATH="${GEMINI_READONLY_POLICY_PATH:-$PLUGIN_ROOT/config/gemini-readonly-policy.toml}"
 CLAUDE_READONLY_ALLOWED_TOOLS="${CLAUDE_READONLY_ALLOWED_TOOLS:-Read Glob Grep LS}"
 CLAUDE_READONLY_DISALLOWED_TOOLS="${CLAUDE_READONLY_DISALLOWED_TOOLS:-Bash Edit Write WebFetch WebSearch}"
 
@@ -98,6 +99,19 @@ gemini_readonly_settings_path() {
         return 1
     fi
     echo "$settings_path"
+}
+
+gemini_readonly_policy_path() {
+    local policy_path="${GEMINI_READONLY_POLICY_PATH:-}"
+    if [[ -z "$policy_path" ]]; then
+        rg_log "review-gate: GEMINI_READONLY_POLICY_PATH not set"
+        return 1
+    fi
+    if [[ ! -f "$policy_path" ]]; then
+        rg_log "review-gate: gemini read-only policy missing at $policy_path"
+        return 1
+    fi
+    echo "$policy_path"
 }
 
 default_review_schema() {
@@ -288,11 +302,16 @@ repair_review_output() {
             ;;
         gemini)
             local gemini_settings=""
+            local gemini_policy=""
             if ! gemini_settings=$(gemini_readonly_settings_path); then
                 rg_log "review-gate: repair_json gemini missing read-only settings"
+            elif ! gemini_policy=$(gemini_readonly_policy_path); then
+                rg_log "review-gate: repair_json gemini missing read-only policy"
             else
                 if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                    gemini -m "$model" -o json < "$prompt_file" > "$out_file" 2>&1; then
+                    gemini -m "$model" --approval-mode plan --skip-trust \
+                        --policy "$gemini_policy" --admin-policy "$gemini_policy" \
+                        -o json < "$prompt_file" > "$out_file" 2>&1; then
                     # Use extract_last_json_object directly (consistent with extract_json)
                     # This handles arbitrary preamble/noise before JSON
                     repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
@@ -651,8 +670,13 @@ spawn_reviewer() {
     case "$name" in
         gemini)
             local gemini_settings=""
+            local gemini_policy=""
             if ! gemini_settings=$(gemini_readonly_settings_path); then
                 echo "Skipping gemini: read-only settings missing" >&2
+                return 1
+            fi
+            if ! gemini_policy=$(gemini_readonly_policy_path); then
+                echo "Skipping gemini: read-only policy missing" >&2
                 return 1
             fi
             echo "Spawning gemini reviewer (model: $gemini_model)..." >&2
@@ -661,9 +685,10 @@ spawn_reviewer() {
             REVIEW_DONE="$sentinel_file" \
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
+            REVIEW_POLICY="$gemini_policy" \
             REVIEW_MODEL="$gemini_model" \
             spawn_detached_review_shell '
-                if gemini -m "$REVIEW_MODEL" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                if gemini -m "$REVIEW_MODEL" --approval-mode plan --skip-trust --policy "$REVIEW_POLICY" --admin-policy "$REVIEW_POLICY" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"

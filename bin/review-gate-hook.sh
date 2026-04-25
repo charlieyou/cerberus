@@ -829,8 +829,9 @@ review_gate_check() {
             fi
         done
 
-        log "review-gate: progress completed=$completed total=$total running=${running_list[*]}"
-        echo "$completed|$total|${running_list[*]}"
+        local running="${running_list[*]-}"
+        log "review-gate: progress completed=$completed total=$total running=$running"
+        echo "$completed|$total|$running"
     }
 
     # --- Extract telemetry from completed reviewers ---

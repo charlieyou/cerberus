@@ -475,7 +475,8 @@ review_gate_generate() {
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     if command -v gemini >/dev/null 2>&1; then
         local gemini_settings=""
-        if gemini_settings=$(gemini_readonly_settings_path); then
+        local gemini_policy=""
+        if gemini_settings=$(gemini_readonly_settings_path) && gemini_policy=$(gemini_readonly_policy_path); then
             echo "Spawning Gemini generator (model: $gemini_model, json=$gemini_json_mode)..." >&2
             (
                 local gemini_raw="$draft_dir/gemini/raw.json"
@@ -486,7 +487,9 @@ review_gate_generate() {
 
                 if [[ "$gemini_json_mode" == "true" ]]; then
                     if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                        gemini -m "$gemini_model" -o json "$prompt_content" > "$gemini_raw" 2>&1; then
+                        gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                            --policy "$gemini_policy" --admin-policy "$gemini_policy" \
+                            -o json "$prompt_content" > "$gemini_raw" 2>&1; then
                         extract_gemini_content "$gemini_raw" > "$gemini_draft"
                         safe_extract_telemetry gemini "$gemini_raw" > "$gemini_stats"
                         touch "$gemini_done"
@@ -496,7 +499,9 @@ review_gate_generate() {
                 else
                     # Fallback to text mode
                     if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                        gemini -m "$gemini_model" -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                        gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                            --policy "$gemini_policy" --admin-policy "$gemini_policy" \
+                            -o text "$prompt_content" > "$gemini_draft" 2>&1; then
                         _emit_empty_telemetry gemini > "$gemini_stats"
                         touch "$gemini_done"
                     else
@@ -506,7 +511,7 @@ review_gate_generate() {
             ) &
             local pid_gemini=$!
         else
-            echo "Warning: gemini read-only settings missing, skipping" >&2
+            echo "Warning: gemini read-only settings or policy missing, skipping" >&2
             touch "$draft_dir/gemini/gemini.failed"
             local pid_gemini=""
         fi

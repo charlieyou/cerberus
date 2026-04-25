@@ -1,0 +1,25 @@
+# Cerberus runs Gemini as an external reviewer. Permit local codebase reads only.
+
+[[rule]]
+toolName = [
+  "glob",
+  "grep_search",
+  "list_directory",
+  "read_file",
+  "read_many_files"
+]
+decision = "allow"
+priority = 999
+
+[[rule]]
+toolName = "*"
+mcpName = "*"
+decision = "deny"
+priority = 999
+denyMessage = "Cerberus Gemini reviewers run without MCP tools."
+
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 900
+denyMessage = "Cerberus Gemini reviewers are read-only and may only inspect local files."

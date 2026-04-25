@@ -1,29 +1,14 @@
 {
-  "tools": {
-    "allowed": [
-      "LSTool",
-      "ReadFileTool",
-      "ReadManyFilesTool",
-      "GrepTool",
-      "GlobTool"
-    ],
-    "core": [
-      "LSTool",
-      "ReadFileTool",
-      "ReadManyFilesTool",
-      "GrepTool",
-      "GlobTool"
-    ],
-    "exclude": [
-      "ShellTool",
-      "WriteFileTool",
-      "EditTool",
-      "WebFetchTool",
-      "WebSearchTool",
-      "MemoryTool"
-    ]
+  "general": {
+    "defaultApprovalMode": "plan",
+    "plan": {
+      "enabled": true
+    }
   },
   "mcp": {
-    "allowed": []
+    "excluded": ["*"]
+  },
+  "security": {
+    "disableAlwaysAllow": true
   }
 }
