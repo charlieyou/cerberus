@@ -145,7 +145,7 @@ Classify the running task into exactly one category.
 
 - **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, and `reviewed_pass` exists. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits in `baseline_sha..HEAD`, delete `state_dir`, and schedule the next ready task.
 - **needs-human**: teammate sent `STATUS: NEEDS_HUMAN T###` while the Claude task remains `in_progress`, or `exhausted` exists while the task remains `in_progress`. Mark failed, retain `state_dir`, stop scheduling.
-- **unverified-failure**: task status is `completed` but `reviewed_pass` is absent, or task status is `completed` while `exhausted` exists. Mark failed, retain `state_dir`, stop scheduling.
+- **unverified-failure**: task status is `completed` but `reviewed_pass` is absent, or task status is `completed` while `exhausted` exists. The latter can happen if an implementer ignores the final-round instruction and retries completion after exhaustion; the hook lets that retry clear so the lead can classify and stop instead of leaving the teammate in a hook loop. Mark failed, retain `state_dir`, stop scheduling.
 - **infra-failure**: `last_error` exists. Mark failed, retain `state_dir`, include raw `last_error` in the final report, stop scheduling.
 - **abandoned**: teammate went idle with task still `in_progress` and no `exhausted`, no `last_error`, and no `STATUS: NEEDS_HUMAN` message. Mark failed, retain `state_dir`, stop scheduling.
 

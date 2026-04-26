@@ -162,7 +162,7 @@ fi
 
 if [[ "$round" -ge "$max_rounds" ]]; then
     touch "${state_dir}/exhausted"
-    block "Already exhausted (round=${round}, max=${max_rounds}). Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
+    exit 0
 fi
 
 if [[ -z "$baseline_sha" ]]; then

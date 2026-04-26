@@ -165,6 +165,18 @@ if [[ "$status" -ne 2 || "$round" != "1" || ! -f "$state_dir/exhausted" ]]; then
 fi
 log_pass "final failed attempt marks exhausted"
 
+log_test "post-exhaustion retry clears completion instead of looping"
+touch "$state_dir/completion_intent"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 0 || "$round" != "1" || ! -f "$state_dir/exhausted" || -e "$state_dir/completion_intent" || -n "$output" ]]; then
+    log_fail "expected exhausted retry to clear completion silently, status=$status round=$round output=$output"
+fi
+log_pass "post-exhaustion retry clears completion"
+
 log_test "PASS review writes reviewed_pass and increments round"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 repo="$TEST_DIR/pass-repo"
