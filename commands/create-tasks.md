@@ -1,11 +1,11 @@
 ---
-description: Generate actionable tasks from a plan, outputting to Beads issues (--beads) or TODO.md
-argument-hint: [--beads] [--from-plan <path/to/plan.md>]
+description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), agent-team tasks (--agent-team), or TODO.md
+argument-hint: [--beads | --agent-team] [--from-plan <path/to/plan.md>]
 ---
 
 # Create Tasks (Plan → Execution Artifacts)
 
-Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to either **Beads issues** (with `--beads` flag) or a **TODO.md** file (default).
+Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
 > **Downstream**: Output is validated by `/review-tasks`.
@@ -24,6 +24,9 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 |------|--------|----------|
 | (default) | `TODO.md` in plan directory | Quick projects, no issue tracker |
 | `--beads` | Beads issues with dependencies | Multi-agent parallelization, tracked work |
+| `--agent-team` | `*-team-tasks.md` next to the plan | Autonomous implementer/reviewer team loop via `/cerberus:run-team` |
+
+`--beads` and `--agent-team` are mutually exclusive. If both are supplied, abort before generating output.
 
 ## Input
 
@@ -599,7 +602,30 @@ Use the **beads skill** to create issues. Follow these patterns:
    br ready
    ```
 
-#### If no `--beads` flag (default):
+#### If `--agent-team` flag is set:
+
+Generate a `*-team-tasks.md` file in the same directory as the plan, using the plan filename prefix so multiple plans do not collide. Examples:
+- `docs/auth-system-plan.md` → `docs/auth-system-team-tasks.md`
+- `~/.claude/plans/search-plan.md` → `~/.claude/plans/search-team-tasks.md`
+
+Use `templates/team-tasks-template.md` as the canonical schema. This format is intentionally Markdown with a YAML frontmatter block and a fenced `meta` block under each task heading so `/cerberus:run-team` can parse it cleanly.
+
+**Team task format requirements:**
+- Header frontmatter includes `plan`, `spec` (or `N/A`), and `generated`.
+- Each task heading is exactly `## T### — <subject>`.
+- The first fenced block immediately under each task heading is always ```meta.
+- The `meta` block includes `files`, `depends`, `acceptance`, and `plan_link`.
+- `depends` is always an explicit list, even when empty: `depends: []`.
+- The task body after the `meta` fence contains the full task spec from Phase 4, equivalent to the default TODO.md collapsible task detail content.
+
+**Parser contract:** Task bodies may contain additional fenced code blocks. The runner treats only the first fenced block immediately under the `## T###` heading as metadata; body parsing continues from after that first fence until the next `## ` heading at column 0 or EOF. Do not place narrative text between a task heading and its `meta` block.
+
+**Output path handling:**
+- If the target file already exists, ask whether to overwrite it before writing.
+- Include all source document links, sizing notes, dependencies, verification steps, and acceptance criteria from the validated Phase 4 task specs.
+- Report the output path and total task count in Phase 7.
+
+#### If neither `--beads` nor `--agent-team` is set (default):
 
 Generate `TODO.md` in the same directory as the plan.
 
@@ -622,7 +648,7 @@ Output summary:
 ```
 ## Tasks Generated
 
-**Output**: [TODO.md path] or [Beads epic ID]
+**Output**: [TODO.md path] or [team-tasks.md path] or [Beads epic ID]
 **Total Tasks**: N
 **Phases**: X
 **Parallelizable**: M tasks can run concurrently

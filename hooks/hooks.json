@@ -20,6 +20,17 @@
           }
         ]
       }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerberus-task-completed-hook",
+            "timeout": 2100
+          }
+        ]
+      }
     ]
   }
 }

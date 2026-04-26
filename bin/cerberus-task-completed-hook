@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# cerberus-task-completed-hook
+#
+# Gates agent-team implementer task completion with Cerberus code review.
+# State lives under:
+#   ${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/
+#
+# The hook is registered globally for TaskCompleted, which has no matcher. It
+# exits 0 for every task whose subject is not prefixed with
+# [CERBERUS-IMPL/<team_hash>]. Failed task state is retained for debugging and
+# can be removed by deleting the run's <team_hash> directory.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+REVIEW_GATE="${PLUGIN_ROOT}/bin/review-gate"
+
+state_file=""
+state_dir=""
+task_id=""
+team_hash=""
+round="0"
+max_rounds="0"
+owned_task="0"
+
+json_get() {
+    local filter="$1"
+    printf '%s' "$hook_input" | jq -r "$filter" 2>/dev/null || printf ''
+}
+
+write_last_error() {
+    local message="$1"
+    if [[ -n "${state_dir:-}" ]]; then
+        mkdir -p "$state_dir" 2>/dev/null || true
+        printf '%s\n' "$message" > "${state_dir}/last_error" 2>/dev/null || true
+    fi
+}
+
+increment_round() {
+    local tmp
+    tmp="${state_file}.tmp.$$"
+    jq '.round = ((.round // 0) + 1)' "$state_file" > "$tmp"
+    mv "$tmp" "$state_file"
+}
+
+mark_exhausted_if_needed() {
+    local new_round
+    new_round="$(jq -r '.round // 0' "$state_file" 2>/dev/null || printf '0')"
+    if [[ "$new_round" =~ ^[0-9]+$ && "$max_rounds" =~ ^[0-9]+$ && "$new_round" -ge "$max_rounds" ]]; then
+        touch "${state_dir}/exhausted" 2>/dev/null || true
+    fi
+}
+
+block() {
+    printf '%s\n' "$1" >&2
+    exit 2
+}
+
+on_err() {
+    local rc line
+    rc=$?
+    line="${BASH_LINENO[0]:-unknown}"
+    if [[ "${owned_task:-0}" == "1" ]]; then
+        write_last_error "hook_internal_error: rc=${rc} line=${line}"
+        printf 'INFRA-FAILURE: Cerberus TaskCompleted hook crashed (rc=%s line=%s). Send NEEDS_HUMAN to lead and go idle.\n' "$rc" "$line" >&2
+        exit 2
+    fi
+    exit 0
+}
+
+trap on_err ERR
+
+hook_input="$(cat)"
+
+# This hook is global. If jq is unavailable or input is malformed, fail open
+# before ownership can be established so unrelated TaskLists are not affected.
+if ! command -v jq >/dev/null 2>&1; then
+    exit 0
+fi
+
+event_name="$(json_get '.hook_event_name // ""')"
+if [[ "$event_name" != "TaskCompleted" ]]; then
+    exit 0
+fi
+
+subject="$(json_get '.task_subject // .task_name // .subject // ""')"
+if [[ "$subject" != \[CERBERUS-IMPL/* ]]; then
+    exit 0
+fi
+owned_task="1"
+
+session_id="$(json_get '.session_id // ""')"
+transcript_path="$(json_get '.transcript_path // ""')"
+cwd="$(json_get '.cwd // ""')"
+
+if [[ -n "$cwd" && -d "$cwd" ]]; then
+    cd "$cwd"
+fi
+
+export CLAUDE_SESSION_ID="$session_id"
+export REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path"
+
+team_hash="$(json_get '[.task_metadata.cerberus_team_hash?, .metadata.cerberus_team_hash?] | map(select(. != null and . != "")) | first // ""')"
+if [[ -z "$team_hash" ]]; then
+    team_hash="$(printf '%s' "$subject" | sed -n 's/^\[CERBERUS-IMPL\/\([^]]*\)\].*/\1/p')"
+fi
+
+task_id="$(json_get '[.task_metadata.cerberus_task_id?, .metadata.cerberus_task_id?] | map(select(. != null and . != "")) | first // ""')"
+if [[ -z "$task_id" ]]; then
+    task_id="$(printf '%s' "$subject" | sed -n 's/^\[CERBERUS-IMPL\/[^]]*\][[:space:]]*\(T[0-9][0-9]*\).*/\1/p')"
+fi
+if [[ -z "$task_id" ]]; then
+    task_id="$(json_get '[.. | objects | .cerberus_task_id? // empty] | map(select(. != "")) | first // ""')"
+fi
+
+state_root="${TMPDIR:-/tmp}/cerberus-task-completed-hook"
+if [[ -n "$team_hash" && -n "$task_id" ]]; then
+    state_dir="${state_root}/${team_hash}/${task_id}"
+    state_file="${state_dir}/state.json"
+else
+    state_dir="${state_root}/_unknown_$$"
+    mkdir -p "$state_dir" 2>/dev/null || true
+    printf 'state_unresolvable: subject prefix matched but team_hash/task_id could not be resolved. subject=%s\n' "$subject" > "${state_dir}/last_error" 2>/dev/null || true
+    block "INFRA-FAILURE: Cerberus task prefix matched but team/task state could not be resolved. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+if [[ ! -f "$state_file" ]]; then
+    mkdir -p "$state_dir" 2>/dev/null || true
+    printf 'state_unresolvable: subject prefix matched but no state file found at %s\nsubject=%s\n' "$state_file" "$subject" > "${state_dir}/last_error" 2>/dev/null || true
+    block "INFRA-FAILURE: missing Cerberus state for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+# TaskCompleted can fire when a teammate finishes a turn with in-progress work.
+# Only an explicit implementer completion attempt writes this marker.
+if [[ ! -f "${state_dir}/completion_intent" ]]; then
+    exit 0
+fi
+rm -f "${state_dir}/completion_intent"
+
+if [[ -f "${state_dir}/reviewed_pass" ]]; then
+    exit 0
+fi
+
+round="$(jq -r '.round // 0' "$state_file" 2>/dev/null || printf '0')"
+max_rounds="$(jq -r '.max_rounds // 3' "$state_file" 2>/dev/null || printf '3')"
+baseline_sha="$(jq -r '.baseline_sha // ""' "$state_file" 2>/dev/null || printf '')"
+task_context_path="$(jq -r '.task_context_path // ""' "$state_file" 2>/dev/null || printf '')"
+
+if [[ ! "$round" =~ ^[0-9]+$ ]]; then
+    round="0"
+fi
+if [[ ! "$max_rounds" =~ ^[0-9]+$ || "$max_rounds" -lt 1 ]]; then
+    max_rounds="3"
+fi
+
+if [[ "$round" -ge "$max_rounds" ]]; then
+    touch "${state_dir}/exhausted"
+    block "Already exhausted (round=${round}, max=${max_rounds}). Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
+fi
+
+if [[ -z "$baseline_sha" ]]; then
+    write_last_error "state_invalid: missing baseline_sha in ${state_file}"
+    block "INFRA-FAILURE: missing baseline_sha for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+if [[ -z "$task_context_path" || ! -f "$task_context_path" ]]; then
+    write_last_error "state_invalid: missing task_context_path '${task_context_path}' for ${task_id}"
+    block "INFRA-FAILURE: missing task context for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    write_last_error "git_error: hook cwd is not inside a git worktree: ${cwd}"
+    block "INFRA-FAILURE: hook did not run inside a git worktree. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+commit_range="${baseline_sha}..HEAD"
+if ! git rev-parse --verify "${baseline_sha}^{commit}" >/dev/null 2>&1; then
+    write_last_error "git_error: baseline commit not found: ${baseline_sha}"
+    block "INFRA-FAILURE: baseline commit ${baseline_sha} was not found. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+commits_for_task="$(git log --pretty='%H %(trailers:key=Cerberus-Task,valueonly,separator=%x20)' "$commit_range" | awk -v t="$task_id" '$2 == t { print $1 }' || true)"
+if [[ -z "$commits_for_task" ]]; then
+    increment_round
+    mark_exhausted_if_needed
+    next_round=$((round + 1))
+    if [[ -f "${state_dir}/exhausted" ]]; then
+        block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
+    fi
+    block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Make at least one commit with the required trailer before retrying TaskUpdate(status:'completed'). Round ${next_round} of ${max_rounds}."
+fi
+
+untagged_in_range="$(git log --pretty='%H %(trailers:key=Cerberus-Task,valueonly,separator=%x20)' "$commit_range" | awk -v t="$task_id" 'NF == 1 || $2 != t { print $1 }' || true)"
+if [[ -n "$untagged_in_range" ]]; then
+    increment_round
+    mark_exhausted_if_needed
+    next_round=$((round + 1))
+    if [[ -f "${state_dir}/exhausted" ]]; then
+        block "Commits in ${commit_range} are missing the required Cerberus-Task: ${task_id} trailer or carry a different task trailer: ${untagged_in_range}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
+    fi
+    block "Commits in ${commit_range} are missing the required Cerberus-Task: ${task_id} trailer or carry a different task trailer: ${untagged_in_range}. Amend/squash so every commit in the range belongs to ${task_id}, then retry. Round ${next_round} of ${max_rounds}."
+fi
+
+if [[ ! -x "$REVIEW_GATE" ]]; then
+    write_last_error "spawn_failed: review-gate is not executable at ${REVIEW_GATE}"
+    block "INFRA-FAILURE: review-gate is not executable. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+session_key="cerberus-impl-${team_hash}-${task_id}-round${round}"
+spawn_stdout="${state_dir}/spawn.stdout"
+spawn_stderr="${state_dir}/spawn.stderr"
+spawn_rc=0
+REVIEW_GATE_SESSION_KEY="$session_key" \
+    "$REVIEW_GATE" spawn-code-review \
+    --max-rounds 0 --consensus majority --mode fast \
+    --context-file "$task_context_path" \
+    "$commit_range" >"$spawn_stdout" 2>"$spawn_stderr" || spawn_rc=$?
+
+if [[ "$spawn_rc" -ne 0 ]]; then
+    {
+        printf 'spawn_failed: spawn-code-review exited %d\n' "$spawn_rc"
+        printf 'stderr:\n'
+        cat "$spawn_stderr" 2>/dev/null || true
+    } > "${state_dir}/last_error"
+    block "INFRA-FAILURE: spawn-code-review exited ${spawn_rc}. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+wait_json=""
+wait_rc=0
+wait_json="$("$REVIEW_GATE" wait --json --finalize --timeout 1800 --poll-interval 3 --session-key "$session_key")" || wait_rc=$?
+printf '%s\n' "$wait_json" > "${state_dir}/wait.json"
+
+verdict="$(printf '%s' "$wait_json" | jq -r '.consensus_verdict // empty' 2>/dev/null || printf '')"
+wait_status="$(printf '%s' "$wait_json" | jq -r '.status // empty' 2>/dev/null || printf '')"
+has_blockers="$(printf '%s' "$wait_json" | jq -r '[.aggregated_findings[]? | select(((.priority // "") | tostring | test("^(0|1|P0|P1)$"; "i")) or ((.severity // "") | tostring | test("^(P0|P1|0|1)$"; "i")) or ((.title // .body // "") | tostring | test("\\[P[01]\\]"; "i")))] | length' 2>/dev/null || printf '0')"
+if [[ ! "$has_blockers" =~ ^[0-9]+$ ]]; then
+    has_blockers="0"
+fi
+
+if [[ "$verdict" == "PASS" || ( "$verdict" == "NEEDS_WORK" && "$has_blockers" -eq 0 ) ]]; then
+    increment_round
+    touch "${state_dir}/reviewed_pass"
+    exit 0
+fi
+
+if [[ "$verdict" == "FAIL" || ( "$verdict" == "NEEDS_WORK" && "$has_blockers" -gt 0 ) ]]; then
+    findings="$(printf '%s' "$wait_json" | jq -r '.aggregated_findings[]? | "- [" + ((.priority // .severity // "P?") | tostring) + "] " + ((.file_path // .file // .path // "") | tostring) + (if (.line_start // .line // null) then ":" + ((.line_start // .line) | tostring) else "" end) + " - " + ((.body // .message // .title // .summary // "") | tostring)' 2>/dev/null || true)"
+    increment_round
+    mark_exhausted_if_needed
+    {
+        printf 'CERBERUS REVIEW: BLOCKED on task %s (round %s of %s).\n' "$task_id" "$((round + 1))" "$max_rounds"
+        printf 'Verdict: %s\n' "$verdict"
+        printf 'Findings:\n'
+        if [[ -n "$findings" ]]; then
+            printf '%s\n' "$findings"
+        else
+            printf '- Review reported blocking findings but no structured findings were parsed. See %s/wait.json.\n' "$state_dir"
+        fi
+        if [[ "$round" -eq $((max_rounds - 1)) ]]; then
+            printf '\nTHIS IS YOUR FINAL REVIEWED ROUND.\n'
+            printf 'Review will not fire again on a retry. If your next attempt would still fail, you MUST instead SendMessage(STATUS: NEEDS_HUMAN %s) to the lead and go idle.\n' "$task_id"
+            printf 'Do NOT retry TaskUpdate(status:'"'"'completed'"'"') after a final-round failure.\n'
+        fi
+    } >&2
+    exit 2
+fi
+
+{
+    printf 'wait_failed: status=%s verdict=%s wait_rc=%s\n' "$wait_status" "$verdict" "$wait_rc"
+    printf 'raw_wait_json:\n%s\n' "$wait_json"
+} > "${state_dir}/last_error"
+block "INFRA-FAILURE: review-gate wait ended with status='${wait_status}' verdict='${verdict}' rc=${wait_rc}. Send NEEDS_HUMAN to lead and go idle."
