@@ -4,7 +4,7 @@
   "trigger_source": "code",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-code-review/latest.md",
-    "sha256": "c0015993a515dd6a645b7030e0847c6da79f7c68e3ed9fa9a3b5f78542898a3c"
+    "sha256": "<SHA256>"
   },
   "mode": {
     "type": "code-diff",

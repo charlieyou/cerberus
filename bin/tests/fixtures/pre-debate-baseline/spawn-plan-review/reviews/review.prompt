@@ -273,6 +273,14 @@ Before outputting your review, use ultrathink to reason step-by-step. Follow thi
 6. Only then formulate your findings and verdict, ensuring the verdict logic matches the Priority and Verdict Guidelines.
 7. **Convergence sanity-check:** Before deciding the verdict, re-check: Are all remaining concerns P2/P3 or questions and not clearly catastrophic for the main happy path? If yes, you SHOULD choose PASS, even if P2/P3 feedback remains.
 
+## Author Context
+
+Use these clarifications when evaluating the artifact and prior feedback.
+
+Task: Baseline Fixture Capture (T001)
+Scope: Capture pre-debate golden fixtures for all 5 review-gate invocation shapes.
+Goal: Provide immutable R9 byte-parity reference before any prompt-template changes.
+
 ## Output Format
 
 JSON only, no markdown code fences:

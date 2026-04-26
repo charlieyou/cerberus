@@ -363,7 +363,10 @@ copy_to_fixture() {
                     else .
                     end
                 )
-            else . end
+            else . end |
+            if .artifact.sha256   then .artifact.sha256   = "<SHA256>" else . end |
+            if .artifact.plan_sha then .artifact.plan_sha = "<SHA256>" else . end |
+            if .artifact.spec_sha then .artifact.spec_sha = "<SHA256>" else . end
         ' "$review_dir/gate-state.json" > "$shape_dir/gate-state.json"
         normalize_fixture_file "$shape_dir/gate-state.json"
     fi
@@ -502,6 +505,17 @@ PLAN
 SHAPE2_STDOUT="$WORK_DIR/shape2-stdout.txt"
 SHAPE2_STDERR="$WORK_DIR/shape2-stderr.txt"
 
+# Minimal author-context file to exercise the --context-file flag.
+# This provides baseline coverage for the context-injection code path in
+# build_prompt (R9 byte-parity tests must confirm non-debate runs still
+# inject context identically after the debate feature lands).
+SHAPE2_CONTEXT="$WORK_DIR/sample-context.md"
+cat > "$SHAPE2_CONTEXT" <<'CONTEXT'
+Task: Baseline Fixture Capture (T001)
+Scope: Capture pre-debate golden fixtures for all 5 review-gate invocation shapes.
+Goal: Provide immutable R9 byte-parity reference before any prompt-template changes.
+CONTEXT
+
 set +e
 (
     export HOME="$FAKE_HOME"
@@ -514,6 +528,7 @@ set +e
     "$REVIEW_GATE" spawn-plan-review \
         --mode smart \
         --agents codex,gemini,claude \
+        --context-file "$SHAPE2_CONTEXT" \
         "$SHAPE2_PLAN"
 ) >"$SHAPE2_STDOUT" 2>"$SHAPE2_STDERR"
 SHAPE2_SPAWN_RC=$?

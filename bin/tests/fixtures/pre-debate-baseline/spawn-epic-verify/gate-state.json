@@ -4,7 +4,7 @@
   "trigger_source": "epic-verify",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/latest.md",
-    "sha256": "1e285bddf3fdcd5ed030228b3a9ef326af2c9faf6ba89cd3fdf1a8cc51e1eeaf"
+    "sha256": "<SHA256>"
   },
   "mode": {
     "type": "epic-verify",

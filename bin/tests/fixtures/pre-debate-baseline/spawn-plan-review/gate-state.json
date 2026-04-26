@@ -4,8 +4,8 @@
   "trigger_source": "plan",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/latest.md",
-    "sha256": "3245390c5a4f0e620f0d64bc4ef1e1e669417492645fbc07ae4caeb0a2ae51b1",
-    "plan_sha": "5b353e2d6f7778b43d6b9112ebe18c7188bc5369925c9e80fa4f07546e6a24d2"
+    "sha256": "<SHA256>",
+    "plan_sha": "<SHA256>"
   },
   "mode": {
     "type": "plan",
@@ -22,7 +22,7 @@
     "session_key": "baseline-plan-review",
     "source": "input.session_id"
   },
-  "author_context": null,
+  "author_context": "Task: Baseline Fixture Capture (T001)\nScope: Capture pre-debate golden fixtures for all 5 review-gate invocation shapes.\nGoal: Provide immutable R9 byte-parity reference before any prompt-template changes.",
   "reviewers": {
     "codex": {
       "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/codex.json",
