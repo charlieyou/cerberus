@@ -1443,10 +1443,15 @@ JSON only, no markdown code fences:
         spawn_cmd+=(--debate-seed "$debate_seed")
     fi
     spawn_cmd+=("$artifact_path")
+    # Export REVIEW_GATE_DEBATE_PLAN_PATH so the bare-spawn debate
+    # preflight uses the canonical user-passed plan path (already
+    # realpath'd above) for spec R3 stability rather than the session-
+    # scoped latest.md artifact path.
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_DEBATE_PLAN_PATH="$plan_path" \
     "${spawn_cmd[@]}"
 
     # Update state to include plan path in mode
@@ -1769,10 +1774,15 @@ JSON only, no markdown code fences:
         spawn_cmd+=(--debate-seed "$debate_seed")
     fi
     spawn_cmd+=("$artifact_path")
+    # Export REVIEW_GATE_DEBATE_SPEC_PATH so the bare-spawn debate
+    # preflight uses the canonical user-passed spec path (already
+    # realpath'd above) for spec R3 stability rather than the session-
+    # scoped latest.md artifact path.
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_DEBATE_SPEC_PATH="$spec_path" \
     "${spawn_cmd[@]}"
 
     # Update state to include spec path in mode
@@ -2917,80 +2927,124 @@ PROMPT
         source "$SCRIPT_DIR/review-gate-debate.sh"
 
         # Compute the canonical <artifact_id> per review type. The four
-        # judging review types use the input pinned by spec R3:
-        #   plan / spec     → realpath of the user-passed file path
-        #   code            → verbatim diff_args_str (REVIEW_GATE_DIFF_ARGS,
-        #                     or parsed from the artifact's
-        #                     `<!-- diff-args: ... -->` frontmatter for
-        #                     direct bare-spawn invocations where the env
-        #                     var was not pre-set by spawn-code-review)
-        #   epic-verify     → realpath when the arg resolves to a regular
-        #                     file, otherwise the verbatim raw-criteria
-        #                     string. The spawn-epic-verify subcommand
-        #                     exports REVIEW_GATE_EPIC_CONTEXT (or passes
-        #                     the file path as the bare-spawn artifact);
-        #                     here we accept both and let
-        #                     compute_artifact_id resolve.
+        # judging review types use the input pinned by spec R3, with a
+        # three-level fallback ladder for stability across sessions:
+        #
+        #   1. Wrapper-exported env var (canonical source). spawn-*-review
+        #      wrappers pre-set the relevant env var so bare-spawn does
+        #      NOT need to infer the source from the session-scoped
+        #      `latest.md` artifact path:
+        #        plan        → REVIEW_GATE_DEBATE_PLAN_PATH
+        #        spec        → REVIEW_GATE_DEBATE_SPEC_PATH
+        #        code        → REVIEW_GATE_DIFF_ARGS
+        #        epic-verify → REVIEW_GATE_EPIC_CONTEXT
+        #
+        #   2. Artifact frontmatter parse. The wrappers also embed the
+        #      canonical source in artifact frontmatter; this is the
+        #      direct-bare-spawn path where the user invokes
+        #      `bin/review-gate spawn --type X --debate <wrapper-built-artifact>`:
+        #        plan        → `<!-- plan-path: ... -->`
+        #        spec        → `<!-- spec-path: ... -->`
+        #        code        → `<!-- diff-args: ... -->`
+        #        epic-verify → wrapper exports the FULL untruncated
+        #                      epic_context via env var; the
+        #                      `<!-- epic-context: ... -->` frontmatter
+        #                      is presentational only and is truncated to
+        #                      100 chars, so it is NOT used as a fallback
+        #                      hash input (spec R3 explicitly: "The full
+        #                      untruncated epic_context value is the hash
+        #                      input regardless of whether it would be
+        #                      truncated in frontmatter; the frontmatter
+        #                      truncation is presentational only.")
+        #
+        #   3. Resolved artifact realpath. Last-ditch fallback for ad-hoc
+        #      bare-spawn invocations on stub/minimal artifacts. Different
+        #      artifact paths still produce different hashes (spec R3
+        #      "different artifacts shuffle assignments"), but per-diff
+        #      / per-source differentiation is not available on this
+        #      branch — a stderr note records the limitation.
         local _debate_artifact_id=""
+        # Resolve the artifact realpath up-front for fallback paths. Use
+        # the same resolve_artifact helper that the rest of review_gate_spawn
+        # uses so the path computation stays in one place.
+        local _resolved_artifact_path=""
+        if _resolved_artifact_path=$(resolve_artifact "$artifact_arg" 2>/dev/null); then
+            :
+        else
+            _resolved_artifact_path=""
+        fi
         case "$REVIEW_TYPE" in
-            plan|spec)
-                _debate_artifact_id=$(compute_artifact_id "$REVIEW_TYPE" "$artifact_arg") || \
-                    die "compute_artifact_id $REVIEW_TYPE failed for: $artifact_arg"
+            plan)
+                local _plan_source="${REVIEW_GATE_DEBATE_PLAN_PATH:-}"
+                if [[ -z "$_plan_source" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _plan_source=$(sed -nE 's|^<!-- plan-path: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
+                fi
+                if [[ -z "$_plan_source" && -n "$_resolved_artifact_path" ]]; then
+                    echo "Note: --debate plan review without REVIEW_GATE_DEBATE_PLAN_PATH or <!-- plan-path: ... --> frontmatter; using artifact realpath for artifact_id (per-source shuffle is not available on this invocation path)." >&2
+                    _plan_source="$_resolved_artifact_path"
+                fi
+                if [[ -z "$_plan_source" ]]; then
+                    die "--debate plan review: cannot determine plan source path for artifact_id (no env var, no frontmatter, no resolvable artifact)"
+                fi
+                _debate_artifact_id=$(compute_artifact_id plan "$_plan_source") || \
+                    die "compute_artifact_id plan failed for: $_plan_source"
+                ;;
+            spec)
+                local _spec_source="${REVIEW_GATE_DEBATE_SPEC_PATH:-}"
+                if [[ -z "$_spec_source" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _spec_source=$(sed -nE 's|^<!-- spec-path: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
+                fi
+                if [[ -z "$_spec_source" && -n "$_resolved_artifact_path" ]]; then
+                    echo "Note: --debate spec review without REVIEW_GATE_DEBATE_SPEC_PATH or <!-- spec-path: ... --> frontmatter; using artifact realpath for artifact_id (per-source shuffle is not available on this invocation path)." >&2
+                    _spec_source="$_resolved_artifact_path"
+                fi
+                if [[ -z "$_spec_source" ]]; then
+                    die "--debate spec review: cannot determine spec source path for artifact_id (no env var, no frontmatter, no resolvable artifact)"
+                fi
+                _debate_artifact_id=$(compute_artifact_id spec "$_spec_source") || \
+                    die "compute_artifact_id spec failed for: $_spec_source"
                 ;;
             code)
-                # Prefer the explicit env var set by spawn-code-review;
-                # otherwise parse the canonical `<!-- diff-args: ... -->`
-                # frontmatter from the artifact (which spawn-code-review
-                # writes into every code-review artifact); finally fall
-                # back to the artifact's realpath so direct bare-spawn
-                # invocations on stub/minimal artifacts that lack the
-                # frontmatter still produce a per-artifact-distinct hash
-                # (different artifacts → different hashes; spec R3's
-                # "different artifacts shuffle assignments" requirement).
-                # Per-diff differentiation requires the explicit env var
-                # or frontmatter; the realpath fallback intentionally
-                # produces the same hash for the same artifact path
-                # regardless of which diff was used.
+                # Three-level fallback ladder per the comment block above.
                 local _code_diff_args="${REVIEW_GATE_DIFF_ARGS:-}"
-                if [[ -z "$_code_diff_args" ]]; then
-                    local _resolved_artifact_for_diff_parse=""
-                    if [[ -f "$artifact_arg" ]]; then
-                        _resolved_artifact_for_diff_parse="$artifact_arg"
-                    elif _resolved_artifact_for_diff_parse=$(resolve_artifact "$artifact_arg" 2>/dev/null) && [[ -f "$_resolved_artifact_for_diff_parse" ]]; then
-                        :
-                    else
-                        _resolved_artifact_for_diff_parse=""
-                    fi
-                    if [[ -n "$_resolved_artifact_for_diff_parse" ]]; then
-                        # Parse the first `<!-- diff-args: ... -->` line.
-                        # The artifact format is fixed by review_gate_spawn_code_review's
-                        # writer at line ~1013; this parser MUST match that
-                        # writer's exact pattern.
-                        _code_diff_args=$(sed -nE 's|^<!-- diff-args: (.*) -->$|\1|p' "$_resolved_artifact_for_diff_parse" | head -n 1)
-                    fi
+                if [[ -z "$_code_diff_args" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _code_diff_args=$(sed -nE 's|^<!-- diff-args: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
                 fi
                 if [[ -n "$_code_diff_args" ]]; then
                     _debate_artifact_id=$(compute_artifact_id code "$_code_diff_args") || \
                         die "compute_artifact_id code failed"
-                else
-                    # Realpath fallback. Use plan-style realpath since the
-                    # artifact path is the only stable identifier we have.
-                    # Emit a stderr note so debugging-the-determinism-
-                    # contract is easier when this branch fires.
+                elif [[ -n "$_resolved_artifact_path" ]]; then
+                    # Realpath fallback — emit a stderr note so debugging
+                    # the determinism contract is easier when this branch
+                    # fires. Use plan-style realpath since artifact path
+                    # is the only stable identifier we have here.
                     echo "Note: --debate code review without REVIEW_GATE_DIFF_ARGS or <!-- diff-args: ... --> frontmatter; using artifact realpath for artifact_id (per-diff shuffle is not available on this invocation path)." >&2
-                    if [[ -f "$artifact_arg" ]]; then
-                        _debate_artifact_id=$(compute_artifact_id plan "$artifact_arg") || \
-                            die "compute_artifact_id (code-realpath fallback) failed for: $artifact_arg"
-                    else
-                        # No file path either; degrade to verbatim arg
-                        # string so the assignment is at least
-                        # deterministic for that string.
-                        _debate_artifact_id=$(compute_artifact_id code "$artifact_arg")
-                    fi
+                    _debate_artifact_id=$(compute_artifact_id plan "$_resolved_artifact_path") || \
+                        die "compute_artifact_id (code-realpath fallback) failed for: $_resolved_artifact_path"
+                else
+                    die "--debate code review: cannot determine artifact_id (no env var, no frontmatter, no resolvable artifact)"
                 fi
                 ;;
             epic-verify)
-                _debate_artifact_id=$(compute_artifact_id epic-verify "${REVIEW_GATE_EPIC_CONTEXT:-$artifact_arg}") || \
+                # spawn-epic-verify exports the FULL untruncated
+                # epic_context via REVIEW_GATE_EPIC_CONTEXT. The artifact
+                # frontmatter <!-- epic-context: ... --> is truncated to
+                # 100 chars and is NOT used as a fallback hash input
+                # (spec R3 explicit constraint).
+                local _epic_source="${REVIEW_GATE_EPIC_CONTEXT:-}"
+                if [[ -z "$_epic_source" ]]; then
+                    # Fall back to the resolved artifact path / realpath
+                    # for direct bare-spawn invocations.
+                    if [[ -n "$_resolved_artifact_path" ]]; then
+                        echo "Note: --debate epic-verify without REVIEW_GATE_EPIC_CONTEXT; using artifact realpath for artifact_id." >&2
+                        _epic_source="$_resolved_artifact_path"
+                    elif [[ -n "$artifact_arg" ]]; then
+                        _epic_source="$artifact_arg"
+                    else
+                        die "--debate epic-verify: cannot determine epic_context for artifact_id (no env var, no resolvable artifact)"
+                    fi
+                fi
+                _debate_artifact_id=$(compute_artifact_id epic-verify "$_epic_source") || \
                     die "compute_artifact_id epic-verify failed"
                 ;;
         esac
