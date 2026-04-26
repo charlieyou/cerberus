@@ -4,7 +4,7 @@
   "trigger_source": "spec",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-spec-review/latest.md",
-    "sha256": "92b10fdeef7ae492d4b2d81316acb190369bb7364c7e0ad4a24fe52f9cb9f678",
+    "sha256": "a285343504a476b2f3a49d8d3697fa2d261866d45571c0ffcd50d577f337b868",
     "spec_sha": "1c7947d0ba9c62ad34c6fcbe4ea6284bfb86d9b00336594d0e65744e4a389c58"
   },
   "mode": {
@@ -49,8 +49,8 @@
   },
   "decision": {
     "action": "proceed",
-    "decided_at": "2026-04-26T02:24:30-04:00"
+    "decided_at": "<CAPTURED_AT>"
   },
-  "created_at": "2026-04-26T06:24:29Z",
+  "created_at": "<CAPTURED_AT>",
   "iteration": 0
 }

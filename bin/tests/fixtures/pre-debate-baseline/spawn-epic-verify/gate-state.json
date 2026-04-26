@@ -4,7 +4,7 @@
   "trigger_source": "epic-verify",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/latest.md",
-    "sha256": "584e23cbc6759710b4a375226ee7128bf8858f5a6bd03bf8da8aeb1efbd7199d"
+    "sha256": "1e285bddf3fdcd5ed030228b3a9ef326af2c9faf6ba89cd3fdf1a8cc51e1eeaf"
   },
   "mode": {
     "type": "epic-verify",
@@ -48,8 +48,8 @@
   },
   "decision": {
     "action": "proceed",
-    "decided_at": "2026-04-26T02:24:31-04:00"
+    "decided_at": "<CAPTURED_AT>"
   },
-  "created_at": "2026-04-26T06:24:30Z",
+  "created_at": "<CAPTURED_AT>",
   "iteration": 0
 }
