@@ -47,9 +47,20 @@ run_hook() {
 write_state() {
     local max_rounds="${1:-3}"
     local baseline_sha="${2:-$(git rev-parse HEAD)}"
+    local repo="${3:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
     local state_dir="$TMP_ROOT/cerberus-task-completed-hook/abc123/T001"
+    local verify_script_path="$state_dir/verify.sh"
     mkdir -p "$state_dir"
     printf 'context\n' > "$state_dir/task-context.md"
+    cat > "$verify_script_path" <<'VERIFY'
+#!/usr/bin/env bash
+set -euo pipefail
+VERIFY
+    if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$repo" status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "$state_dir/untracked_baseline.txt"
+    else
+        : > "$state_dir/untracked_baseline.txt"
+    fi
     jq -n \
         --arg task_id T001 \
         --arg claude_task_id task-1 \
@@ -57,8 +68,9 @@ write_state() {
         --arg baseline_sha "$baseline_sha" \
         --arg task_state_dir "$state_dir" \
         --arg task_context_path "$state_dir/task-context.md" \
+        --arg verify_script_path "$verify_script_path" \
         --argjson max_rounds "$max_rounds" \
-        '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, baseline_sha:$baseline_sha, round:0, max_rounds:$max_rounds, task_state_dir:$task_state_dir, task_context_path:$task_context_path}' \
+        '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, baseline_sha:$baseline_sha, round:0, max_rounds:$max_rounds, task_state_dir:$task_state_dir, task_context_path:$task_context_path, verify_script_path:$verify_script_path}' \
         > "$state_dir/state.json"
     printf '%s' "$state_dir"
 }
@@ -123,7 +135,7 @@ if [[ "$status" -ne 2 || ! -f "$last_error" || "$output" != *"INFRA-FAILURE: mis
 fi
 log_pass "missing state blocks completion"
 
-log_test "prefixed task with state but no completion_intent fails open"
+log_test "prefixed task with state but no completion_intent blocks"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 state_dir=$(write_state)
 set +e
@@ -131,10 +143,24 @@ output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 0 || "$round" != "0" || -n "$output" ]]; then
-    log_fail "expected no-intent event to exit 0 without state changes, status=$status round=$round output=$output"
+if [[ "$status" -ne 2 || "$round" != "0" || "$output" != *"missing completion_intent marker"* ]]; then
+    log_fail "expected no-intent event to block without changing round, status=$status round=$round output=$output"
 fi
-log_pass "no-intent event ignored"
+log_pass "no-intent event blocks completion"
+
+log_test "state directory comparison tolerates trailing slash in TMPDIR"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+state_dir=$(write_state)
+set +e
+output=$(printf '{"hook_event_name":"TaskCompleted","task_subject":"%s","cwd":"%s","session_id":"test-session","transcript_path":"%s/transcript.jsonl"}' \
+    "[CERBERUS-IMPL/abc123] T001 - test" "$PWD" "$TEST_DIR" \
+    | TMPDIR="${TMP_ROOT}/" "$HOOK" 2>&1)
+status=$?
+set -e
+if [[ "$status" -ne 2 || "$output" != *"missing completion_intent marker"* || -f "$state_dir/last_error" ]]; then
+    log_fail "expected trailing-slash TMPDIR to reach completion_intent gate, status=$status output=$output"
+fi
+log_pass "trailing-slash TMPDIR does not trigger state-dir mismatch"
 
 log_test "explicit completion without tagged commits blocks and increments round"
 touch "$state_dir/completion_intent"
@@ -165,24 +191,24 @@ if [[ "$status" -ne 2 || "$round" != "1" || ! -f "$state_dir/exhausted" ]]; then
 fi
 log_pass "final failed attempt marks exhausted"
 
-log_test "post-exhaustion retry clears completion instead of looping"
+log_test "post-exhaustion retry blocks instead of looping"
 touch "$state_dir/completion_intent"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 0 || "$round" != "1" || ! -f "$state_dir/exhausted" || -e "$state_dir/completion_intent" || -n "$output" ]]; then
-    log_fail "expected exhausted retry to clear completion silently, status=$status round=$round output=$output"
+if [[ "$status" -ne 2 || "$round" != "1" || ! -f "$state_dir/exhausted" || -e "$state_dir/completion_intent" || "$output" != *"Already exhausted"* ]]; then
+    log_fail "expected exhausted retry to block without looping, status=$status round=$round output=$output"
 fi
-log_pass "post-exhaustion retry clears completion"
+log_pass "post-exhaustion retry blocks without looping"
 
 log_test "PASS review writes reviewed_pass and increments round"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 repo="$TEST_DIR/pass-repo"
 make_review_repo "$repo"
 baseline=$(cat "$repo/baseline")
-state_dir=$(write_state 3 "$baseline")
+state_dir=$(write_state 3 "$baseline" "$repo")
 touch "$state_dir/completion_intent"
 fake_plugin="$TEST_DIR/fake-plugin-pass"
 make_fake_review_gate "$fake_plugin"
@@ -203,7 +229,7 @@ rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 repo="$TEST_DIR/final-pass-repo"
 make_review_repo "$repo"
 baseline=$(cat "$repo/baseline")
-state_dir=$(write_state 3 "$baseline")
+state_dir=$(write_state 3 "$baseline" "$repo")
 jq '.round = 2' "$state_dir/state.json" > "$state_dir/state.json.tmp"
 mv "$state_dir/state.json.tmp" "$state_dir/state.json"
 touch "$state_dir/completion_intent"
@@ -226,7 +252,7 @@ rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 repo="$TEST_DIR/fail-repo"
 make_review_repo "$repo"
 baseline=$(cat "$repo/baseline")
-state_dir=$(write_state 1 "$baseline")
+state_dir=$(write_state 1 "$baseline" "$repo")
 touch "$state_dir/completion_intent"
 fake_plugin="$TEST_DIR/fake-plugin-fail"
 make_fake_review_gate "$fake_plugin"

@@ -38,6 +38,33 @@ json_get() {
     printf '%s' "$hook_input" | jq -r "$filter" 2>/dev/null || printf ''
 }
 
+canonical_path() {
+    local path="$1"
+    local dir base resolved_dir
+
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+
+    if [[ -d "$path" ]]; then
+        (cd -P "$path" 2>/dev/null && pwd) || printf '%s' "$path"
+        return 0
+    fi
+
+    dir="$(dirname "$path")"
+    base="$(basename "$path")"
+    if [[ -d "$dir" ]]; then
+        resolved_dir="$(cd -P "$dir" 2>/dev/null && pwd)" || {
+            printf '%s' "$path"
+            return 0
+        }
+        printf '%s/%s' "$resolved_dir" "$base"
+        return 0
+    fi
+
+    printf '%s' "$path"
+}
+
 write_last_error() {
     local message="$1"
     if [[ -n "${state_dir:-}" ]]; then
@@ -277,7 +304,7 @@ if [[ -n "$state_team_hash" && "$state_team_hash" != "$team_hash" ]]; then
     write_last_error "state_invalid: event team_hash=${team_hash} does not match state team_hash=${state_team_hash}"
     block "INFRA-FAILURE: Cerberus team metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
 fi
-if [[ -n "$state_task_state_dir" && "$state_task_state_dir" != "$state_dir" ]]; then
+if [[ -n "$state_task_state_dir" && "$(canonical_path "$state_task_state_dir")" != "$(canonical_path "$state_dir")" ]]; then
     write_last_error "state_invalid: resolved state_dir=${state_dir} does not match state task_state_dir=${state_task_state_dir}"
     block "INFRA-FAILURE: Cerberus state directory metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
 fi
