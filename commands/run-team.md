@@ -109,21 +109,41 @@ Team 'cerberus-impl-<team_hash>' already exists (likely from an interrupted prio
 
 For every Cerberus task, create one Claude TaskList task:
 
+Before each `TaskCreate`, write that task's canonical context file once:
+
+```bash
+task_id="T001"
+state_dir="${TMPDIR:-/tmp}/cerberus-task-completed-hook/${team_hash}/${task_id}"
+task_context_path="${state_dir}/task-context.md"
+mkdir -p "$state_dir"
+cat > "$task_context_path" <<'TASK_CONTEXT'
+<task heading, meta files/dependencies/acceptance, and full task body>
+
+## Confirmed Pre-Review Verification Gate
+
+The TaskCompleted hook will run this script after teammate completion and before code review:
+<verify_script_path>
+TASK_CONTEXT
+```
+
+Do not paste the full task body into the Claude TaskList. The `task-context.md` file is the canonical task spec for implementers and reviewers.
+
 ```text
 TaskCreate(
   subject: "[CERBERUS-IMPL/<team_hash>] T### — <subject>",
-  description: <full task spec body>,
+  description: "Cerberus task T###. Spec: <task_context_path>. Read this file before implementation.",
   metadata: {
     cerberus_task_id: "T###",
     cerberus_team_hash: "<team_hash>",
     cerberus_state_dir: "${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/T###",
+    cerberus_task_context_path: "<task_context_path>",
     cerberus_files: [...],
     cerberus_depends: [...]
   }
 )
 ```
 
-Remember the mapping from `T###` to the returned Claude task ID.
+Remember the mapping from `T###` to the returned Claude task ID and `task_context_path`.
 
 ## Phase 3: Serial Scheduling
 
@@ -138,6 +158,10 @@ state_dir="${TMPDIR:-/tmp}/cerberus-task-completed-hook/${team_hash}/${task_id}"
 task_context_path="${state_dir}/task-context.md"
 baseline_sha=$(git rev-parse HEAD)
 mkdir -p "$state_dir"
+if [ ! -f "$task_context_path" ]; then
+  echo "missing task context for ${task_id}: ${task_context_path}" >&2
+  exit 2
+fi
 jq -n \
   --arg task_id "$task_id" \
   --arg claude_task_id "$claude_task_id" \
@@ -149,14 +173,6 @@ jq -n \
   --argjson max_rounds "$max_review_rounds" \
   '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, baseline_sha:$baseline_sha, round:0, max_rounds:$max_rounds, task_state_dir:$task_state_dir, task_context_path:$task_context_path, verify_script_path:$verify_script_path}' \
   > "${state_dir}/state.json"
-cat > "$task_context_path" <<'TASK_CONTEXT'
-<task heading, meta files/dependencies/acceptance, and full task body>
-
-## Confirmed Pre-Review Verification Gate
-
-The TaskCompleted hook will run this script after teammate completion and before code review:
-<verify_script_path>
-TASK_CONTEXT
 git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "${state_dir}/untracked_baseline.txt"
 ```
 
@@ -169,7 +185,7 @@ Agent({
   subagent_type: "implementer",
   model: "opus",
   description: "T### implement <subject>",
-  prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. State dir: <state_dir>. The lead-confirmed verification gate is <verify_script_path>; the TaskCompleted hook will run it before code review and will block completion if it fails. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience, but immediately before TaskUpdate(status:'completed') you MUST run exactly: touch \"<state_dir>/completion_intent\". Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, commit with trailer Cerberus-Task: T###, and follow the implementer agent rules.\n\n<full task spec>"
+  prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. Task spec: <task_context_path>. Read that file once at startup; it is the canonical task body. State dir: <state_dir>. The lead-confirmed verification gate is <verify_script_path>; the TaskCompleted hook will run it before code review and will block completion if it fails. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience, but immediately before TaskUpdate(status:'completed') you MUST run exactly: touch \"<state_dir>/completion_intent\". Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, commit with trailer Cerberus-Task: T###, and follow the implementer agent rules."
 })
 ```
 
