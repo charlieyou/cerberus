@@ -1,0 +1,168 @@
+# Pre-Debate Baseline Fixtures
+
+**Status: IMMUTABLE — Do not regenerate after any prompt-template or `bin/review-gate` edit.**
+
+These fixtures capture the pre-feature behavior of `bin/review-gate` across all
+five invocation shapes, taken against the current plugin version **before** any
+`--debate` flag, reviewer-template, or `bin/review-gate` edits land.
+
+The R9 byte-parity tests (T002 onward) assert that post-feature non-debate runs
+produce byte-identical `reviews/review-schema.json` and `reviews/review.prompt`
+artifacts to what is captured here.
+
+---
+
+## Pinned Mode
+
+All five shapes were captured with **`--mode smart`**.
+
+`fast` and `max` differ from `smart` only in model selection and reasoning effort,
+both of which are byte-parity-orthogonal (they produce the same prompt and schema,
+only the model name and inference knobs change).
+
+## Pinned Reviewers
+
+All shapes use **`--agents codex,gemini,claude`** (all three reviewers).
+
+Reviewer outputs (`reviews/<reviewer>.json`) are **canned offline verdicts** —
+deterministic PASS responses that do not require live network access. This makes
+the fixtures reproducible and independent of model availability.
+
+---
+
+## Invocation Shapes
+
+### Shape 1: `spawn-code-review` → `spawn-code-review/`
+
+```
+bin/review-gate spawn-code-review --mode smart --agents codex,gemini,claude \
+    --commit <HEAD_SHA>
+```
+
+Exercises the named code-review subcommand. Uses `--commit HEAD` so the diff
+is non-empty and representative, even on a clean worktree.
+
+Key artifacts:
+- `reviews/review.prompt` — full code-review prompt with diff substituted
+- `reviews/review-schema.json` — the structured-output schema
+- `latest.md` — artifact written by `spawn-code-review` (has diff-args metadata)
+
+### Shape 2: `spawn-plan-review` → `spawn-plan-review/`
+
+```
+bin/review-gate spawn-plan-review --mode smart --agents codex,gemini,claude \
+    <plan-file>
+```
+
+Exercises the named plan-review subcommand. The plan file is a minimal but
+representative plan document.
+
+Key artifacts:
+- `reviews/review.prompt` — plan-review prompt with plan content substituted
+- `latest.md` — artifact written by `spawn-plan-review` (has plan-path metadata)
+
+### Shape 3: `spawn-spec-review` → `spawn-spec-review/`
+
+```
+bin/review-gate spawn-spec-review --mode smart --agents codex,gemini,claude \
+    <spec-file>
+```
+
+Exercises the named spec-review subcommand. The spec file is a minimal but
+representative specification document.
+
+Key artifacts:
+- `reviews/review.prompt` — spec-review prompt with spec content substituted
+- `latest.md` — artifact written by `spawn-spec-review` (has spec-path metadata)
+
+### Shape 4: `spawn-epic-verify` → `spawn-epic-verify/`
+
+```
+bin/review-gate spawn-epic-verify --mode smart --agents codex,gemini,claude \
+    <epic-file>
+```
+
+Exercises the named epic-verify subcommand. The epic file contains a minimal
+set of acceptance criteria that reference observable properties of the plugin.
+
+Key artifacts:
+- `reviews/review.prompt` — epic-verify prompt with acceptance criteria substituted
+- `latest.md` — artifact written by `spawn-epic-verify` (has epic-context metadata)
+
+### Shape 5: bare `spawn --type code` → `spawn-bare/`
+
+```
+bin/review-gate spawn --type code --mode smart --agents codex,gemini,claude \
+    <artifact-path>
+```
+
+Exercises the raw `spawn` subcommand directly (no named wrapper). This is the
+code path used internally by all named subcommands when they call
+`"$0" spawn --type <type> ...`.  The `--type code` flag drives template resolution
+to `prompts/reviewers/code.md` and stop-hook revision instructions to the code template.
+
+Key artifacts:
+- `reviews/review.prompt` — prompt built by the generic `build_prompt` function
+  (not the specialized code-diff path; `${DIFF_CONTENT}` appears literally in the
+  artifact content rather than being pre-substituted by `spawn-code-review`)
+- `latest.md` — minimal pre-built artifact provided as a direct argument
+
+---
+
+## Artifact Inventory (per shape)
+
+| File | Description |
+|------|-------------|
+| `reviews/review.prompt` | Rendered reviewer prompt (shared by all 3 reviewers) |
+| `reviews/review-schema.json` | Structured-output schema passed to `codex --output-schema` |
+| `reviews/codex.json` | Canned PASS verdict from fake codex reviewer |
+| `reviews/gemini.json` | Canned PASS verdict from fake gemini reviewer |
+| `reviews/claude.json` | Canned PASS verdict from fake claude reviewer (wrapped in `{"result":...}`) |
+| `gate-state.json` | Gate state after stop-hook resolution (`status: "resolved"`) |
+| `iteration.txt` | Iteration counter (`0` after first-pass auto-approve) |
+| `latest.md` | Artifact file written by the spawn command |
+| `spawn-stdout.txt` | stdout from the spawn command |
+| `spawn-stderr.txt` | stderr from the spawn command |
+| `gate-report.md` | Stop-hook gate report markdown (extracted from check output) |
+
+---
+
+## Capture Method
+
+Fixtures were generated by `bin/tests/capture-pre-debate-baseline.sh`:
+
+1. A temporary `$HOME` directory was created to isolate session state.
+2. Fake reviewer CLIs (`codex`, `gemini`, `claude`) were placed first in `$PATH`.
+   Each fake CLI writes a deterministic PASS verdict without network access.
+3. The spawn command ran with `HOME` pointing to the fake home directory.
+4. Sentinel files (`.done`) were polled until all 3 reviewers completed.
+5. The stop-hook check (`review-gate check`) ran with the same fake `$HOME`,
+   producing the final `gate-state.json` (`status: "resolved"`) and gate report.
+6. All artifacts were copied to this directory.
+
+---
+
+## Invariants Asserted by R9 Tests (T002 onward)
+
+Non-debate (no `--debate` flag) post-feature runs MUST produce byte-identical:
+
+- `reviews/review-schema.json` — schema shape must not change for non-debate runs
+- `reviews/review.prompt` — rendered prompt must not change (no new placeholders
+  or template text added to the non-debate code path)
+
+Help-text changes (`--help`) are the explicit R9 exception — they may differ.
+
+---
+
+## Regeneration
+
+This directory MUST NOT be regenerated after any prompt-template or `bin/review-gate`
+edit. If regeneration is genuinely needed (e.g., reverting to a clean state before
+any debate edits), run:
+
+```bash
+bin/tests/capture-pre-debate-baseline.sh --overwrite
+```
+
+**Only run with `--overwrite` if you are certain no prompt-template or
+`bin/review-gate` changes have landed since the last clean capture.**
