@@ -2919,7 +2919,11 @@ PROMPT
         # Compute the canonical <artifact_id> per review type. The four
         # judging review types use the input pinned by spec R3:
         #   plan / spec     → realpath of the user-passed file path
-        #   code            → verbatim diff_args_str (REVIEW_GATE_DIFF_ARGS)
+        #   code            → verbatim diff_args_str (REVIEW_GATE_DIFF_ARGS,
+        #                     or parsed from the artifact's
+        #                     `<!-- diff-args: ... -->` frontmatter for
+        #                     direct bare-spawn invocations where the env
+        #                     var was not pre-set by spawn-code-review)
         #   epic-verify     → realpath when the arg resolves to a regular
         #                     file, otherwise the verbatim raw-criteria
         #                     string. The spawn-epic-verify subcommand
@@ -2934,8 +2938,56 @@ PROMPT
                     die "compute_artifact_id $REVIEW_TYPE failed for: $artifact_arg"
                 ;;
             code)
-                _debate_artifact_id=$(compute_artifact_id code "${REVIEW_GATE_DIFF_ARGS:-}") || \
-                    die "compute_artifact_id code failed"
+                # Prefer the explicit env var set by spawn-code-review;
+                # otherwise parse the canonical `<!-- diff-args: ... -->`
+                # frontmatter from the artifact (which spawn-code-review
+                # writes into every code-review artifact); finally fall
+                # back to the artifact's realpath so direct bare-spawn
+                # invocations on stub/minimal artifacts that lack the
+                # frontmatter still produce a per-artifact-distinct hash
+                # (different artifacts → different hashes; spec R3's
+                # "different artifacts shuffle assignments" requirement).
+                # Per-diff differentiation requires the explicit env var
+                # or frontmatter; the realpath fallback intentionally
+                # produces the same hash for the same artifact path
+                # regardless of which diff was used.
+                local _code_diff_args="${REVIEW_GATE_DIFF_ARGS:-}"
+                if [[ -z "$_code_diff_args" ]]; then
+                    local _resolved_artifact_for_diff_parse=""
+                    if [[ -f "$artifact_arg" ]]; then
+                        _resolved_artifact_for_diff_parse="$artifact_arg"
+                    elif _resolved_artifact_for_diff_parse=$(resolve_artifact "$artifact_arg" 2>/dev/null) && [[ -f "$_resolved_artifact_for_diff_parse" ]]; then
+                        :
+                    else
+                        _resolved_artifact_for_diff_parse=""
+                    fi
+                    if [[ -n "$_resolved_artifact_for_diff_parse" ]]; then
+                        # Parse the first `<!-- diff-args: ... -->` line.
+                        # The artifact format is fixed by review_gate_spawn_code_review's
+                        # writer at line ~1013; this parser MUST match that
+                        # writer's exact pattern.
+                        _code_diff_args=$(sed -nE 's|^<!-- diff-args: (.*) -->$|\1|p' "$_resolved_artifact_for_diff_parse" | head -n 1)
+                    fi
+                fi
+                if [[ -n "$_code_diff_args" ]]; then
+                    _debate_artifact_id=$(compute_artifact_id code "$_code_diff_args") || \
+                        die "compute_artifact_id code failed"
+                else
+                    # Realpath fallback. Use plan-style realpath since the
+                    # artifact path is the only stable identifier we have.
+                    # Emit a stderr note so debugging-the-determinism-
+                    # contract is easier when this branch fires.
+                    echo "Note: --debate code review without REVIEW_GATE_DIFF_ARGS or <!-- diff-args: ... --> frontmatter; using artifact realpath for artifact_id (per-diff shuffle is not available on this invocation path)." >&2
+                    if [[ -f "$artifact_arg" ]]; then
+                        _debate_artifact_id=$(compute_artifact_id plan "$artifact_arg") || \
+                            die "compute_artifact_id (code-realpath fallback) failed for: $artifact_arg"
+                    else
+                        # No file path either; degrade to verbatim arg
+                        # string so the assignment is at least
+                        # deterministic for that string.
+                        _debate_artifact_id=$(compute_artifact_id code "$artifact_arg")
+                    fi
+                fi
                 ;;
             epic-verify)
                 _debate_artifact_id=$(compute_artifact_id epic-verify "${REVIEW_GATE_EPIC_CONTEXT:-$artifact_arg}") || \
@@ -3153,36 +3205,87 @@ SCHEMA
     local reviewers_json='{}'
     local spawned=0
 
+    # Pre-resolve the default-strategy file content (verification-first.md)
+    # ONCE for all reviewers; the prebuilt-prompt per-reviewer rendering
+    # path uses string-replace to swap these bytes for each reviewer's
+    # assigned-strategy bytes. Resolved here (outside the loop) so we hard-
+    # error early if the asset is missing rather than mid-loop on the Nth
+    # reviewer. Only resolved under --debate AND when there's a prebuilt
+    # prompt to operate on; otherwise the variable is intentionally unset.
+    local _debate_default_strategy_file=""
+    if [[ "$debate" == "true" ]] && [[ -n "$prebuilt_prompt_content" ]]; then
+        _debate_default_strategy_file=$(resolve_strategy_path "verification-first") || \
+            die "Failed to resolve default verification-first.md (required for prebuilt-prompt per-reviewer rendering)"
+    fi
+
     for reviewer in "${agents_list[@]}"; do
-        # Per-reviewer prompt rendering under --debate (T005 wiring step
-        # for the bare-spawn build_prompt path):
+        # Per-reviewer prompt rendering under --debate (T005). Two branches:
         #
-        # When --debate is set AND the bare-spawn took the build_prompt
-        # branch (no prebuilt prompt content was passed in via
-        # REVIEW_GATE_PROMPT_FILE), re-render the prompt for THIS reviewer
-        # using their assigned strategy (STRATEGY_NAME_<REVIEWER>). The
-        # per-reviewer rendered prompt is written to
-        # `$REVIEWS_DIR/review.<reviewer>.prompt` and passed to
-        # spawn_reviewer. This makes the per-(artifact_id, reviewer) R3
-        # strategy assignment ACTUALLY appear in the prompt sent to the
-        # model rather than being computed-but-unused.
+        #   (1) Bare-spawn build_prompt branch (no prebuilt content): re-
+        #       render the prompt for THIS reviewer using their assigned
+        #       strategy (STRATEGY_NAME_<REVIEWER>) by setting
+        #       REVIEW_GATE_DEBATE_STRATEGY and recalling build_prompt.
         #
-        # For the prebuilt-prompt branch (spawn-*-review wrappers, which
-        # currently bake a single default-substituted strategy into
-        # `review.prompt`), per-reviewer rendering is wired by T006's
-        # synchronous coordinator. The prebuilt branch is still byte-
-        # identical to today (default verification-first), preserving the
-        # existing test-debate-byte-parity assertions until T006 updates
-        # them alongside per-reviewer rendering for that path.
+        #   (2) Prebuilt-prompt branch (spawn-*-review wrappers wrote
+        #       review.prompt with the default verification-first.md
+        #       content inlined by T004's substitute_debate_placeholders):
+        #       string-replace those default bytes with the per-reviewer
+        #       strategy file's bytes via python3. python3 is already a
+        #       hard dependency of the helper (used by _resolve_realpath
+        #       fallback and the test harness). The replacement is
+        #       limited to a single occurrence (the strategy block
+        #       inserted by the substitute pass).
+        #
+        # Both branches write to `$REVIEWS_DIR/review.<reviewer>.prompt`
+        # and pass that to spawn_reviewer. Per-reviewer rendering makes
+        # the per-(artifact_id, reviewer) R3 strategy assignment ACTUALLY
+        # appear in the prompts sent to each model; the env-var exports
+        # alone are not sufficient (they would be computed-but-unused
+        # without this rendering step).
         local _rendered_prompt_file="$prompt_file"
-        if [[ "$debate" == "true" ]] && [[ -z "$prebuilt_prompt_content" ]]; then
-            local _rev_upper _strategy_name_var _per_reviewer_strategy
+        if [[ "$debate" == "true" ]]; then
+            local _rev_upper _strategy_name_var _per_reviewer_strategy _per_reviewer_strategy_file
             _rev_upper=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
             _strategy_name_var="STRATEGY_NAME_${_rev_upper}"
             _per_reviewer_strategy="${!_strategy_name_var:-verification-first}"
             _rendered_prompt_file="$REVIEWS_DIR/review.${reviewer}.prompt"
-            REVIEW_GATE_DEBATE_STRATEGY="$_per_reviewer_strategy" \
-                build_prompt "$artifact_path" "$REVIEW_TYPE" > "$_rendered_prompt_file"
+
+            if [[ -z "$prebuilt_prompt_content" ]]; then
+                # Branch (1): build_prompt path.
+                REVIEW_GATE_DEBATE_STRATEGY="$_per_reviewer_strategy" \
+                    build_prompt "$artifact_path" "$REVIEW_TYPE" > "$_rendered_prompt_file"
+            else
+                # Branch (2): prebuilt path. String-replace the default
+                # strategy bytes with the per-reviewer strategy bytes.
+                _per_reviewer_strategy_file=$(resolve_strategy_path "$_per_reviewer_strategy") || \
+                    die "Failed to resolve per-reviewer strategy file for $reviewer ($_per_reviewer_strategy)"
+                if [[ "$_per_reviewer_strategy" == "verification-first" ]]; then
+                    # Optimization: assigned strategy matches the default;
+                    # no string replace needed. Just copy the prebuilt
+                    # prompt to the per-reviewer location.
+                    cp "$prompt_file" "$_rendered_prompt_file"
+                else
+                    if ! python3 -c '
+import sys
+prompt_path, default_path, new_path, out_path = sys.argv[1:5]
+with open(prompt_path, "rb") as f: prompt = f.read()
+with open(default_path, "rb") as f: default_bytes = f.read()
+with open(new_path, "rb") as f: new_bytes = f.read()
+if default_bytes not in prompt:
+    sys.stderr.write(
+        "error: default verification-first.md bytes not found in prebuilt prompt; "
+        "cannot perform per-reviewer strategy substitution. The wrapper that wrote "
+        "this prompt must use the canonical T004 substitute_debate_placeholders pass "
+        "with the default strategy.\n"
+    )
+    sys.exit(1)
+out = prompt.replace(default_bytes, new_bytes, 1)
+with open(out_path, "wb") as f: f.write(out)
+' "$prompt_file" "$_debate_default_strategy_file" "$_per_reviewer_strategy_file" "$_rendered_prompt_file"; then
+                        die "Failed to render per-reviewer prompt for $reviewer (strategy=$_per_reviewer_strategy)"
+                    fi
+                fi
+            fi
         fi
         if spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file"; then
             reviewers_json=$(echo "$reviewers_json" | jq \

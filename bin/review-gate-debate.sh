@@ -183,14 +183,16 @@ _resolve_realpath() {
     fi
     # Last-ditch fallback: cd + pwd. Only works for directory arguments or
     # files that exist; matches `realpath -e` semantics roughly. We prefer
-    # to error out so the caller knows the artifact_id is not stable.
+    # to error out so the caller knows the artifact_id is not stable. Use
+    # `cd --` to terminate option processing so paths starting with a
+    # hyphen (e.g., `-h`) cannot be misinterpreted as cd flags.
     if [[ -d "$p" ]]; then
-        ( cd "$p" && pwd -P )
+        ( cd -- "$p" && pwd -P )
     elif [[ -f "$p" ]]; then
         local d b
-        d=$(dirname "$p")
-        b=$(basename "$p")
-        ( cd "$d" && printf '%s/%s\n' "$(pwd -P)" "$b" )
+        d=$(dirname -- "$p")
+        b=$(basename -- "$p")
+        ( cd -- "$d" && printf '%s/%s\n' "$(pwd -P)" "$b" )
     else
         echo "error: cannot resolve realpath for '$p' (neither realpath nor python3 available, and path does not exist)" >&2
         return 1
