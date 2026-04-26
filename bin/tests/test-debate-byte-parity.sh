@@ -457,32 +457,24 @@ NOHUP_DEBATE
     GEMINI_POLICY_DEBATE="$PLUGIN_ROOT/config/gemini-readonly-policy.toml"
 
     # Returns 0 if the bytes of $2 appear as a contiguous substring in $1.
-    # Both files are read line-by-line via awk getline (which strips each
-    # line's trailing newline), then the accumulated needle is searched
-    # inside the accumulated haystack via index(). Because awk processes
-    # both files identically, byte-equality of the inserted region with the
-    # source file is captured exactly by this substring check.
+    #
+    # Reads both files in one shot via awk's RS="\0" (whole-file slurp,
+    # since neither file contains NUL bytes) so the haystack and needle
+    # are each a single record. This avoids the O(N^2) line-by-line
+    # concatenation pattern and keeps the substring check O(N+M) on
+    # awk implementations that use Boyer-Moore-style index() (mawk, gawk).
     file_contains_bytes_of() {
         local haystack_file="$1"
         local needle_file="$2"
-        awk -v needle_file="$needle_file" '
+        awk -v RS='\0' -v needle_file="$needle_file" '
             BEGIN {
-                n = 0
-                while ((getline line < needle_file) > 0) {
-                    if (n++) needle = needle "\n" line
-                    else      needle = line
-                }
+                if ((getline needle < needle_file) <= 0) needle = ""
                 close(needle_file)
-                first = 1
             }
             {
-                if (first) { haystack = $0; first = 0 }
-                else        haystack = haystack "\n" $0
+                if (index($0, needle) > 0) { found = 1; exit }
             }
-            END {
-                if (index(haystack, needle) > 0) exit 0
-                exit 1
-            }
+            END { exit (found ? 0 : 1) }
         ' "$haystack_file"
     }
 
@@ -576,6 +568,77 @@ NOHUP_DEBATE
             fail_count=$((fail_count + 1))
         fi
     done
+
+    # -----------------------------------------------------------------------
+    # Regression guard: artifact bytes that happen to look like the four
+    # debate-mode placeholders MUST NOT be stripped or rewritten by the
+    # substitution. The substitute_debate_placeholders pass runs against
+    # the TEMPLATE only, before artifact content is merged in, so a diff
+    # (or any artifact text) containing literal `${CONFIDENCE_ANCHORS}` etc.
+    # round-trips intact.
+    # -----------------------------------------------------------------------
+    log_test "Finding-1 regression: artifact bytes resembling placeholders survive --debate render"
+
+    REGRESSION_SESSION="debate-render-regression"
+    REGRESSION_REVIEW_DIR="$DEBATE_RENDER_FAKE_HOME/.claude/projects/-debate-render/cerberus/$REGRESSION_SESSION"
+    rm -rf "$REGRESSION_REVIEW_DIR"
+    mkdir -p "$REGRESSION_REVIEW_DIR"
+    REGRESSION_TRANS="$DEBATE_RENDER_FAKE_HOME/.claude/projects/-debate-render/$REGRESSION_SESSION.jsonl"
+    touch "$REGRESSION_TRANS"
+
+    REGRESSION_ARTIFACT="$REGRESSION_REVIEW_DIR/latest.md"
+    cat > "$REGRESSION_ARTIFACT" <<'REGRESSION_ART'
+This artifact intentionally contains all four debate placeholder lines as
+literal artifact bytes. The substitute_debate_placeholders pass must NOT
+touch any of these lines, because it runs on the template alone.
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
+End of artifact body.
+REGRESSION_ART
+
+    REGRESSION_STDOUT="$DEBATE_RENDER_WORK/${REGRESSION_SESSION}.stdout"
+    REGRESSION_STDERR="$DEBATE_RENDER_WORK/${REGRESSION_SESSION}.stderr"
+    set +e
+    (
+        export HOME="$DEBATE_RENDER_FAKE_HOME"
+        export PATH="$DEBATE_RENDER_FAKE_BIN:$PATH"
+        export CLAUDE_SESSION_ID="$REGRESSION_SESSION"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$REGRESSION_TRANS"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS_DEBATE"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY_DEBATE"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        "$REVIEW_GATE" spawn \
+            --type code \
+            --debate \
+            --mode smart \
+            --agents codex,gemini,claude \
+            "$REGRESSION_ARTIFACT"
+    ) >"$REGRESSION_STDOUT" 2>"$REGRESSION_STDERR"
+    REGRESSION_RC=$?
+    set -e
+
+    REGRESSION_PROMPT="$REGRESSION_REVIEW_DIR/reviews/review.prompt"
+    if [[ $REGRESSION_RC -ne 0 || ! -f "$REGRESSION_PROMPT" ]]; then
+        log_fail "regression spawn failed (rc=$REGRESSION_RC); cannot validate finding-1 fix"
+        cat "$REGRESSION_STDERR" >&2 2>/dev/null || true
+        fail_count=$((fail_count + 1))
+    else
+        regression_ok=1
+        for placeholder in 'CONFIDENCE_ANCHORS' 'STRATEGY_DIRECTIVE' 'PEER_BLOCK' 'PRIOR_ROUND_SELF_BLOCK'; do
+            if ! grep -F "\${$placeholder}" "$REGRESSION_PROMPT" >/dev/null; then
+                log_fail "Finding-1 regression: artifact's literal \${$placeholder} line was stripped"
+                regression_ok=0
+            fi
+        done
+        if [[ $regression_ok -eq 1 ]]; then
+            log_pass "all four artifact placeholder-looking lines survive --debate render"
+            pass_count=$((pass_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
+    fi
 
     rm -rf "$DEBATE_RENDER_WORK"
 fi

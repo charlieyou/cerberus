@@ -920,7 +920,18 @@ USAGE
         task_context="${task_context:-No additional context provided.}"$'\n\n'"$commit_net_warning"
     fi
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first (D2
+        # line-consume semantics under --debate absent; canonical anchor +
+        # strategy bytes injected under --debate set). This MUST happen
+        # before the diff/context substitution so that artifact content
+        # containing literal `${CONFIDENCE_ANCHORS}` etc. (e.g., a diff that
+        # touches these very templates) is not corrupted by the placeholder
+        # pass.
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
         local diff_tmp="${review_dir}/diff_content.tmp"
         local context_tmp="${review_dir}/context_content.tmp"
         printf '%s' "$diff_content" > "$diff_tmp"
@@ -943,21 +954,11 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$diff_tmp" "$context_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$diff_tmp" "$context_tmp" "$template_substituted_tmp"
     else
         die "Code review prompt template not found in project or built-in locations"
     fi
-
-    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
-    # Under --debate absent: every placeholder line is consumed in its
-    # entirety so the rendered prompt is byte-identical to a template that
-    # never had them (R9 byte-parity).
-    # Under --debate set: ${CONFIDENCE_ANCHORS} and ${STRATEGY_DIRECTIVE} are
-    # substituted with the literal bytes of their canonical asset files;
-    # ${PEER_BLOCK} and ${PRIOR_ROUND_SELF_BLOCK} are consumed (T008 fills).
-    prompt_content=$(printf '%s\n' "$prompt_content" \
-        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     # --- Inject previous reviews / author context near the top of the prompt ---
     local review_context=""
@@ -1329,7 +1330,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${PLAN_CONTENT} using temp file to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first so
+        # plan content containing literal `${CONFIDENCE_ANCHORS}` etc.
+        # is not corrupted by the placeholder pass. (D2 line-consume
+        # under --debate absent; canonical anchor + strategy injection
+        # under --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${PLAN_CONTENT} using temp file to avoid ARG_MAX limits
         local plan_tmp="${review_dir}/plan_content.tmp"
         printf '%s' "$plan_content" > "$plan_tmp"
         prompt_content=$(awk -v plan_file="$plan_tmp" '
@@ -1342,8 +1352,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$plan_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$plan_tmp" "$template_substituted_tmp"
     else
         # Fallback: use plan content directly with basic prompt structure
         prompt_content="You are reviewing a plan for quality and correctness.
@@ -1377,11 +1387,9 @@ JSON only, no markdown code fences:
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)
 "
+        # Fallback path uses a synthetic prompt with no placeholders, so the
+        # fallback intentionally bypasses substitute_debate_placeholders.
     fi
-
-    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
-    prompt_content=$(printf '%s\n' "$prompt_content" \
-        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     # --- Inject focus area before Output Format section if provided ---
     if [[ -n "$focus_area" ]]; then
@@ -1666,7 +1674,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${SPEC_CONTENT} using temp file to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first so spec
+        # content containing literal `${CONFIDENCE_ANCHORS}` etc. is not
+        # corrupted by the placeholder pass. (D2 line-consume under
+        # --debate absent; canonical anchor + strategy injection under
+        # --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${SPEC_CONTENT} using temp file to avoid ARG_MAX limits
         local spec_tmp="${review_dir}/spec_content.tmp"
         printf '%s' "$spec_content" > "$spec_tmp"
         prompt_content=$(awk -v spec_file="$spec_tmp" '
@@ -1679,8 +1696,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$spec_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$spec_tmp" "$template_substituted_tmp"
     else
         # Fallback: use spec content directly with basic prompt structure
         prompt_content="You are reviewing a feature specification for quality and correctness.
@@ -1714,11 +1731,9 @@ JSON only, no markdown code fences:
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)"
+        # Fallback path uses a synthetic prompt with no placeholders, so the
+        # fallback intentionally bypasses substitute_debate_placeholders.
     fi
-
-    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
-    prompt_content=$(printf '%s\n' "$prompt_content" \
-        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
         prompt_content=$'ultrathink\n\n'"$prompt_content"
@@ -2070,7 +2085,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute epic context (file path or raw criteria)
+        # Substitute debate-mode placeholders on the TEMPLATE first so epic
+        # context containing literal `${CONFIDENCE_ANCHORS}` etc. is not
+        # corrupted by the placeholder pass. (D2 line-consume under
+        # --debate absent; canonical anchor + strategy injection under
+        # --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute epic context (file path or raw criteria)
         # Use match+printf loop to avoid gsub & and \ interpretation issues
         local context_tmp="${review_dir}/epic_context.tmp"
         printf '%s' "$epic_context" > "$context_tmp"
@@ -2084,15 +2108,11 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$context_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$context_tmp" "$template_substituted_tmp"
     else
         die "Epic verification prompt template not found in project or built-in locations"
     fi
-
-    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
-    prompt_content=$(printf '%s\n' "$prompt_content" \
-        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     # --- Inject previous reviews context before Output Format section ---
     if [[ -n "$previous_reviews" ]]; then
@@ -2674,8 +2694,15 @@ DEFAULT
         local content
         content=$(cat "$artifact_path")
 
+        # Substitute the four debate-mode placeholders on the TEMPLATE only,
+        # before it is concatenated with the artifact content. This prevents
+        # artifact bytes that happen to contain literal `${CONFIDENCE_ANCHORS}`
+        # etc. (e.g., a diff that touches these very templates) from being
+        # corrupted by the substitution. (D2 line-consume under --debate
+        # absent; canonical anchor + strategy injection under --debate set.)
         local criteria
-        criteria=$(resolve_template "$review_type")
+        criteria=$(resolve_template "$review_type" \
+            | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
         local previous_reviews
         previous_reviews=$(get_previous_reviews)
@@ -2898,16 +2925,15 @@ PROMPT
         # Use pre-built prompt content (read before clean_state)
         echo "$prebuilt_prompt_content" > "$prompt_file"
     else
-        # The bare-spawn path uses build_prompt, which embeds the reviewer
-        # template via resolve_template. Templates may contain the four
-        # debate-mode placeholders (CONFIDENCE_ANCHORS / STRATEGY_DIRECTIVE /
-        # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK). Substitute them here so the
-        # bare-spawn prompt does not leak literal `${...}` text into the
-        # rendered prompt under --debate absent (R9 byte-parity), and
-        # injects canonical anchor/strategy bytes under --debate set.
-        build_prompt "$artifact_path" "$REVIEW_TYPE" \
-            | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
-            > "$prompt_file"
+        # The bare-spawn path uses build_prompt, which substitutes the
+        # four debate-mode placeholders on the template via
+        # substitute_debate_placeholders BEFORE merging artifact content.
+        # That ordering keeps artifact bytes (which may contain literal
+        # `${CONFIDENCE_ANCHORS}` etc., e.g., a diff that touches these
+        # templates) untouched, while still removing the placeholders
+        # under --debate absent (R9 byte-parity) and injecting canonical
+        # anchor/strategy bytes under --debate set.
+        build_prompt "$artifact_path" "$REVIEW_TYPE" > "$prompt_file"
     fi
 
     # Create JSON schema for structured output
