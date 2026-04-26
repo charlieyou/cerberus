@@ -14,6 +14,7 @@ Run a strictly serial agent-team implementation loop from a `*-team-tasks.md` fi
 - The lead never edits repository files. The lead may write per-task state files under `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/` via Bash.
 - The lead never invokes `/cerberus:review-code` directly. Code review fires automatically from the `TaskCompleted` hook.
 - Scheduling is strictly serial: run at most one implementer teammate at a time.
+- Every implementer teammate spawned with `Agent` MUST request `model: "opus"`; do not omit the model or spawn lower-tier teammates.
 
 ## Phase 0: Preflight
 
@@ -125,13 +126,14 @@ TASK_CONTEXT
 git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "${state_dir}/untracked_baseline.txt"
 ```
 
-Spawn a fresh teammate for the task:
+Spawn a fresh Opus teammate for the task:
 
 ```text
 Agent({
   team_name: "cerberus-impl-<team_hash>",
   name: "impl-T###",
   subagent_type: "implementer",
+  model: "opus",
   description: "T### implement <subject>",
   prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. State dir: <state_dir>. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience, but immediately before TaskUpdate(status:'completed') you MUST run exactly: touch \"<state_dir>/completion_intent\". Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, commit with trailer Cerberus-Task: T###, and follow the implementer agent rules.\n\n<full task spec>"
 })
