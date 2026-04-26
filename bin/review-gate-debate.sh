@@ -76,6 +76,9 @@ DEBATE_STRATEGIES=(verification-first falsification-first decompose)
 # Usage:
 #   printf '%s' "<input bytes>" | _sha256_hex            # reads stdin
 #
+# Input: bytes are read from stdin; this function does NOT accept a literal
+# argument form. Pipe the bytes-to-hash via the Bourne `|` operator.
+#
 # Output: a single line, exactly 64 lowercase hex chars + newline. Strips
 # the trailing `  -` filename suffix and any other whitespace that the
 # underlying tool may emit.
@@ -169,7 +172,9 @@ compute_artifact_id() {
 _resolve_realpath() {
     local p="$1"
     if command -v realpath >/dev/null 2>&1; then
-        realpath "$p"
+        # `--` terminates option processing so paths starting with a hyphen
+        # (e.g., `-h`) are not interpreted as flags.
+        realpath -- "$p"
         return $?
     fi
     if command -v python3 >/dev/null 2>&1; then
