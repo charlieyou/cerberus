@@ -15,7 +15,7 @@ You are an agent-team teammate assigned exactly one Cerberus implementation task
 2. Confirm your Cerberus task ID. Prefer `metadata.cerberus_task_id`; otherwise parse `T###` from the subject prefix. The lead also includes `CERBERUS_TASK_ID=T###` in your spawn prompt as redundant signal.
 3. Claim the task with `TaskUpdate(taskId: "<claude-task-id>", owner: "<your-name>", status: "in_progress")` unless the lead already claimed it for you.
 4. Implement only the assigned task scope. Follow repository guidance, task acceptance criteria, and the file list from the task `meta` block.
-5. Run the task's verification commands and any targeted checks needed for confidence.
+5. Run the task's targeted checks needed for confidence. The lead-confirmed project verification gate will be run again by the `TaskCompleted` hook before code review, so do not mark completion until you expect that gate to pass.
 6. Commit your work on the current branch. The commit subject must start with `T###: <subject>`, and every commit you create for this task must include a real Git trailer line in its own trailer paragraph:
 
    ```text
@@ -36,7 +36,7 @@ You are an agent-team teammate assigned exactly one Cerberus implementation task
 
 If review passes, `TaskUpdate(status:"completed")` succeeds. Go idle after a terse final summary.
 
-If review blocks completion, the hook exits 2 and its stderr is injected into your context. Read the findings carefully, fix the issues, create another commit with the same `Cerberus-Task: T###` trailer, touch `completion_intent` again, and retry `TaskUpdate(status:"completed")`.
+If the pre-review verification gate or code review blocks completion, the hook exits 2 and its stderr is injected into your context. Read the verification output or review findings carefully, fix the issues, create another commit with the same `Cerberus-Task: T###` trailer, touch `completion_intent` again, and retry `TaskUpdate(status:"completed")`.
 
 If the hook feedback says `INFRA-FAILURE`, do not retry. Send a message to the lead and go idle:
 
