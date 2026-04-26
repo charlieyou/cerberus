@@ -30,6 +30,8 @@ This is a three-phase verification—DO NOT skip to JSON output:
 
 ---
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Author Context Handling (highest behavioral priority)
 
 When an "Author Context" section appears in this prompt, follow these rules in order.
@@ -92,6 +94,8 @@ If Author Context contains questions, answer them in the `summary` field. Do not
 ${EPIC_CONTEXT}
 </epic_context>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 The above contains either:
 - **A file path** (single line, looks like a path) — read it with your tools to find acceptance criteria
 - **Raw acceptance criteria** (multi-line text) — verify these directly against the codebase

@@ -207,6 +207,105 @@ inject_context_block() {
 
 # normalize_mode and validate_mode are provided by review-gate-models.sh
 
+# Substitute the four debate-mode reviewer template placeholders:
+#   ${CONFIDENCE_ANCHORS}, ${STRATEGY_DIRECTIVE}, ${PEER_BLOCK}, ${PRIOR_ROUND_SELF_BLOCK}
+#
+# Reads prompt content from stdin, writes the substituted content to stdout.
+#
+# Arguments:
+#   $1 - debate flag ("true" enables anchor/strategy injection; anything else
+#        consumes every placeholder line entirely so the rendered prompt is
+#        byte-identical to a template that never had the placeholders, per
+#        spec D2).
+#   $2 - assigned strategy name (only used when debate=true; default
+#        "verification-first"). T005 wires real per-(artifact, reviewer)
+#        assignment via the coordinator stub; T004 leaves it as a no-op
+#        default so the substitution is exercisable end-to-end.
+#
+# When --debate is absent: every placeholder line is removed in its entirety
+# (line + trailing newline) using `sed -E`. This consumes the placeholder
+# whitespace exactly once (D2 line-consume semantics).
+#
+# When --debate is set: ${CONFIDENCE_ANCHORS} is replaced with the literal
+# bytes of prompts/strategies/confidence-anchors.md; ${STRATEGY_DIRECTIVE} is
+# replaced with the literal bytes of prompts/strategies/<strategy>.md;
+# ${PEER_BLOCK} and ${PRIOR_ROUND_SELF_BLOCK} are consumed entirely (T008
+# fills them).
+#
+# Bash 3.2-portable (uses sed -E and awk only; no Bash-4 parameter
+# expansions; no GNU-only sed extensions).
+substitute_debate_placeholders() {
+    local debate="${1:-false}"
+    local strategy_name="${2:-verification-first}"
+
+    if [[ "$debate" != "true" ]]; then
+        # Consume entire placeholder lines (line + trailing newline) so the
+        # rendered prompt is byte-identical to a template that never had
+        # the placeholders. R9 byte-parity requirement.
+        sed -E '/^\$\{(CONFIDENCE_ANCHORS|STRATEGY_DIRECTIVE|PEER_BLOCK|PRIOR_ROUND_SELF_BLOCK)\}$/d'
+        return 0
+    fi
+
+    # Resolve asset paths with project-local override support, mirroring the
+    # template-resolution pattern used elsewhere in this file.
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+    local anchors_path=""
+    local _path
+    for _path in "$project_root/prompts/strategies/confidence-anchors.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/confidence-anchors.md"; do
+        if [[ -f "$_path" ]]; then
+            anchors_path="$_path"
+            break
+        fi
+    done
+
+    local strategy_path=""
+    for _path in "$project_root/prompts/strategies/${strategy_name}.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/${strategy_name}.md"; do
+        if [[ -f "$_path" ]]; then
+            strategy_path="$_path"
+            break
+        fi
+    done
+
+    if [[ -z "$anchors_path" ]]; then
+        die "Confidence anchors strategy file not found: prompts/strategies/confidence-anchors.md"
+    fi
+    if [[ -z "$strategy_path" ]]; then
+        die "Strategy directive file not found: prompts/strategies/${strategy_name}.md"
+    fi
+
+    # Substitute via awk: read each strategy file once via getline (preserving
+    # exact line bytes), then for each input line, replace whole-line
+    # placeholders with the file contents (or consume the line for
+    # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK). The accumulator+`print` pattern
+    # produces output bytes byte-identical to the source files (each source
+    # ends with a single trailing \n, which is what `print` emits).
+    awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" '
+        BEGIN {
+            n = 0
+            while ((getline line < anchors_file) > 0) {
+                if (n++) anchors = anchors "\n" line
+                else      anchors = line
+            }
+            close(anchors_file)
+            n = 0
+            while ((getline line < strategy_file) > 0) {
+                if (n++) strategy = strategy "\n" line
+                else      strategy = line
+            }
+            close(strategy_file)
+        }
+        /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;  next }
+        /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy; next }
+        /^\$\{PEER_BLOCK\}$/             { next }
+        /^\$\{PRIOR_ROUND_SELF_BLOCK\}$/ { next }
+        { print }
+    '
+}
+
 review_gate_spawn_code_review() {
     # --- Parse diff mode args ---
     local diff_mode="--uncommitted"
@@ -850,6 +949,16 @@ USAGE
         die "Code review prompt template not found in project or built-in locations"
     fi
 
+    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
+    # Under --debate absent: every placeholder line is consumed in its
+    # entirety so the rendered prompt is byte-identical to a template that
+    # never had them (R9 byte-parity).
+    # Under --debate set: ${CONFIDENCE_ANCHORS} and ${STRATEGY_DIRECTIVE} are
+    # substituted with the literal bytes of their canonical asset files;
+    # ${PEER_BLOCK} and ${PRIOR_ROUND_SELF_BLOCK} are consumed (T008 fills).
+    prompt_content=$(printf '%s\n' "$prompt_content" \
+        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
+
     # --- Inject previous reviews / author context near the top of the prompt ---
     local review_context=""
     if [[ -n "$author_context" ]]; then
@@ -1270,6 +1379,10 @@ JSON only, no markdown code fences:
 "
     fi
 
+    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
+    prompt_content=$(printf '%s\n' "$prompt_content" \
+        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
+
     # --- Inject focus area before Output Format section if provided ---
     if [[ -n "$focus_area" ]]; then
         local focus_section=$'## Focus Area\nPay special attention to the following when reviewing:\n\n'"$focus_area"
@@ -1602,6 +1715,10 @@ JSON only, no markdown code fences:
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)"
     fi
+
+    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
+    prompt_content=$(printf '%s\n' "$prompt_content" \
+        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
         prompt_content=$'ultrathink\n\n'"$prompt_content"
@@ -1972,6 +2089,10 @@ USAGE
     else
         die "Epic verification prompt template not found in project or built-in locations"
     fi
+
+    # --- Substitute debate-mode placeholders (D2 line-consume semantics) ---
+    prompt_content=$(printf '%s\n' "$prompt_content" \
+        | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
     # --- Inject previous reviews context before Output Format section ---
     if [[ -n "$previous_reviews" ]]; then
@@ -2777,7 +2898,16 @@ PROMPT
         # Use pre-built prompt content (read before clean_state)
         echo "$prebuilt_prompt_content" > "$prompt_file"
     else
-        build_prompt "$artifact_path" "$REVIEW_TYPE" > "$prompt_file"
+        # The bare-spawn path uses build_prompt, which embeds the reviewer
+        # template via resolve_template. Templates may contain the four
+        # debate-mode placeholders (CONFIDENCE_ANCHORS / STRATEGY_DIRECTIVE /
+        # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK). Substitute them here so the
+        # bare-spawn prompt does not leak literal `${...}` text into the
+        # rendered prompt under --debate absent (R9 byte-parity), and
+        # injects canonical anchor/strategy bytes under --debate set.
+        build_prompt "$artifact_path" "$REVIEW_TYPE" \
+            | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            > "$prompt_file"
     fi
 
     # Create JSON schema for structured output

@@ -2,12 +2,16 @@
 
 You are acting as a reviewer for an implementation plan proposed by another engineer.
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Plan to Review
 
 <plan>
 ${PLAN_CONTENT}
 </plan>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 ### What to Evaluate
 
 1. **Template & Structure**

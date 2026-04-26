@@ -382,6 +382,205 @@ fi
 rm -rf "$DEBATE_SEED_WORK"
 
 # ---------------------------------------------------------------------------
+# T004 R2/R10 anchor + strategy byte-equality assertions.
+#
+# Renders each of the four reviewer templates under --debate via the
+# bare-spawn path (which goes through build_prompt → resolve_template and
+# then through the substitute_debate_placeholders pipe). Asserts that the
+# rendered prompt contains the canonical anchor bytes
+# (prompts/strategies/confidence-anchors.md) and the canonical strategy
+# directive bytes (prompts/strategies/verification-first.md, the T004
+# pre-T005-assignment default) as contiguous byte substrings.
+#
+# Cross-template byte-equality follows transitively: every template's render
+# embeds the same source-file bytes, so the extracted region is byte-equal
+# across all four templates by transitivity to the source.
+# ---------------------------------------------------------------------------
+ANCHORS_PATH="$PLUGIN_ROOT/prompts/strategies/confidence-anchors.md"
+STRATEGY_PATH="$PLUGIN_ROOT/prompts/strategies/verification-first.md"
+
+if [[ ! -f "$ANCHORS_PATH" ]] || [[ ! -f "$STRATEGY_PATH" ]]; then
+    log_info "Strategy asset files missing under $PLUGIN_ROOT/prompts/strategies/; skipping R2/R10 anchor byte-equality tests"
+else
+    DEBATE_RENDER_WORK="$(mktemp -d -t debate-render.XXXXXX)"
+    DEBATE_RENDER_FAKE_HOME="$DEBATE_RENDER_WORK/home"
+    DEBATE_RENDER_FAKE_BIN="$DEBATE_RENDER_WORK/bin"
+    mkdir -p "$DEBATE_RENDER_FAKE_HOME" "$DEBATE_RENDER_FAKE_BIN"
+
+    # Fake reviewer CLIs so the --debate preflight (>=2 available reviewers)
+    # passes without requiring real codex/gemini/claude on the host.
+    cat > "$DEBATE_RENDER_FAKE_BIN/codex" <<'CODEX_DEBATE'
+#!/usr/bin/env bash
+out_file=""
+prev=""
+for arg in "$@"; do
+    if [[ "$prev" == "-o" ]]; then
+        out_file="$arg"
+    fi
+    prev="$arg"
+done
+if [[ -n "$out_file" ]]; then
+    printf '{"verdict":"PASS","summary":"Canned fixture: all criteria met.","findings":[]}\n' > "$out_file"
+fi
+printf '{"type":"thread.started","id":"fixture-thread-001"}\n'
+printf '{"type":"turn.completed","id":"fixture-turn-001","usage":{"input_tokens":100,"output_tokens":50}}\n'
+exit 0
+CODEX_DEBATE
+
+    cat > "$DEBATE_RENDER_FAKE_BIN/gemini" <<'GEMINI_DEBATE'
+#!/usr/bin/env bash
+printf '{"verdict":"PASS","summary":"Canned fixture: all criteria met.","findings":[]}\n'
+exit 0
+GEMINI_DEBATE
+
+    cat > "$DEBATE_RENDER_FAKE_BIN/claude" <<'CLAUDE_DEBATE'
+#!/usr/bin/env bash
+result_json='{"verdict":"PASS","summary":"Canned fixture: all criteria met.","findings":[]}'
+escaped=$(printf '%s' "$result_json" | sed 's/\\/\\\\/g; s/"/\\"/g')
+printf '{"session_id":"fixture-session","result":"%s","tokens":{"input":100,"output":50,"cached":0},"duration_ms":100,"total_cost_usd":0.0001}\n' "$escaped"
+exit 0
+CLAUDE_DEBATE
+
+    REAL_NOHUP_DEBATE="$(command -v nohup 2>/dev/null || true)"
+    if [[ -n "$REAL_NOHUP_DEBATE" ]]; then
+        cat > "$DEBATE_RENDER_FAKE_BIN/nohup" <<NOHUP_DEBATE
+#!/usr/bin/env bash
+exec "$REAL_NOHUP_DEBATE" "\$@"
+NOHUP_DEBATE
+        chmod +x "$DEBATE_RENDER_FAKE_BIN/nohup"
+    fi
+    chmod +x "$DEBATE_RENDER_FAKE_BIN/codex" \
+             "$DEBATE_RENDER_FAKE_BIN/gemini" \
+             "$DEBATE_RENDER_FAKE_BIN/claude"
+
+    GEMINI_SETTINGS_DEBATE="$PLUGIN_ROOT/config/gemini-readonly-settings.json"
+    GEMINI_POLICY_DEBATE="$PLUGIN_ROOT/config/gemini-readonly-policy.toml"
+
+    # Returns 0 if the bytes of $2 appear as a contiguous substring in $1.
+    # Both files are read line-by-line via awk getline (which strips each
+    # line's trailing newline), then the accumulated needle is searched
+    # inside the accumulated haystack via index(). Because awk processes
+    # both files identically, byte-equality of the inserted region with the
+    # source file is captured exactly by this substring check.
+    file_contains_bytes_of() {
+        local haystack_file="$1"
+        local needle_file="$2"
+        awk -v needle_file="$needle_file" '
+            BEGIN {
+                n = 0
+                while ((getline line < needle_file) > 0) {
+                    if (n++) needle = needle "\n" line
+                    else      needle = line
+                }
+                close(needle_file)
+                first = 1
+            }
+            {
+                if (first) { haystack = $0; first = 0 }
+                else        haystack = haystack "\n" $0
+            }
+            END {
+                if (index(haystack, needle) > 0) exit 0
+                exit 1
+            }
+        ' "$haystack_file"
+    }
+
+    # Renders one reviewer template under --debate via bare-spawn. The bare
+    # spawn path goes through build_prompt → resolve_template, which embeds
+    # the literal template content (including the four T004 placeholders)
+    # into the wrapper prompt. The substitute_debate_placeholders pipe in
+    # bin/review-gate replaces the placeholders with canonical anchor +
+    # strategy bytes. The rendered prompt is copied to $out_dir/review.prompt.
+    render_under_debate() {
+        local review_type="$1"
+        local out_dir="$2"
+
+        local session="debate-render-$review_type"
+        local trans_dir="$DEBATE_RENDER_FAKE_HOME/.claude/projects/-debate-render"
+        mkdir -p "$trans_dir"
+        local transcript="$trans_dir/$session.jsonl"
+        touch "$transcript"
+
+        local review_dir="$DEBATE_RENDER_FAKE_HOME/.claude/projects/-debate-render/cerberus/$session"
+        rm -rf "$review_dir"
+        mkdir -p "$review_dir"
+
+        local artifact="$review_dir/latest.md"
+        printf 'Minimal artifact for T004 R2/R10 byte-equality test (--debate render of type %s).\n' "$review_type" > "$artifact"
+
+        local stdout_file="$DEBATE_RENDER_WORK/${session}.stdout"
+        local stderr_file="$DEBATE_RENDER_WORK/${session}.stderr"
+
+        set +e
+        (
+            export HOME="$DEBATE_RENDER_FAKE_HOME"
+            export PATH="$DEBATE_RENDER_FAKE_BIN:$PATH"
+            export CLAUDE_SESSION_ID="$session"
+            export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+            export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS_DEBATE"
+            export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY_DEBATE"
+            export REVIEW_GATE_MAX_ROUNDS=3
+            "$REVIEW_GATE" spawn \
+                --type "$review_type" \
+                --debate \
+                --mode smart \
+                --agents codex,gemini,claude \
+                "$artifact"
+        ) >"$stdout_file" 2>"$stderr_file"
+        local rc=$?
+        set -e
+
+        if [[ $rc -ne 0 ]]; then
+            log_info "spawn under --debate exited $rc for type=$review_type; stderr follows:"
+            cat "$stderr_file" >&2
+            return 1
+        fi
+
+        if [[ ! -f "$review_dir/reviews/review.prompt" ]]; then
+            log_info "review.prompt missing after --debate spawn for type=$review_type"
+            return 1
+        fi
+
+        mkdir -p "$out_dir"
+        cp "$review_dir/reviews/review.prompt" "$out_dir/review.prompt"
+        return 0
+    }
+
+    for type in code plan spec epic-verify; do
+        render_dir="$DEBATE_RENDER_WORK/render-$type"
+        mkdir -p "$render_dir"
+        if ! render_under_debate "$type" "$render_dir"; then
+            log_fail "R2/R10 render-under-debate failed for type=$type"
+            fail_count=$((fail_count + 2))
+            continue
+        fi
+
+        rendered="$render_dir/review.prompt"
+
+        log_test "R2 anchor byte-equality: $type rendered prompt contains canonical confidence-anchors.md bytes"
+        if file_contains_bytes_of "$rendered" "$ANCHORS_PATH"; then
+            log_pass "$type rendered prompt contains canonical anchor block bytes (R2)"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "$type rendered prompt does NOT contain canonical anchor block bytes (R2)"
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test "R10 strategy byte-equality: $type rendered prompt contains canonical verification-first.md bytes"
+        if file_contains_bytes_of "$rendered" "$STRATEGY_PATH"; then
+            log_pass "$type rendered prompt contains canonical strategy directive bytes (R10)"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "$type rendered prompt does NOT contain canonical strategy directive bytes (R10)"
+            fail_count=$((fail_count + 1))
+        fi
+    done
+
+    rm -rf "$DEBATE_RENDER_WORK"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo "" >&2

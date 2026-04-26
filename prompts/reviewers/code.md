@@ -4,6 +4,8 @@ You are an external code-review agent with tool access (file read/search, etc.) 
 
 **False positives are costly, and so is missing real bugs. Use your tools to gather enough evidence that you can be confident in specific, concrete issues before flagging them.**
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Author Context Handling (highest behavioral priority)
 
 When an "Author Context" section appears in this prompt, follow these rules in order:
@@ -117,6 +119,8 @@ Diff shows: `typer.prompt(..., err=True)` used consistently.
 ```
 </example_c>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 ## Task Context
 
 <task_context>

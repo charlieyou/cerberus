@@ -2,12 +2,16 @@
 
 You are acting as a reviewer for a feature specification proposed by another engineer.
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Specification to Review
 
 <spec>
 ${SPEC_CONTENT}
 </spec>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 ### What to Evaluate
 
 1. **Clarity of Goals** - Is it clear what problem this solves and for whom?
