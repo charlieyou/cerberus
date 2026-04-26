@@ -95,9 +95,19 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
     exit 2
 fi
 
-HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
-if [[ -z "$HEAD_SHA" ]]; then
-    log_error "Cannot determine HEAD commit SHA"
+# Pin a specific pre-fixture commit for the spawn-code-review shape.
+# Using a pinned SHA instead of HEAD avoids a circular problem: if HEAD is the
+# T001 fixture-capture commit itself, git show HEAD embeds the old fixture
+# files (with machine-specific temp-dir paths) in the diff, which then
+# propagates into the captured review.prompt.  The pinned commit (c4443c5
+# "Increase review gate stop hook timeout") has a small, clean 3-file diff
+# with no machine-specific content.  Its SHA is immutable and will survive
+# all future T002-T013 commits.
+CODE_REVIEW_COMMIT="c4443c54796a362876c8a1b9e9a1603e0ffeb008"
+
+if ! git cat-file -e "${CODE_REVIEW_COMMIT}^{commit}" 2>/dev/null; then
+    log_error "Pinned code-review commit not found: $CODE_REVIEW_COMMIT"
+    log_error "This repo must contain the commit 'Increase review gate stop hook timeout'."
     exit 2
 fi
 
@@ -118,6 +128,12 @@ mkdir -p "$FIXTURE_DIR"
 # Temporary environment setup
 # ---------------------------------------------------------------------------
 WORK_DIR="$(mktemp -d -t capture-pre-debate.XXXXXX)"
+# On macOS, mktemp returns /var/folders/... but realpath resolves symlinks to
+# /private/var/folders/... (canonical form).  We must normalize both so that
+# sed replacements in fixture files don't leave '/private<CAPTURE_WORKDIR>'
+# artifacts.  If realpath is unavailable or produces the same path, this is a
+# no-op (canonical == WORK_DIR).
+WORK_DIR_CANONICAL="$(realpath "$WORK_DIR" 2>/dev/null || echo "$WORK_DIR")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FAKE_HOME="$WORK_DIR/home"
@@ -270,6 +286,36 @@ run_check_and_get_report() {
 }
 
 # ---------------------------------------------------------------------------
+# Shared helper: normalize machine-specific paths in a file
+# ---------------------------------------------------------------------------
+# Replaces WORK_DIR (the mktemp path that changes every run) and PLUGIN_ROOT
+# (the user's local repo path) with stable placeholders so fixtures are
+# reproducible across machines and re-runs.
+#
+# Substitutions:
+#   $WORK_DIR    -> <CAPTURE_WORKDIR>   (temp dir for fake CLIs and sessions)
+#   $PLUGIN_ROOT -> <PLUGIN_ROOT>       (local repo path)
+normalize_fixture_file() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    # Only process text files (skip binary files)
+    if file "$file" 2>/dev/null | grep -q "binary"; then
+        return 0
+    fi
+    local tmp
+    tmp=$(mktemp -t normalize.XXXXXX)
+    # Use | as sed delimiter so paths with / are safe.
+    # Apply canonical (realpath) substitution FIRST so that on macOS the
+    # /private/var/... resolved form is replaced before the shorter /var/...
+    # symlink form; otherwise we would leave '/private<CAPTURE_WORKDIR>' behind.
+    sed -e "s|${WORK_DIR_CANONICAL}|<CAPTURE_WORKDIR>|g" \
+        -e "s|${WORK_DIR}|<CAPTURE_WORKDIR>|g" \
+        -e "s|${PLUGIN_ROOT}|<PLUGIN_ROOT>|g" \
+        "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+# ---------------------------------------------------------------------------
 # Shared helper: copy captured artifacts to fixture sub-directory
 # ---------------------------------------------------------------------------
 copy_to_fixture() {
@@ -282,38 +328,56 @@ copy_to_fixture() {
     mkdir -p "$shape_dir/reviews"
 
     # Prompt (shared for all reviewers under current plugin version)
-    [[ -f "$review_dir/reviews/review.prompt" ]] && \
+    if [[ -f "$review_dir/reviews/review.prompt" ]]; then
         cp "$review_dir/reviews/review.prompt" "$shape_dir/reviews/review.prompt"
+        normalize_fixture_file "$shape_dir/reviews/review.prompt"
+    fi
 
-    # Schema
-    [[ -f "$review_dir/reviews/review-schema.json" ]] && \
+    # Schema (no paths embedded; normalization is a no-op but applied for consistency)
+    if [[ -f "$review_dir/reviews/review-schema.json" ]]; then
         cp "$review_dir/reviews/review-schema.json" "$shape_dir/reviews/review-schema.json"
+        normalize_fixture_file "$shape_dir/reviews/review-schema.json"
+    fi
 
     # Per-reviewer verdict JSONs
     for reviewer in codex gemini claude; do
         if [[ -f "$review_dir/reviews/$reviewer.json" ]]; then
             cp "$review_dir/reviews/$reviewer.json" "$shape_dir/reviews/$reviewer.json"
+            normalize_fixture_file "$shape_dir/reviews/$reviewer.json"
         fi
     done
 
     # Gate state (post stop-hook resolution, should be status: resolved)
-    [[ -f "$review_dir/gate-state.json" ]] && \
+    if [[ -f "$review_dir/gate-state.json" ]]; then
         cp "$review_dir/gate-state.json" "$shape_dir/gate-state.json"
+        normalize_fixture_file "$shape_dir/gate-state.json"
+    fi
 
     # Iteration counter (written by reset_iteration inside check on auto-approve)
     [[ -f "$review_dir/iteration.txt" ]] && \
         cp "$review_dir/iteration.txt" "$shape_dir/iteration.txt"
 
     # Artifact (latest.md)
-    [[ -f "$review_dir/latest.md" ]] && \
+    if [[ -f "$review_dir/latest.md" ]]; then
         cp "$review_dir/latest.md" "$shape_dir/latest.md"
+        normalize_fixture_file "$shape_dir/latest.md"
+    fi
 
     # Spawn CLI output
     cp "$spawn_stdout" "$shape_dir/spawn-stdout.txt"
+    normalize_fixture_file "$shape_dir/spawn-stdout.txt"
     cp "$spawn_stderr" "$shape_dir/spawn-stderr.txt"
+    normalize_fixture_file "$shape_dir/spawn-stderr.txt"
 
     # Gate report markdown
-    printf '%s\n' "$gate_report" > "$shape_dir/gate-report.md"
+    # Normalize the gate_report string before writing (it may contain paths).
+    # Apply canonical form first (macOS: /private/var/... before /var/...).
+    local normalized_report
+    normalized_report=$(printf '%s' "$gate_report" | \
+        sed -e "s|${WORK_DIR_CANONICAL}|<CAPTURE_WORKDIR>|g" \
+            -e "s|${WORK_DIR}|<CAPTURE_WORKDIR>|g" \
+            -e "s|${PLUGIN_ROOT}|<PLUGIN_ROOT>|g")
+    printf '%s\n' "$normalized_report" > "$shape_dir/gate-report.md"
 }
 
 # ---------------------------------------------------------------------------
@@ -335,9 +399,9 @@ assert_nonempty() {
 # ===========================================================================
 # SHAPE 1: spawn-code-review --mode smart --commit <HEAD>
 # ===========================================================================
-log_step "Shape 1/5: spawn-code-review --mode smart --commit $HEAD_SHA"
+log_step "Shape 1/5: spawn-code-review --mode smart --commit $CODE_REVIEW_COMMIT"
 
-SHAPE1_SESSION="capture-code-review-$$"
+SHAPE1_SESSION="baseline-code-review"
 SHAPE1_TRANSCRIPT="$TRANSCRIPT_DIR/${SHAPE1_SESSION}.jsonl"
 touch "$SHAPE1_TRANSCRIPT"
 
@@ -359,7 +423,7 @@ set +e
     "$REVIEW_GATE" spawn-code-review \
         --mode smart \
         --agents codex,gemini,claude \
-        --commit "$HEAD_SHA"
+        --commit "$CODE_REVIEW_COMMIT"
 ) >"$SHAPE1_STDOUT" 2>"$SHAPE1_STDERR"
 SHAPE1_SPAWN_RC=$?
 set -e
@@ -388,7 +452,7 @@ log_ok "Shape 1 captured -> $FIXTURE_DIR/spawn-code-review/"
 # ===========================================================================
 log_step "Shape 2/5: spawn-plan-review --mode smart"
 
-SHAPE2_SESSION="capture-plan-review-$$"
+SHAPE2_SESSION="baseline-plan-review"
 SHAPE2_TRANSCRIPT="$TRANSCRIPT_DIR/${SHAPE2_SESSION}.jsonl"
 touch "$SHAPE2_TRANSCRIPT"
 
@@ -464,7 +528,7 @@ log_ok "Shape 2 captured -> $FIXTURE_DIR/spawn-plan-review/"
 # ===========================================================================
 log_step "Shape 3/5: spawn-spec-review --mode smart"
 
-SHAPE3_SESSION="capture-spec-review-$$"
+SHAPE3_SESSION="baseline-spec-review"
 SHAPE3_TRANSCRIPT="$TRANSCRIPT_DIR/${SHAPE3_SESSION}.jsonl"
 touch "$SHAPE3_TRANSCRIPT"
 
@@ -549,7 +613,7 @@ log_ok "Shape 3 captured -> $FIXTURE_DIR/spawn-spec-review/"
 # ===========================================================================
 log_step "Shape 4/5: spawn-epic-verify --mode smart"
 
-SHAPE4_SESSION="capture-epic-verify-$$"
+SHAPE4_SESSION="baseline-epic-verify"
 SHAPE4_TRANSCRIPT="$TRANSCRIPT_DIR/${SHAPE4_SESSION}.jsonl"
 touch "$SHAPE4_TRANSCRIPT"
 
@@ -621,7 +685,7 @@ log_ok "Shape 4 captured -> $FIXTURE_DIR/spawn-epic-verify/"
 # The artifact is a pre-built latest.md placed directly in the review dir.
 log_step "Shape 5/5: spawn --type code --mode smart (bare spawn)"
 
-SHAPE5_SESSION="capture-spawn-bare-$$"
+SHAPE5_SESSION="baseline-spawn-bare"
 SHAPE5_TRANSCRIPT="$TRANSCRIPT_DIR/${SHAPE5_SESSION}.jsonl"
 touch "$SHAPE5_TRANSCRIPT"
 

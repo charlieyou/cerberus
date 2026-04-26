@@ -1,5 +1,5 @@
 <!-- review-type: spec -->
-<!-- spec-path: /private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-spec.md -->
+<!-- spec-path: <CAPTURE_WORKDIR>/sample-spec.md -->
 <!-- spec-sha: 1c7947d0ba9c62ad34c6fcbe4ea6284bfb86d9b00336594d0e65744e4a389c58 -->
 <!-- max-rounds: 3 -->
 <!-- agents: codex,gemini,claude -->
@@ -8,7 +8,7 @@
 # Spec Review (Iterative)
 
 ## Spec Path
-/private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-spec.md
+<CAPTURE_WORKDIR>/sample-spec.md
 
 ## Spec Content
 

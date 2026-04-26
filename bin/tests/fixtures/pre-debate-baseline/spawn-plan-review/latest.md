@@ -1,5 +1,5 @@
 <!-- review-type: plan -->
-<!-- plan-path: /private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-plan.md -->
+<!-- plan-path: <CAPTURE_WORKDIR>/sample-plan.md -->
 <!-- plan-sha: 5b353e2d6f7778b43d6b9112ebe18c7188bc5369925c9e80fa4f07546e6a24d2 -->
 <!-- max-rounds: 3 -->
 <!-- agents: codex,gemini,claude -->
@@ -8,7 +8,7 @@
 # Plan Review (Iterative)
 
 ## Plan Path
-/private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-plan.md
+<CAPTURE_WORKDIR>/sample-plan.md
 
 ## Plan Content
 

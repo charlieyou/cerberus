@@ -3,12 +3,12 @@
   "status": "resolved",
   "trigger_source": "epic-verify",
   "artifact": {
-    "path": "/private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/latest.md",
-    "sha256": "e84c0cbf8ee15355b56d8df67de3c1f3b034db176662aed8abd31ea713dcfd9b"
+    "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/latest.md",
+    "sha256": "584e23cbc6759710b4a375226ee7128bf8858f5a6bd03bf8da8aeb1efbd7199d"
   },
   "mode": {
     "type": "epic-verify",
-    "epic_path": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-epic.md"
+    "epic_path": "<CAPTURE_WORKDIR>/sample-epic.md"
   },
   "config": {
     "max_rounds": 3,
@@ -16,28 +16,28 @@
     "consensus_mode": "majority"
   },
   "owner": {
-    "session_id": "capture-epic-verify-14880",
-    "transcript_path": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/capture-epic-verify-14880.jsonl",
-    "session_key": "capture-epic-verify-14880",
+    "session_id": "baseline-epic-verify",
+    "transcript_path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/baseline-epic-verify.jsonl",
+    "session_key": "baseline-epic-verify",
     "source": "input.session_id"
   },
   "author_context": null,
   "reviewers": {
     "codex": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/codex.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/codex.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/codex.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/codex.done",
       "completed_at": null,
       "result": null
     },
     "gemini": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/gemini.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/gemini.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/gemini.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/gemini.done",
       "completed_at": null,
       "result": null
     },
     "claude": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/claude.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-epic-verify-14880/reviews/claude.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/claude.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/reviews/claude.done",
       "completed_at": null,
       "result": null
     }
@@ -48,8 +48,8 @@
   },
   "decision": {
     "action": "proceed",
-    "decided_at": "2026-04-26T02:04:31-04:00"
+    "decided_at": "2026-04-26T02:24:31-04:00"
   },
-  "created_at": "2026-04-26T06:04:30Z",
+  "created_at": "2026-04-26T06:24:30Z",
   "iteration": 0
 }

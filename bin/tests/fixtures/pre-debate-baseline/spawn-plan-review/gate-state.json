@@ -3,13 +3,13 @@
   "status": "resolved",
   "trigger_source": "plan",
   "artifact": {
-    "path": "/private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/latest.md",
-    "sha256": "46cf5445812c526fd09a637f2b4a30417e1b2b908e4eff148e0f467d6419cac9",
+    "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/latest.md",
+    "sha256": "73aee6eb4bbdf082777abf4989484127cc2dfb48ddbe83de905bf12433148118",
     "plan_sha": "5b353e2d6f7778b43d6b9112ebe18c7188bc5369925c9e80fa4f07546e6a24d2"
   },
   "mode": {
     "type": "plan",
-    "plan_path": "/private/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/sample-plan.md"
+    "plan_path": "<CAPTURE_WORKDIR>/sample-plan.md"
   },
   "config": {
     "max_rounds": 3,
@@ -17,28 +17,28 @@
     "consensus_mode": "majority"
   },
   "owner": {
-    "session_id": "capture-plan-review-14880",
-    "transcript_path": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/capture-plan-review-14880.jsonl",
-    "session_key": "capture-plan-review-14880",
+    "session_id": "baseline-plan-review",
+    "transcript_path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/baseline-plan-review.jsonl",
+    "session_key": "baseline-plan-review",
     "source": "input.session_id"
   },
   "author_context": null,
   "reviewers": {
     "codex": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/codex.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/codex.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/codex.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/codex.done",
       "completed_at": null,
       "result": null
     },
     "gemini": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/gemini.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/gemini.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/gemini.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/gemini.done",
       "completed_at": null,
       "result": null
     },
     "claude": {
-      "output_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/claude.json",
-      "sentinel_file": "/var/folders/z3/l8rvvd1109bb1wvnm9k7tql80000gn/T/capture-pre-debate.XXXXXX.7OZh5xLA4C/home/.claude/projects/-capture-pre-debate-baseline/cerberus/capture-plan-review-14880/reviews/claude.done",
+      "output_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/claude.json",
+      "sentinel_file": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/reviews/claude.done",
       "completed_at": null,
       "result": null
     }
@@ -49,8 +49,8 @@
   },
   "decision": {
     "action": "proceed",
-    "decided_at": "2026-04-26T02:04:29-04:00"
+    "decided_at": "2026-04-26T02:24:29-04:00"
   },
-  "created_at": "2026-04-26T06:04:29Z",
+  "created_at": "2026-04-26T06:24:28Z",
   "iteration": 0
 }
