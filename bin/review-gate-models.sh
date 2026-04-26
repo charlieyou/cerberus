@@ -282,7 +282,11 @@ repair_review_output() {
                 printf '%s\n' "$schema_text" > "$schema_path"
             fi
             local jsonl_file="${out_file}.jsonl"
-            if codex exec -m "$model" -s read-only --skip-git-repo-check \
+            local -a codex_extra_args=()
+            if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+                codex_extra_args=(--ephemeral)
+            fi
+            if codex exec "${codex_extra_args[@]}" -m "$model" -s read-only --skip-git-repo-check \
                 --output-schema "$schema_path" --json -o "$out_file" \
                 - < "$prompt_file" > "$jsonl_file" 2>&1; then
                 if [[ -s "$out_file" ]]; then
@@ -351,8 +355,10 @@ extract_codex_agent_message() {
     [[ -s "$file" ]] || return 1
 
     local text
-    text=$(jq -s -r '
-        map(select(
+    text=$(jq -R -s -r '
+        split("\n")
+        | map(select(length > 0) | try fromjson catch empty)
+        | map(select(
             (.type // "") == "item.completed" and
             (.item.type // "") == "agent_message"
         ))
@@ -617,11 +623,24 @@ extract_json() {
 }
 
 # Spawn a reviewer subprocess.
+#
+# Args:
+#   name         Reviewer name (used in output filenames).
+#   cmd          Reviewer CLI command to invoke.
+#   prompt_file  Path to the rendered reviewer prompt.
+#   schema_file  Path to the structured-output schema (codex only).
+#   output_dir   OPTIONAL output directory for {name}.json/.jsonl/.done/.failed.
+#                Defaults to $REVIEWS_DIR (existing byte-stable behavior).
+#                Debate coordinator (T006+) passes a per-round staging directory
+#                like "iterations/<iter>/round-N/" so the canonical $REVIEWS_DIR
+#                stays empty until final-round outputs are promoted. Non-debate
+#                callers MUST omit this parameter to preserve R9 byte-parity.
 spawn_reviewer() {
     local name="$1"
     local cmd="$2"
     local prompt_file="$3"
     local schema_file="$4"
+    local output_dir="${5:-${REVIEWS_DIR:-}}"
 
     spawn_detached_review_shell() {
         local script="$1"
@@ -648,18 +667,23 @@ spawn_reviewer() {
         disown "$child_pid" 2>/dev/null || true
     }
 
-    # Ensure reviews directory exists
-    mkdir -p "$REVIEWS_DIR"
+    if [[ -z "$output_dir" ]]; then
+        echo "spawn_reviewer: output_dir is empty (REVIEWS_DIR unset and no override provided)" >&2
+        return 1
+    fi
+
+    # Ensure output directory exists
+    mkdir -p "$output_dir"
 
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
     local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
 
-    local output_file="$REVIEWS_DIR/${name}.json"
-    local transcript_file="$REVIEWS_DIR/${name}.jsonl"
-    local sentinel_file="$REVIEWS_DIR/${name}.done"
-    local failed_file="$REVIEWS_DIR/${name}.failed"
+    local output_file="$output_dir/${name}.json"
+    local transcript_file="$output_dir/${name}.jsonl"
+    local sentinel_file="$output_dir/${name}.done"
+    local failed_file="$output_dir/${name}.failed"
 
     # Skip missing CLIs with warning
     if ! command -v "$cmd" >/dev/null; then
@@ -706,7 +730,11 @@ spawn_reviewer() {
             REVIEW_MODEL="$codex_model" \
             REVIEW_REASONING="$codex_reasoning" \
             spawn_detached_review_shell '
-                if codex exec -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
+                codex_extra_args=()
+                if codex exec --help 2>&1 | grep -q -- "--ephemeral"; then
+                    codex_extra_args=(--ephemeral)
+                fi
+                if codex exec "${codex_extra_args[@]}" -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"

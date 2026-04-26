@@ -50,26 +50,27 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <artifact-path>
+  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--debate] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
     Spawn reviewers for code changes. Claude fixes code until consensus passes.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
       --commit <shas>     Review one or more commits as a net diff (space or comma separated)
       --exclude <spec>    Exclude files matching pattern (auto-prefixed with :! for git)
+      --debate            Opt in to debate-mode review (requires >=2 available reviewers)
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--debate] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     consensus passes.
 
-  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <spec-path>
+  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until consensus passes.
 
-  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] <epic-file>
+  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--debate] <epic-file>
     Spawn reviewers to verify epic acceptance criteria against the codebase.
     Reviewers explore the code themselves to verify criteria are met.
     Claude fixes code until all criteria pass consensus verification.
@@ -221,12 +222,26 @@ review_gate_spawn_code_review() {
     local artifact_only="false"
     local -a exclude_pathspecs=()
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --artifact-only)
                 artifact_only="true"
                 shift
+                ;;
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
                 ;;
             --agents=*)
                 agents_csv="${1#*=}"
@@ -353,6 +368,7 @@ Options:
   --base <branch>     Review changes from branch to HEAD
   --commit <sha...>   Review one or more commits as a net diff (space or comma separated)
   <range>             Review a commit range (e.g., main..feature)
+  --debate            Opt in to debate-mode review (requires >=2 available reviewers)
   [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
 Consensus modes:
@@ -938,6 +954,12 @@ USAGE
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
@@ -956,6 +978,8 @@ review_gate_spawn_plan_review() {
     local -a positionals=()
     local force_focus="false"
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -963,6 +987,18 @@ review_gate_spawn_plan_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1033,6 +1069,7 @@ Options:
   --context-file <path>     Inject author context from file into the prompt
   --focus <text>            Focus area to emphasize in the review
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
   [--] <focus>             Optional focus text (or trailing text; -- forces focus)
@@ -1278,6 +1315,12 @@ JSON only, no markdown code fences:
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
@@ -1310,6 +1353,8 @@ review_gate_spawn_spec_review() {
     local mode=""
     local context_file=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -1317,6 +1362,18 @@ review_gate_spawn_spec_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1377,6 +1434,7 @@ Options:
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -1572,6 +1630,12 @@ JSON only, no markdown code fences:
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
@@ -1603,6 +1667,8 @@ review_gate_spawn_epic_verify() {
     local max_rounds=""
     local mode=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -1610,6 +1676,18 @@ review_gate_spawn_epic_verify() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1662,6 +1740,7 @@ Options:
   --max-rounds <n>          Maximum verification iterations (0 disables auto-respawn)
   --mode <level>            Intelligence mode: fast, smart, max
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>         Session ID for scoping
   --transcript-path <path>  Path to transcript file
 
@@ -1934,6 +2013,12 @@ USAGE
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
@@ -2124,6 +2209,8 @@ review_gate_spawn() {
     local mode=""
     local context_file=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2175,6 +2262,18 @@ review_gate_spawn() {
                 REVIEW_TYPE="${2:-}"
                 shift 2
                 ;;
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 OWNER_SESSION_ID="${2:-}"
                 shift 2
@@ -2185,7 +2284,11 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+
+Options:
+  --debate              Opt in to debate-mode review (judging review types only:
+                        code, plan, spec, epic-verify; requires >=2 reviewers).
 USAGE
                 return 0
                 ;;
@@ -2200,6 +2303,13 @@ USAGE
                 ;;
         esac
     done
+
+    # Validate --debate-seed value (integer; no-op when --debate absent).
+    if [[ -n "$debate_seed" ]]; then
+        if ! [[ "$debate_seed" =~ ^[0-9]+$ ]]; then
+            die "--debate-seed must be a non-negative integer; got: $debate_seed"
+        fi
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -2573,6 +2683,56 @@ PROMPT
     fi
 
     IFS=',' read -r -a agents_list <<< "$agents_final_csv"
+
+    # --- Debate preflights (R10 whitelist + <2 reviewers hard error) ---
+    # Both run BEFORE preflight_check so that no model is ever invoked when
+    # --debate is misused. Per spec R9/R10 these errors are an explicit
+    # exception to the byte-parity guarantee for valid invocations.
+    if [[ "$debate" == "true" ]]; then
+        # R10 whitelist: --debate is judging-only. The four allowed --type values
+        # match the canonical REVIEW_TYPE values used end-to-end (see spec R10).
+        # Empty / auto-detected types are rejected because debate requires an
+        # explicit judging type to select the right reviewer/revision template.
+        case "$REVIEW_TYPE" in
+            code|plan|spec|epic-verify)
+                ;;
+            "")
+                {
+                    echo "Error: --debate requires an explicit judging --type (got: <auto-detected>)."
+                    echo "       Allowed --type values: code, plan, spec, epic-verify"
+                    echo "       --debate is judging-only; pass --type=<value> or use a spawn-*-review subcommand."
+                } >&2
+                exit 2
+                ;;
+            *)
+                {
+                    echo "Error: --debate is not supported for --type=$REVIEW_TYPE (rejected at preflight)."
+                    echo "       Allowed --type values: code, plan, spec, epic-verify"
+                    echo "       --debate is judging-only and is rejected for non-judging types"
+                    echo "       (healthcheck, architecture-review, create-tasks, manual, auto, etc.)."
+                } >&2
+                exit 2
+                ;;
+        esac
+
+        # <2 reviewers hard error: count agents with available CLIs. If fewer
+        # than two are available, hard-error before any model invocation.
+        local _debate_available=0
+        local _debate_agent
+        for _debate_agent in "${agents_list[@]}"; do
+            if command -v "$_debate_agent" >/dev/null 2>&1; then
+                _debate_available=$((_debate_available + 1))
+            fi
+        done
+        if [[ $_debate_available -lt 2 ]]; then
+            {
+                echo "Error: --debate requires at least 2 available reviewers; only $_debate_available of ${#agents_list[@]} are available."
+                echo "       Reviewers requested: ${agents_list[*]}"
+                echo "       Install the missing reviewer CLIs or pass --agents with >=2 available reviewers."
+            } >&2
+            exit 6
+        fi
+    fi
 
     preflight_check
 
