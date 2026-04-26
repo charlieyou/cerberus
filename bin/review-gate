@@ -2880,6 +2880,68 @@ PROMPT
             } >&2
             exit 6
         fi
+
+        # --- Strategy assignment (T005 / spec R3) ---
+        # Source the debate coordinator helpers (compute_artifact_id /
+        # assign_strategies / _sha256_hex). Sourced only under --debate so
+        # the byte-parity guarantee for non-debate runs is preserved (no
+        # new env vars, no helper-side effects on the non-debate path).
+        # shellcheck source=review-gate-debate.sh
+        source "$SCRIPT_DIR/review-gate-debate.sh"
+
+        # Compute the canonical <artifact_id> per review type. The four
+        # judging review types use the input pinned by spec R3:
+        #   plan / spec     → realpath of the user-passed file path
+        #   code            → verbatim diff_args_str (REVIEW_GATE_DIFF_ARGS)
+        #   epic-verify     → realpath when the arg resolves to a regular
+        #                     file, otherwise the verbatim raw-criteria
+        #                     string. The spawn-epic-verify subcommand
+        #                     exports REVIEW_GATE_EPIC_CONTEXT (or passes
+        #                     the file path as the bare-spawn artifact);
+        #                     here we accept both and let
+        #                     compute_artifact_id resolve.
+        local _debate_artifact_id=""
+        case "$REVIEW_TYPE" in
+            plan|spec)
+                _debate_artifact_id=$(compute_artifact_id "$REVIEW_TYPE" "$artifact_arg") || \
+                    die "compute_artifact_id $REVIEW_TYPE failed for: $artifact_arg"
+                ;;
+            code)
+                _debate_artifact_id=$(compute_artifact_id code "${REVIEW_GATE_DIFF_ARGS:-}") || \
+                    die "compute_artifact_id code failed"
+                ;;
+            epic-verify)
+                _debate_artifact_id=$(compute_artifact_id epic-verify "${REVIEW_GATE_EPIC_CONTEXT:-$artifact_arg}") || \
+                    die "compute_artifact_id epic-verify failed"
+                ;;
+        esac
+
+        # Assign per-(artifact_id, reviewer) strategies via SHA-256 + canonical
+        # collision walk. Export STRATEGY_DIRECTIVE_PATH_<reviewer> for each
+        # reviewer in the active set so the per-reviewer prompt-rendering path
+        # (T006 coordinator) can pick up the assigned strategy file. This
+        # function is byte-deterministic per spec R3.
+        local _debate_assignment_line _debate_reviewer _debate_strategy _debate_strategy_path
+        while IFS=$' \t' read -r _debate_reviewer _debate_strategy; do
+            [[ -z "$_debate_reviewer" ]] && continue
+            _debate_strategy_path=$(resolve_strategy_path "$_debate_strategy") || \
+                die "Failed to resolve strategy path for $_debate_strategy"
+            # Export per-reviewer strategy directive path (consumed by T006).
+            # The variable name is uppercase-canonical-reviewer so multiple
+            # reviewers don't collide.
+            local _upper
+            _upper=$(echo "$_debate_reviewer" | tr '[:lower:]' '[:upper:]')
+            export "STRATEGY_DIRECTIVE_PATH_${_upper}=$_debate_strategy_path"
+            # Also export the strategy NAME for the same reviewer (handy for
+            # report rendering and downstream tools that don't want to
+            # re-read the file).
+            export "STRATEGY_NAME_${_upper}=$_debate_strategy"
+        done < <(assign_strategies "$_debate_artifact_id" "${agents_list[@]}")
+
+        # Export the canonical artifact_id so downstream tools (T006
+        # coordinator, telemetry) can reference the same identifier without
+        # recomputing it.
+        export DEBATE_ARTIFACT_ID="$_debate_artifact_id"
     fi
 
     preflight_check
