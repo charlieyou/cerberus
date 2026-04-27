@@ -3552,14 +3552,26 @@ with open(out_path, "wb") as f: f.write(out)
         # timeout budget. The <2 reviewers preflight already runs above on
         # the requested set; if we end up with <2 successfully-spawned
         # reviewers here (e.g., due to a runtime CLI failure that the
-        # `command -v` preflight missed), abort cleanly with a distinct
-        # error rather than letting the coordinator hang.
+        # `command -v` preflight missed), this is a realistic
+        # degraded-before-round path under the T012 distinct-exit-codes
+        # contract: stderr the canonical degraded-below-2 message,
+        # transition gate-state.json to awaiting_decision/requires_decision
+        # via `_rdc_mark_state_degraded`, write
+        # iterations/<iter>/debate-telemetry.json with empty
+        # rounds_telemetry (no round reached the wait loop), and exit 6.
         if [[ ${#_debate_spawned_reviewers[@]} -lt 2 ]]; then
             echo "" >&2
             echo "Debate coordinator: only ${#_debate_spawned_reviewers[@]} reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
             echo "Spawned: ${_debate_spawned_reviewers[*]:-(none)}" >&2
-            _debate_mark_state_failed
-            exit 1
+            _RDC_ITER_DIR="$(dirname "$_debate_staging_dir")" \
+            _RDC_REVIEWS_DIR="$REVIEWS_DIR" \
+            _RDC_CONSENSUS_MODE="$consensus_mode" \
+            _RDC_DEBATE_MODE="$mode" \
+            _RDC_STRATEGIES_JSON='{}' \
+            _RDC_ROUNDS_JSON='[]' \
+            _RDC_ROUNDS_COMPLETED=0 \
+            _RDC_AGGREGATOR_NOTES_JSON='[]' \
+            _rdc_pre_round_degraded_exit
         fi
         # Export the captured `--debate-seed N` value (if any) so the
         # synchronous coordinator's T007 anonymization pass can pick the

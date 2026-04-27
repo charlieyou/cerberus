@@ -867,6 +867,14 @@ _rdc_wait_round_sentinels() {
         if [[ "$all_done" == "true" ]]; then
             return 0
         fi
+        # T012 cancellation: if the SIGINT trap set the request flag,
+        # treat the wait as if the round budget elapsed — return 1 so
+        # the caller's classify pass marks pending reviewers as Mode A
+        # abstain (per-reviewer-timeout semantics). The post-record
+        # cancel checkpoint then fires `_rdc_cancel_exit`.
+        if [[ "${_RDC_CANCEL_REQUESTED:-0}" == "1" ]]; then
+            return 1
+        fi
         now=$(date +%s)
         elapsed=$(( now - start_time ))
         if [[ $elapsed -ge $timeout_sec ]]; then
@@ -1632,6 +1640,15 @@ _rdc_record_round() {
 # _rdc_compose_debate_block — emit the full gate-state.json.debate / partial
 # telemetry shape from the current global state. Single-source-of-truth for
 # both the success-path debate block and the partial-telemetry file.
+#
+# The defensive empty-string guards on $_RDC_STRATEGIES_JSON / $_RDC_ROUNDS_JSON
+# / $_RDC_AGGREGATOR_NOTES_JSON ARE intentional even though
+# `run_debate_coordinator` initializes those globals on entry: this helper is
+# also used by the `_rdc_pre_round_degraded_exit` external-caller surface
+# (bin/review-gate's pre-coordinator <2-spawn branch), where the globals
+# may be set by the caller's `<var>=<value> _rdc_pre_round_degraded_exit`
+# inline-export form rather than at coordinator entry. The guards keep
+# the helper safe under both surfaces.
 _rdc_compose_debate_block() {
     local _strategies="${_RDC_STRATEGIES_JSON:-}"
     local _rounds="${_RDC_ROUNDS_JSON:-}"
@@ -1639,10 +1656,14 @@ _rdc_compose_debate_block() {
     [[ -z "$_strategies" ]] && _strategies='{}'
     [[ -z "$_rounds" ]] && _rounds='[]'
     [[ -z "$_notes" ]] && _notes='[]'
+    # _RDC_ROUNDS_COMPLETED, _RDC_DEBATE_MODE, and _RDC_CONSENSUS_MODE are
+    # always initialized at coordinator entry (or by `_rdc_pre_round_degraded_exit`
+    # callers via inline-export); inline numeric/string defaults stay
+    # plain (no `:-` fallback) since the variables are guaranteed set.
     jq -nc \
-        --argjson rounds "${_RDC_ROUNDS_COMPLETED:-0}" \
-        --arg mode "${_RDC_DEBATE_MODE:-smart}" \
-        --arg consensus_mode "${_RDC_CONSENSUS_MODE:-majority}" \
+        --argjson rounds "$_RDC_ROUNDS_COMPLETED" \
+        --arg mode "$_RDC_DEBATE_MODE" \
+        --arg consensus_mode "$_RDC_CONSENSUS_MODE" \
         --argjson strategies "$_strategies" \
         --argjson rounds_telemetry "$_rounds" \
         --argjson aggregator_notes "$_notes" \
@@ -1728,17 +1749,100 @@ _rdc_degraded_exit() {
     exit 6
 }
 
-# _rdc_handle_sigint — SIGINT trap handler. Best-effort partial telemetry
-# write before exit 130. Per spec, gate-state.json.status stays at
-# `pending`, the canonical $REVIEWS_DIR is left empty (no per-reviewer
-# JSONs / sentinels / aggregate.json have been promoted yet at this
-# point — promotion is the last step of the success path), and NO
-# .debate block is written.
+# _rdc_handle_sigint — SIGINT trap handler.
+#
+# Per spec, on SIGINT the coordinator MUST "let in-flight reviewers
+# complete or hit per-reviewer timeout, write whatever rounds completed
+# as partial telemetry". A direct exit-from-trap would skip the
+# in-flight Round-N classify + record step, producing a partial-telemetry
+# file with zero round entries even when Round 1 was minutes from
+# completing. Instead, the trap sets a request flag and returns. The
+# wait loop checks the flag and returns "timed out" (return 1, identical
+# to the existing budget-elapsed path) so any reviewer without a
+# sentinel classifies as Mode A abstain — exactly the per-reviewer
+# timeout behavior the spec mandates. The classify + record pass
+# proceeds normally, and `_rdc_check_cancel_after_round` (called after
+# each `_rdc_record_round`) sees the flag and triggers
+# `_rdc_cancel_exit` which writes the partial telemetry and exits 130.
+#
+# Why a deferred exit instead of trap-exit: the partial-telemetry
+# `rounds_telemetry[]` SHOULD include Round N if Round N had reached
+# the wait loop, even when the cancel arrived mid-poll. The
+# round-record-then-check sequence guarantees this without forcing the
+# coordinator to wait the full per-reviewer timeout budget.
+#
+# Per spec, gate-state.json.status stays at `pending`, the canonical
+# $REVIEWS_DIR is left empty (no per-reviewer JSONs / sentinels /
+# aggregate.json have been promoted yet at this point — promotion is
+# the last step of the success path), and NO .debate block is written.
 _rdc_handle_sigint() {
+    _RDC_CANCEL_REQUESTED=1
+    # Best-effort stderr message. The signal arrival point is undefined
+    # so the message may interleave with other stderr; that's accepted.
+    echo "" >&2
+    echo "debate SIGINT received; finishing current round (in-flight reviewers will hit per-reviewer timeout) before writing partial telemetry and exiting 130." >&2
+}
+
+# _rdc_cancel_exit — write partial telemetry and exit 130. Called from the
+# coordinator's checkpoint after each round's `_rdc_record_round` runs,
+# whenever `_RDC_CANCEL_REQUESTED` is set.
+_rdc_cancel_exit() {
     _rdc_write_partial_telemetry
     echo "" >&2
-    echo "debate cancelled by SIGINT (mid-round); partial telemetry written to ${_RDC_ITER_DIR:-?}/debate-telemetry.json" >&2
+    echo "debate cancelled by SIGINT after round ${_RDC_ROUNDS_COMPLETED:-0}; partial telemetry written to ${_RDC_ITER_DIR:-?}/debate-telemetry.json" >&2
     exit 130
+}
+
+# _rdc_check_cancel_after_round — coordinator checkpoint helper. Invoked
+# after each per-round `_rdc_record_round`; if SIGINT was received during
+# the just-completed round (the trap set `_RDC_CANCEL_REQUESTED`),
+# triggers the exit-130 path with the round's telemetry recorded.
+_rdc_check_cancel_after_round() {
+    if [[ "${_RDC_CANCEL_REQUESTED:-0}" == "1" ]]; then
+        _rdc_cancel_exit
+    fi
+}
+
+# _rdc_pre_round_degraded_exit — public-facing helper for the bin/review-gate
+# pre-coordinator path. Before run_debate_coordinator runs, bin/review-gate
+# may discover that fewer than 2 reviewers spawned successfully (a
+# realistic degraded-before-round path: `command -v` passed preflight but
+# the actual spawn_reviewer call failed for one reviewer, e.g., gemini
+# read-only-policy lookup failed). Per spec R6 + the T012 distinct-exit-
+# codes contract, this case MUST emit the canonical degraded-below-2
+# stderr, transition gate-state.json to awaiting_decision/requires_decision,
+# write iterations/<iter>/debate-telemetry.json, and exit 6.
+#
+# The caller is expected to inline-export the relevant globals on the
+# function-call line OR set them as plain shell vars before invoking,
+# e.g.:
+#
+#   _RDC_ITER_DIR="$staging_iter_dir" \
+#   _RDC_REVIEWS_DIR="$REVIEWS_DIR" \
+#   _RDC_CONSENSUS_MODE="$consensus_mode" \
+#   _RDC_DEBATE_MODE="$mode" \
+#   _rdc_pre_round_degraded_exit
+#
+# This helper writes the canonical degraded message, calls
+# `_rdc_mark_state_degraded` (which transitions gate-state.json), writes
+# partial telemetry, and exits 6.
+_rdc_pre_round_degraded_exit() {
+    # Default unset/empty globals to safe values. We CANNOT use the
+    # `${var:=DEFAULT}` parameter-assign form for JSON literals like
+    # `{}`/`[]` because the surrounding single quotes in the source
+    # become part of the assigned value (Bash 3.2 does not strip them
+    # from inside the `:=` default). Use plain `[[ -z ... ]]` guards.
+    [[ -z "${_RDC_STRATEGIES_JSON:-}" ]] && _RDC_STRATEGIES_JSON='{}'
+    [[ -z "${_RDC_ROUNDS_JSON:-}" ]] && _RDC_ROUNDS_JSON='[]'
+    [[ -z "${_RDC_AGGREGATOR_NOTES_JSON:-}" ]] && _RDC_AGGREGATOR_NOTES_JSON='[]'
+    [[ -z "${_RDC_ROUNDS_COMPLETED:-}" ]] && _RDC_ROUNDS_COMPLETED=0
+    [[ -z "${_RDC_CONSENSUS_MODE:-}" ]] && _RDC_CONSENSUS_MODE="majority"
+    [[ -z "${_RDC_DEBATE_MODE:-}" ]] && _RDC_DEBATE_MODE="smart"
+    echo "" >&2
+    echo "debate degraded below 2 active reviewers in the final peer round" >&2
+    _rdc_mark_state_degraded
+    _rdc_write_partial_telemetry
+    exit 6
 }
 
 # ---------------------------------------------------------------------------
@@ -1895,30 +1999,34 @@ run_debate_coordinator() {
     _RDC_ROUNDS_JSON='[]'
     _RDC_ROUNDS_COMPLETED=0
     _RDC_AGGREGATOR_NOTES_JSON='[]'
+    _RDC_CANCEL_REQUESTED=0
 
     # Pre-populate _RDC_STRATEGIES_JSON from STRATEGY_NAME_<UPPER> env vars
     # for the initial reviewer set, so partial telemetry on early failure
     # (e.g., a degraded preflight before any round completed) still
-    # surfaces the strategy assignment instead of an empty `{}`.
+    # surfaces the strategy assignment instead of an empty `{}`. When the
+    # env var is unset, the aggregator (`_rdc_aggregate_and_promote`) and
+    # bin/review-gate's render path both fall back to the v1 default
+    # `verification-first`, so we record the same default here for
+    # consistency between gate-state.json.debate.strategies and
+    # aggregate.json.strategies.
     local _rdc_init_r _rdc_init_upper _rdc_init_var _rdc_init_val
     for _rdc_init_r in "${_rdc_initial_reviewers[@]}"; do
         _rdc_init_upper=$(echo "$_rdc_init_r" | tr '[:lower:]' '[:upper:]')
         _rdc_init_var="STRATEGY_NAME_${_rdc_init_upper}"
-        _rdc_init_val="${!_rdc_init_var:-}"
-        if [[ -n "$_rdc_init_val" ]]; then
-            _RDC_STRATEGIES_JSON=$(printf '%s' "$_RDC_STRATEGIES_JSON" | jq -c \
-                --arg n "$_rdc_init_r" --arg s "$_rdc_init_val" \
-                '.[$n] = $s' 2>/dev/null) || _RDC_STRATEGIES_JSON='{}'
-        fi
+        _rdc_init_val="${!_rdc_init_var:-verification-first}"
+        _RDC_STRATEGIES_JSON=$(printf '%s' "$_RDC_STRATEGIES_JSON" | jq -c \
+            --arg n "$_rdc_init_r" --arg s "$_rdc_init_val" \
+            '.[$n] = $s' 2>/dev/null) || _RDC_STRATEGIES_JSON='{}'
     done
 
-    # Install the SIGINT trap. The handler writes partial telemetry and
-    # exits 130. Exit-on-trap terminates the parent script (Bash trap
-    # handlers run in the trapping shell's context); the trap is NOT
-    # uninstalled before normal return because (a) it never fires under
-    # success and (b) leaving the trap installed beyond the function's
-    # scope is harmless — the script exits immediately after the
-    # coordinator returns under all non-error paths.
+    # Install the SIGINT trap. The handler sets a request flag (it does
+    # NOT exit immediately) so the in-flight round can finish classifying
+    # and recording before the coordinator exits 130. The trap is
+    # uninstalled BEFORE the success-path debate-block write so a
+    # post-success SIGINT cannot fire the trap and write a spurious
+    # partial-telemetry file (race window between coordinator return and
+    # bin/review-gate's wrap-up echos).
     trap '_rdc_handle_sigint' INT
 
     # ======================================================================
@@ -1984,6 +2092,11 @@ run_debate_coordinator() {
         "$round1_dir" \
         "$(printf '%s,' "${_rdc_initial_reviewers[@]}" | sed 's/,$//')" \
         "$(printf '%s,' "${_rdc_round1_active[@]+${_rdc_round1_active[@]}}" | sed 's/,$//')"
+
+    # Cancel checkpoint: if SIGINT arrived during Round 1's wait,
+    # `_RDC_CANCEL_REQUESTED` is set. Round-1 telemetry has been recorded
+    # above; now exit 130 with the partial-state file written.
+    _rdc_check_cancel_after_round
 
     # ======================================================================
     # Mid-debate eligibility check (degraded-below-2 — pinned spec R6).
@@ -2172,6 +2285,9 @@ run_debate_coordinator() {
         "$(printf '%s,' "${_rdc_round2_spawned[@]}" | sed 's/,$//')" \
         "$(printf '%s,' "${_rdc_round2_active[@]+${_rdc_round2_active[@]}}" | sed 's/,$//')"
 
+    # Cancel checkpoint after Round 2.
+    _rdc_check_cancel_after_round
+
     # ======================================================================
     # Final-round Option B exclusion (spec R6): a reviewer that abstains in
     # the final peer round is fully excluded from the final aggregation.
@@ -2344,6 +2460,9 @@ run_debate_coordinator() {
             "$(printf '%s,' "${_rdc_round3_spawned[@]}" | sed 's/,$//')" \
             "$(printf '%s,' "${_rdc_round3_active[@]+${_rdc_round3_active[@]}}" | sed 's/,$//')"
 
+        # Cancel checkpoint after Round 3.
+        _rdc_check_cancel_after_round
+
         # Final-round Option B (Round 3 is the final peer round under
         # --mode max): Round-3 abstainers are excluded entirely from the
         # final aggregation. If the active count drops below 2, the run
@@ -2399,13 +2518,19 @@ run_debate_coordinator() {
     fi
 
     # ----------------------------------------------------------------------
-    # Success path: write the gate-state.json.debate canonical block. The
-    # jq patch preserves existing top-level fields, so the Stop-hook's
-    # subsequent .status / .consensus mutations leave .debate byte-stable
-    # (asserted by test_debate_block_survives_stop_hook). The success-path
-    # MUST NOT write iterations/<iter>/debate-telemetry.json — presence of
+    # Success path: uninstall the SIGINT trap so a SIGINT delivered during
+    # the brief wrap-up window between debate-block-write and bin/review-gate's
+    # post-coordinator echos cannot fire `_rdc_handle_sigint` and write a
+    # spurious partial-telemetry file (which would contradict the
+    # success-only contract for gate-state.json.debate). After the trap
+    # is uninstalled, write the canonical debate block. The jq patch
+    # preserves existing top-level fields, so the Stop-hook's subsequent
+    # .status / .consensus mutations leave .debate byte-stable (asserted
+    # by test_debate_block_survives_stop_hook). The success path MUST
+    # NOT write iterations/<iter>/debate-telemetry.json — presence of
     # that file is the unambiguous signal of a non-success debate run.
     # ----------------------------------------------------------------------
+    trap - INT
     _rdc_write_gate_state_debate_block
 
     return 0

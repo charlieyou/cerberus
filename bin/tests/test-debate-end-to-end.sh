@@ -2618,8 +2618,19 @@ trap '_rdc_handle_sigint' INT
 _rdc_record_round 1 "2026-04-27T12:00:00Z" "2026-04-27T12:00:30Z" 30000 \\
     "$iter_dir/round-1" "codex,gemini" "codex,gemini"
 
-# Self-deliver SIGINT. The trap fires, writes telemetry, exits 130.
+# Self-deliver SIGINT. The deferred-exit design means the trap sets
+# _RDC_CANCEL_REQUESTED=1 and returns immediately; the coordinator's
+# post-record checkpoint helper _rdc_check_cancel_after_round is
+# what fires the partial-telemetry write + exit 130. We invoke that
+# checkpoint manually here to mirror the coordinator's flow. (Note:
+# this comment must NOT use backticks; the heredoc is unquoted and
+# backtick-quoted text triggers command substitution in the parent.)
 kill -INT \$\$
+# Brief sleep so the SIGINT is delivered + handled before checkpoint.
+# Bash queues signals and runs the trap before the next simple command,
+# so the trap should fire when sleep returns (or is interrupted).
+sleep 0.05 2>/dev/null || true
+_rdc_check_cancel_after_round
 
 # Defensive: should not reach here; if we do, exit 1 to signal a
 # trap-failed-to-fire regression.
@@ -2728,6 +2739,187 @@ EOF
     fi
 }
 
+# Pre-coordinator degraded test. Verifies that when fewer than 2
+# reviewers spawn successfully (a realistic pre-round path: e.g.,
+# gemini policy lookup fails), bin/review-gate's pre-coordinator
+# branch produces the canonical degraded-below-2 contract: exit 6,
+# stderr canonical message, gate-state.json transitioned to
+# awaiting_decision/requires_decision, partial telemetry file written.
+test_pre_round_spawn_failure_degraded() {
+    local scenario="pre-round-spawn-failure-degraded"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    # codex spawns OK; gemini's CLI is missing (no command on PATH).
+    # The `command -v gemini` preflight will fail, so review-gate's
+    # spawn loop drops gemini from `_debate_spawned_reviewers`. With
+    # only codex spawned (count=1 < 2), the pre-coordinator branch
+    # MUST take the degraded-below-2 contract.
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    chmod +x "$scenario_bin/codex"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+    # NO gemini binary in $scenario_bin → command -v fails → spawn skipped.
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-pre-deg"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-pre-deg/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    set +e
+    local rc
+    (
+        export HOME="$scenario_home"
+        # Restrict PATH so gemini cannot be found (the fake-bin dir lacks it,
+        # and the real PATH may have a system gemini we don't want here).
+        export PATH="$scenario_bin:/usr/bin:/bin"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=10
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >/dev/null 2>"$scenario_work/stderr"
+    rc=$?
+    set -e
+
+    # The <2-reviewers preflight in bin/review-gate runs BEFORE the
+    # spawn loop and may already reject the run (if `command -v gemini`
+    # fails at preflight). In that case the coordinator never gets
+    # involved — the preflight emits its own error and exits with a
+    # non-T012 code. The T012 contract pins the behavior for the
+    # post-spawn pre-coordinator branch (the case we want to test).
+    # If preflight rejected, skip the assertions but record the skip.
+    local stderr_text
+    stderr_text=$(cat "$scenario_work/stderr" 2>/dev/null || echo "")
+    if grep -F "debate degraded below 2 active reviewers in the final peer round" "$scenario_work/stderr" >/dev/null 2>&1; then
+        # The pre-coordinator branch fired correctly.
+        if [[ "$rc" -eq 6 ]]; then
+            log_grn "$scenario: pre-coordinator <2-spawn branch exits 6 (T012 contract)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: pre-coordinator <2-spawn branch exit code = $rc (expected 6)"
+            red_count=$((red_count + 1))
+        fi
+
+        # iterations/<iter>/debate-telemetry.json present (empty rounds_telemetry).
+        local iter_root="$review_dir/iterations"
+        local latest_iter
+        latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+        local telemetry_file="$iter_root/$latest_iter/debate-telemetry.json"
+        if [[ -f "$telemetry_file" ]]; then
+            log_grn "$scenario: partial telemetry written on pre-coordinator degraded path"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: partial telemetry NOT written on pre-coordinator degraded path"
+            red_count=$((red_count + 1))
+        fi
+
+        # gate-state.json transitioned to awaiting_decision/requires_decision.
+        local state_file="$review_dir/gate-state.json"
+        if [[ -f "$state_file" ]]; then
+            local status verdict
+            status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+            verdict=$(jq -r '.consensus.verdict' "$state_file" 2>/dev/null || echo "")
+            if [[ "$status" == "awaiting_decision" && "$verdict" == "requires_decision" ]]; then
+                log_grn "$scenario: gate-state.json transitioned to awaiting_decision/requires_decision (pre-coordinator)"
+                green_count=$((green_count + 1))
+            else
+                log_red "$scenario: gate-state.json status='$status' verdict='$verdict' (expected awaiting_decision/requires_decision)"
+                red_count=$((red_count + 1))
+            fi
+        fi
+    else
+        # Preflight rejected before reaching the post-spawn branch; that's
+        # fine — T002 preflight short-circuits when `command -v` fails, so
+        # the integration path doesn't reach the new T012 helper. Verify
+        # the helper directly via a unit-test invocation in a subshell.
+        log_info "$scenario: preflight rejected before reaching the pre-coordinator <2-spawn branch (T002 short-circuit); falling back to direct unit-test of _rdc_pre_round_degraded_exit"
+
+        local unit_work="$scenario_work/unit"
+        local unit_iter_dir="$unit_work/iterations/0"
+        local unit_reviews_dir="$unit_work/reviews"
+        local unit_state_file="$unit_work/gate-state.json"
+        mkdir -p "$unit_iter_dir" "$unit_reviews_dir"
+        cat > "$unit_state_file" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "reviewers":{"codex":{},"gemini":{}},
+  "consensus":null,
+  "decision":null,
+  "iteration":0
+}
+JSON
+
+        local unit_script="$unit_work/unit_pre_round.sh"
+        cat > "$unit_script" <<UNITEOF
+#!/usr/bin/env bash
+set -uo pipefail
+source "$PLUGIN_ROOT/bin/telemetry-lib.sh"
+source "$PLUGIN_ROOT/bin/review-gate-debate.sh"
+STATE_FILE="$unit_state_file"
+_RDC_ITER_DIR="$unit_iter_dir" \\
+_RDC_REVIEWS_DIR="$unit_reviews_dir" \\
+_RDC_CONSENSUS_MODE="majority" \\
+_RDC_DEBATE_MODE="smart" \\
+_rdc_pre_round_degraded_exit
+UNITEOF
+        chmod +x "$unit_script"
+        set +e
+        bash "$unit_script" >"$unit_work/stdout" 2>"$unit_work/stderr"
+        local unit_rc=$?
+        set -e
+
+        if [[ "$unit_rc" -eq 6 ]]; then
+            log_grn "$scenario: _rdc_pre_round_degraded_exit unit-test exits 6"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: _rdc_pre_round_degraded_exit unit-test exit code = $unit_rc (expected 6). Stderr: $(head -3 "$unit_work/stderr" 2>/dev/null | tr '\n' ';')"
+            red_count=$((red_count + 1))
+        fi
+
+        if grep -F "debate degraded below 2 active reviewers in the final peer round" "$unit_work/stderr" >/dev/null 2>&1; then
+            log_grn "$scenario: _rdc_pre_round_degraded_exit emits canonical degraded-below-2 stderr"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: _rdc_pre_round_degraded_exit missing canonical stderr"
+            red_count=$((red_count + 1))
+        fi
+
+        if [[ -f "$unit_iter_dir/debate-telemetry.json" ]]; then
+            log_grn "$scenario: _rdc_pre_round_degraded_exit writes partial telemetry"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: _rdc_pre_round_degraded_exit did NOT write partial telemetry"
+            red_count=$((red_count + 1))
+        fi
+
+        local unit_status unit_verdict
+        unit_status=$(jq -r '.status' "$unit_state_file" 2>/dev/null || echo "")
+        unit_verdict=$(jq -r '.consensus.verdict' "$unit_state_file" 2>/dev/null || echo "")
+        if [[ "$unit_status" == "awaiting_decision" && "$unit_verdict" == "requires_decision" ]]; then
+            log_grn "$scenario: _rdc_pre_round_degraded_exit transitions gate-state.json to awaiting_decision/requires_decision"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: _rdc_pre_round_degraded_exit gate-state status='$unit_status' verdict='$unit_verdict' (expected awaiting_decision/requires_decision)"
+            red_count=$((red_count + 1))
+        fi
+    fi
+}
+
 # Run T012 scenarios. The pre-existing per-shape SHAPE_* arrays are
 # populated above; T012's success-path assertions read from them.
 test_gate_state_debate_block_success
@@ -2737,6 +2929,7 @@ test_aggregate_verdict_never_requires_decision
 test_degraded_below_2_partial_telemetry
 test_aggregator_failure_partial_telemetry
 test_cancellation_sigint
+test_pre_round_spawn_failure_degraded
 
 # ---------------------------------------------------------------------------
 # Summary
