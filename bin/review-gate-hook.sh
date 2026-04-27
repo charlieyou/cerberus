@@ -1080,13 +1080,105 @@ review_gate_check() {
     }
 
     # --- Format results table ---
+    #
+    # T011 (Phase F.1) renderer extension: when `aggregate.json` exists in
+    # $REVIEWS_DIR (debate runs only) the renderer prepends a one-line
+    # "Debate: round N/N (strategies: ...)" indicator + an aggregate-verdict
+    # line above the per-reviewer table, and appends a `Strategy` column
+    # rightmost in the per-reviewer table. The Stop-hook consensus
+    # calculator (calculate_consensus, lines ~924-1080) is UNCHANGED — the
+    # renderer extension lives entirely inside this function and the
+    # collect_aggregate_issues helper below; the calculator's input
+    # (per-reviewer JSON files in $REVIEWS_DIR) and output (PASS/FAIL/
+    # requires_decision) are byte-identical regardless of debate state.
+    # Per spec L388 / plan L73 (Stop-hook is decision authority).
     format_results() {
         local reviewers
         reviewers=$(jq -r '.reviewers | keys[]' "$STATE_FILE" 2>/dev/null || echo "")
 
+        # Detect debate run via aggregate.json presence. Debate runs only
+        # write aggregate.json on the success path (degraded-below-2 hard
+        # errors before promotion, so aggregate.json is absent and the
+        # legacy non-debate renderer path runs — preserving byte-parity
+        # with the pre-feature gate-report.md baseline for non-debate runs).
+        local aggregate_file="$REVIEWS_DIR/aggregate.json"
+        local is_debate=0
+        if [[ -f "$aggregate_file" ]]; then
+            is_debate=1
+        fi
+
+        local prefix=""
+        if [[ $is_debate -eq 1 ]]; then
+            local rounds_consumed
+            rounds_consumed=$(jq -r '.rounds_consumed // empty' "$aggregate_file" 2>/dev/null || echo "")
+
+            # Strategies rendered in canonical alphabetical order by
+            # reviewer name, in the short forms the spec pins
+            # (verification-first → verify, falsification-first → falsify,
+            # decompose → decompose). Per spec L357 / Decisions Made L388.
+            local strategies_csv
+            strategies_csv=$(jq -r '
+                def short($s):
+                    if $s == "verification-first" then "verify"
+                    elif $s == "falsification-first" then "falsify"
+                    elif $s == "decompose" then "decompose"
+                    else $s end;
+                (.strategies // {})
+                | to_entries | sort_by(.key) | map(short(.value)) | join("/")
+            ' "$aggregate_file" 2>/dev/null || echo "")
+
+            if [[ -n "$rounds_consumed" ]]; then
+                prefix+="Debate: round ${rounds_consumed}/${rounds_consumed}"
+                if [[ -n "$strategies_csv" ]]; then
+                    prefix+=" (strategies: $strategies_csv)"
+                fi
+                prefix+=$'\n'
+            fi
+
+            # Verdict-authority split rendering (spec R6 Decision authority,
+            # plan L73, task-context Implementation Notes). aggregate.json.verdict
+            # is the cross-reviewer presentation surface; the Stop-hook's
+            # consensus calculator is the SINGLE decision authority for gate
+            # pass/fail. The two values live in different domains
+            # (aggregate.verdict ∈ {PASS, NEEDS_WORK, FAIL};
+            #  Stop-hook consensus ∈ {auto_approve, requires_decision}),
+            # so the renderer ALWAYS displays them side-by-side and labels
+            # the Stop-hook value as authoritative — making the decision-
+            # authority split unambiguous to humans regardless of whether
+            # the values "agree in spirit." Per spec L376 (Verdict authority).
+            #
+            # The rare "true" divergence (2-reviewer 1-1 PASS/NEEDS_WORK
+            # with confidence-driven aggregate tiebreak picking PASS while
+            # Stop-hook returns requires_decision) is the case the plan's
+            # risk register flags; the unconditional side-by-side rendering
+            # surfaces that case automatically without a conditional branch.
+            local agg_verdict
+            agg_verdict=$(jq -r '.verdict // ""' "$aggregate_file" 2>/dev/null || echo "")
+            local consensus="${CONSENSUS:-}"
+            if [[ -z "$consensus" ]]; then
+                consensus=$(jq -r '.consensus.verdict // ""' "$STATE_FILE" 2>/dev/null || echo "")
+            fi
+            if [[ -n "$agg_verdict" ]]; then
+                if [[ -n "$consensus" ]]; then
+                    prefix+="Aggregate verdict: ${agg_verdict} | Stop-hook verdict (authoritative): ${consensus}"$'\n'
+                else
+                    prefix+="Aggregate verdict: ${agg_verdict}"$'\n'
+                fi
+            fi
+
+            if [[ -n "$prefix" ]]; then
+                prefix+=$'\n'
+            fi
+        fi
+
         local table=$'## Review Results\n\n'
-        table+=$'| Reviewer | Verdict | Confidence | Summary |\n'
-        table+=$'|----------|---------|------------|--------|\n'
+        if [[ $is_debate -eq 1 ]]; then
+            table+=$'| Reviewer | Verdict | Confidence | Summary | Strategy |\n'
+            table+=$'|----------|---------|------------|--------|---------|\n'
+        else
+            table+=$'| Reviewer | Verdict | Confidence | Summary |\n'
+            table+=$'|----------|---------|------------|--------|\n'
+        fi
 
         for reviewer in $reviewers; do
             local output_file="$REVIEWS_DIR/${reviewer}.json"
@@ -1106,7 +1198,15 @@ review_gate_check() {
                     summary="Invalid reviewer output"
                 else
                     verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
-                    confidence=$(echo "$result" | jq -r '.confidence // "-"' 2>/dev/null || echo "-")
+                    if [[ $is_debate -eq 1 ]]; then
+                        # Debate per-reviewer JSONs carry overall_confidence
+                        # (spec L357 — gate report shows overall_confidence
+                        # only). Fall back to .confidence for forward-compat
+                        # if a future debate variant ever omits it.
+                        confidence=$(echo "$result" | jq -r '.overall_confidence // .confidence // "-"' 2>/dev/null || echo "-")
+                    else
+                        confidence=$(echo "$result" | jq -r '.confidence // "-"' 2>/dev/null || echo "-")
+                    fi
                     summary=$(echo "$result" | jq -r '.summary // "No summary"' 2>/dev/null || echo "No summary")
 
                     if [[ -z "$verdict" || "$verdict" == "null" ]]; then
@@ -1126,10 +1226,75 @@ review_gate_check() {
                 fi
             fi
 
-            table+="| $reviewer | $verdict | $confidence | $summary |"$'\n'
+            if [[ $is_debate -eq 1 ]]; then
+                local strategy_short="-"
+                local strategy_full
+                strategy_full=$(jq -r --arg r "$reviewer" '.strategies[$r] // empty' "$aggregate_file" 2>/dev/null || echo "")
+                case "$strategy_full" in
+                    verification-first) strategy_short="verify" ;;
+                    falsification-first) strategy_short="falsify" ;;
+                    decompose) strategy_short="decompose" ;;
+                    "") strategy_short="-" ;;
+                    *) strategy_short="$strategy_full" ;;
+                esac
+                table+="| $reviewer | $verdict | $confidence | $summary | $strategy_short |"$'\n'
+            else
+                table+="| $reviewer | $verdict | $confidence | $summary |"$'\n'
+            fi
         done
 
-        printf '%s' "$table"
+        printf '%s%s' "$prefix" "$table"
+    }
+
+    # --- Collect issues from aggregate.json (debate runs only) ---
+    #
+    # T011 (Phase F.1): when aggregate.json exists, the renderer surfaces
+    # the cross-reviewer-merged finding set sourced from
+    # aggregate.json.findings[] as one card per defect, replacing the
+    # per-reviewer concatenated-cards path (collect_issues) for debate
+    # runs only. Each card includes the priority-prefixed title, optional
+    # location (file_path + line range), confidence, raised_by indicator
+    # (only when ≥2 reviewers raised the merged finding), and the body.
+    # Per spec L357 / plan L213 (aggregate.json single source of cross-
+    # reviewer presentation).
+    collect_aggregate_issues() {
+        local aggregate_file="$REVIEWS_DIR/aggregate.json"
+        if [[ ! -f "$aggregate_file" ]]; then
+            return 0
+        fi
+
+        local cards
+        cards=$(jq -r '
+            def loc:
+                if (.file_path // "") != "" then
+                    "  \nlocation: " + .file_path
+                    + (if (.line_start // null) != null then
+                        ":\(.line_start)"
+                        + (if (.line_end // null) != null and .line_end != .line_start then
+                            "-\(.line_end)"
+                          else "" end)
+                       else "" end)
+                else "" end;
+            def conf:
+                if (.confidence // null) != null then
+                    "  \nconfidence: " + (.confidence | tostring)
+                else "" end;
+            def raisedby:
+                if (.raised_by // null) != null and ((.raised_by | length) >= 2) then
+                    "  \nraised_by: " + (.raised_by | join(", "))
+                else "" end;
+            def head:
+                "### "
+                + (if (.priority // "") != "" then "[\(.priority)] " else "" end)
+                + (.title // "Finding");
+            (.findings // [])
+            | map(head + raisedby + loc + conf + "\n\n" + (.body // ""))
+            | join("\n\n")
+        ' "$aggregate_file" 2>/dev/null || echo "")
+
+        if [[ -n "$cards" ]]; then
+            printf '%s\n' "$cards"
+        fi
     }
 
     # --- Collect all issues from reviews ---
@@ -1573,7 +1738,16 @@ INFO
             log "review-gate: updated run telemetry on auto_approve"
         fi
 
-        ALL_ISSUES=$(collect_issues)
+        # Debate runs surface findings from aggregate.json (one card per
+        # merged defect) per spec L357. Non-debate runs use the legacy
+        # per-reviewer collect_issues path so the gate-report.md byte-
+        # parity baseline (bin/tests/fixtures/pre-debate-baseline/) is
+        # preserved.
+        if [[ -f "$REVIEWS_DIR/aggregate.json" ]]; then
+            ALL_ISSUES=$(collect_aggregate_issues)
+        else
+            ALL_ISSUES=$(collect_issues)
+        fi
 
         # Get telemetry summary for output message
         local telemetry_summary=""
@@ -1621,7 +1795,11 @@ Please provide a brief summary of the review outcome, then you may stop."
         # Check iteration limit
         if [[ $CURRENT_ITERATION -ge $MAX_ITERATIONS ]]; then
             log "review-gate: max iterations reached"
-            ALL_ISSUES=$(collect_issues)
+            if [[ -f "$REVIEWS_DIR/aggregate.json" ]]; then
+                ALL_ISSUES=$(collect_aggregate_issues)
+            else
+                ALL_ISSUES=$(collect_issues)
+            fi
             CLAUDE_SESSION_ID="$SESSION_ID" \
                 REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
                 "$0" resolve --reason auto_proceed_max_iter >&2 || true
@@ -1671,8 +1849,14 @@ Please summarize the review outcome, noting that max iterations was reached."
             exit 0
         fi
 
-        # Collect all issues from non-PASS reviews
-        ALL_ISSUES=$(collect_issues)
+        # Collect all issues. Debate runs use aggregate.json's
+        # cross-reviewer-merged finding set per spec L357; non-debate
+        # runs use the legacy per-reviewer path (preserves byte-parity).
+        if [[ -f "$REVIEWS_DIR/aggregate.json" ]]; then
+            ALL_ISSUES=$(collect_aggregate_issues)
+        else
+            ALL_ISSUES=$(collect_issues)
+        fi
 
         # Extract mode paths/args BEFORE cleaning state (which deletes STATE_FILE)
         MODE_SPEC_PATH=$(jq -r '.mode.spec_path // ""' "$STATE_FILE" 2>/dev/null || echo "")

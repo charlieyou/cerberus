@@ -60,10 +60,11 @@ NC='\033[0m'
 log_info() { echo -e "INFO: $1" >&2; }
 log_red()  { echo -e "${RED}RED:${NC} $1" >&2; }
 log_grn()  { echo -e "${GREEN}GREEN:${NC} $1" >&2; }
-# Pending-only log: assertions that are documented as a downstream task's
-# scope (T011 wires gate-report rendering). Logged in yellow but do NOT
-# count toward red_count, so STRICT mode does not fail on them.
-log_pending() { echo -e "${YELLOW}PENDING (T011):${NC} $1" >&2; }
+# Pending-only log (legacy): retained for any future task that wants to
+# stage assertions before its phase implementation lands. T011 (Phase F.1)
+# flipped the Strategy column + Debate-round-indicator assertions from
+# log_pending to log_red; they are now strict.
+log_pending() { echo -e "${YELLOW}PENDING:${NC} $1" >&2; }
 
 STRICT="${DEBATE_E2E_STRICT:-1}"
 
@@ -355,27 +356,46 @@ assert_aggregate_json_exists() {
 assert_strategy_column() {
     local shape="$1"
     local report="$2"
-    # T011 (Phase F.1) wires the gate-report Strategy column. Per T010's
-    # task spec, this assertion's pass/fail is "for T011 to verify", so
-    # T010 reports it as PENDING (not RED) until T011 lands.
+    # T011 (Phase F.1) wires the gate-report Strategy column header
+    # (rightmost) when aggregate.json exists. Strict from T011 onward.
     if printf '%s' "$report" | grep -qE 'Strategy'; then
         log_grn "$shape: gate report contains Strategy column header"
         green_count=$((green_count + 1))
     else
-        log_pending "$shape: gate report Strategy column not yet rendered (T011 owns Phase F.1)"
+        log_red "$shape: gate report Strategy column missing (T011 Phase F.1)"
+        red_count=$((red_count + 1))
     fi
 }
 
 assert_debate_round_indicator() {
     local shape="$1"
     local report="$2"
-    # T011/T012 (Phase F.1/F.2) wire the gate-report Debate-round
-    # indicator. Same PENDING treatment as the Strategy column above.
+    # T011 (Phase F.1) wires the gate-report Debate-round indicator
+    # ("Debate: round N/N (strategies: ...)") when aggregate.json exists.
+    # Strict from T011 onward.
     if printf '%s' "$report" | grep -qE 'Debate:[[:space:]]+round[[:space:]]+[0-9]+/[0-9]+'; then
         log_grn "$shape: gate report contains Debate round indicator"
         green_count=$((green_count + 1))
     else
-        log_pending "$shape: gate report Debate-round indicator not yet rendered (T011/T012 own Phase F.1/F.2)"
+        log_red "$shape: gate report Debate-round indicator missing (T011 Phase F.1)"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# T011 (Phase F.1): when aggregate.json exists, the gate report's
+# Strategy column header MUST be rightmost (i.e., the column header
+# line ends with `| Strategy |`). Asserting placement (not just
+# presence) is what catches a regression that prepended the column or
+# inserted it mid-table.
+assert_strategy_column_rightmost() {
+    local shape="$1"
+    local report="$2"
+    if printf '%s' "$report" | grep -qE '\| Reviewer \| Verdict \| Confidence \| Summary \| Strategy \|[[:space:]]*$'; then
+        log_grn "$shape: gate report Strategy column appended rightmost in the per-reviewer table"
+        green_count=$((green_count + 1))
+    else
+        log_red "$shape: gate report Strategy column not rightmost (T011 Phase F.1; spec L388 — Strategy appended after the existing reviewer column)"
+        red_count=$((red_count + 1))
     fi
 }
 
@@ -387,6 +407,7 @@ while [[ $i -lt ${#SHAPE_NAMES[@]} ]]; do
 
     assert_aggregate_json_exists "$name" "$dir"
     assert_strategy_column "$name" "$report"
+    assert_strategy_column_rightmost "$name" "$report"
     assert_debate_round_indicator "$name" "$report"
 
     i=$((i + 1))
@@ -1396,6 +1417,506 @@ test_round3_launch_under_max_mode
 test_round3_degraded_below_2_under_max
 test_round3_peer_block_includes_r1_abstainer
 test_falsifiable_acceptance_two_clause
+
+# ---------------------------------------------------------------------------
+# T011 (Phase F.1) gate-report rendering scenarios.
+#
+# 1. test_aggregate_finding_cards_rendering — three reviewers all emit the
+#    same planted P1 finding with confidence 0.9. The aggregator dedups
+#    them into a single merged finding with raised_by=[claude, codex,
+#    gemini]. The gate report's finding-cards section MUST be sourced
+#    from aggregate.json.findings[] (one card per merged defect) and
+#    MUST include the raised_by indicator since this finding is multi-
+#    reviewer. Per task spec: "When aggregate.json exists: ... finding
+#    cards sourced from aggregate.json.findings[] (one card per merged
+#    defect with raised_by indicator if multi-reviewer)."
+#
+# 2. test_verdict_divergence_rendering — synthetic 2-reviewer fixture
+#    (1 PASS@0.6, 1 NEEDS_WORK@0.85). Stop-hook returns requires_decision
+#    (1-1 split with no FAIL); aggregate.verdict resolves to NEEDS_WORK
+#    (confidence tiebreak). Renderer MUST display BOTH verdicts side-by-
+#    side with the Stop-hook value labeled authoritative.
+#
+# 3. test_consensus_calculator_regression — runs the Stop-hook on per-
+#    reviewer JSONs in two configurations (with and without confidence
+#    fields, with and without aggregate.json sitting beside the per-
+#    reviewer JSONs). Asserts gate-state.json.consensus.verdict is
+#    byte-identical across both runs. This is the regression test pinned
+#    in the task spec: "the priority-then-consensus calculator's output
+#    MUST be unaffected by aggregate.json or confidence fields."
+# ---------------------------------------------------------------------------
+# Helper: run review-gate check against a scenario-specific HOME + PATH
+# and return the gate report markdown extracted from the .reason or
+# .message field of the JSON output. The existing run_check_and_get_report
+# helper hard-codes HOME=$FAKE_HOME / PATH=$FAKE_BIN, which clobbers
+# scenario-specific HOMEs; this helper accepts the override directly.
+run_scenario_check_and_get_report() {
+    local sc_home="$1"
+    local sc_bin="$2"
+    local session_id="$3"
+    local transcript_path="$4"
+
+    local check_input
+    check_input=$(printf '{"session_id":"%s","transcript_path":"%s"}' \
+        "$session_id" "$transcript_path")
+
+    local check_out
+    check_out=$(
+        export HOME="$sc_home"
+        export PATH="$sc_bin:$PATH"
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        printf '%s' "$check_input" | "$REVIEW_GATE" check 2>/dev/null || true
+    )
+
+    local report
+    report=$(printf '%s' "$check_out" | jq -r '
+        if .reason then .reason
+        elif .message then .message
+        else "(no gate report captured)"
+        end' 2>/dev/null || echo "(check output was not valid JSON: ${check_out:0:200})")
+    printf '%s' "$report"
+}
+
+test_aggregate_finding_cards_rendering() {
+    local scenario="aggregate-finding-cards"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    local fixture_root="$PLUGIN_ROOT/bin/tests/fixtures/debate-bad-artifact"
+    local defect_json="$fixture_root/defect-location.json"
+    if [[ ! -f "$defect_json" ]]; then
+        log_red "$scenario: defect-location.json missing under $fixture_root"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    local planted_file planted_lstart planted_lend
+    planted_file=$(jq -r '.file_path' "$defect_json")
+    planted_lstart=$(jq -r '.line_start' "$defect_json")
+    planted_lend=$(jq -r '.line_end' "$defect_json")
+
+    local p1_finding
+    p1_finding=$(jq -nc \
+        --arg fp "$planted_file" \
+        --argjson ls "$planted_lstart" \
+        --argjson le "$planted_lend" \
+        '{verdict:"NEEDS_WORK",
+          summary:"Planted P1 found.",
+          overall_confidence:0.9,
+          findings:[{priority:1,
+                     title:"Hardcoded credential in login()",
+                     body:"The login function compares username/password against fixed string literals; any committed credential constitutes a P1 security defect.",
+                     file_path:$fp,
+                     line_start:$ls,
+                     line_end:$le,
+                     confidence:0.9}]}')
+
+    cat > "$scenario_bin/codex" <<CODEX_PLANTED
+#!/usr/bin/env bash
+out_file=""
+prev=""
+for arg in "\$@"; do
+    if [[ "\$prev" == "-o" ]]; then
+        out_file="\$arg"
+    fi
+    prev="\$arg"
+done
+if [[ -n "\$out_file" ]]; then
+    printf '%s\n' '$p1_finding' > "\$out_file"
+fi
+printf '{"type":"thread.started","id":"fixture-thread-001"}\n'
+printf '{"type":"turn.completed","id":"fixture-turn-001","usage":{"input_tokens":100,"output_tokens":50}}\n'
+exit 0
+CODEX_PLANTED
+
+    cat > "$scenario_bin/gemini" <<GEMINI_PLANTED
+#!/usr/bin/env bash
+printf '%s\n' '$p1_finding'
+exit 0
+GEMINI_PLANTED
+
+    cat > "$scenario_bin/claude" <<CLAUDE_PLANTED
+#!/usr/bin/env bash
+result_json='$p1_finding'
+escaped=\$(printf '%s' "\$result_json" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+printf '{"session_id":"fixture-session","result":"%s","tokens":{"input":100,"output":50,"cached":0},"duration_ms":100,"total_cost_usd":0.0001}\n' "\$escaped"
+exit 0
+CLAUDE_PLANTED
+    chmod +x "$scenario_bin/codex" "$scenario_bin/gemini" "$scenario_bin/claude"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-cards"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-cards/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    local stdout_f="$scenario_work/stdout"
+    local stderr_f="$scenario_work/stderr"
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini,claude \
+            --debate \
+            "$fixture_root/plan.md"
+    ) >"$stdout_f" 2>"$stderr_f"
+    set -e
+
+    wait_for_sentinels "$review_dir/reviews" 3 30 || true
+
+    # Capture aggregate.json BEFORE running the gate-report check.
+    # The Stop-hook's requires_decision branch calls clean_for_rerun
+    # which archives reviews/ → reviews-iter-N/, so reviews/aggregate.json
+    # is moved out by the time the check returns. We snapshot the file
+    # here so subsequent assertions can rely on its presence.
+    local aggregate="$review_dir/reviews/aggregate.json"
+    local aggregate_snapshot="$scenario_work/aggregate.snapshot.json"
+    if [[ -f "$aggregate" ]]; then
+        cp "$aggregate" "$aggregate_snapshot"
+    fi
+
+    local gate_report
+    gate_report=$(run_scenario_check_and_get_report "$scenario_home" "$scenario_bin" "$session" "$transcript")
+
+    if [[ ! -f "$aggregate_snapshot" ]]; then
+        log_red "$scenario: aggregate.json absent before gate-report check — coordinator did not produce the final aggregate (review_dir=$review_dir; spawn stderr tail: $(tail -3 "$stderr_f" 2>/dev/null | tr '\n' ';'))"
+        red_count=$((red_count + 1))
+        return
+    fi
+    aggregate="$aggregate_snapshot"
+
+    # Assertion 1: the planted finding's title appears in the gate report
+    # (one card per merged defect from aggregate.json.findings[]).
+    if printf '%s' "$gate_report" | grep -qF "Hardcoded credential in login()"; then
+        log_grn "$scenario: gate report contains aggregate.json finding title (one card per merged defect)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate report missing aggregate.json finding title 'Hardcoded credential in login()'"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 2: raised_by indicator present (multi-reviewer finding).
+    # All three reviewers raised the same finding, so aggregate.json.findings[0].raised_by
+    # should be ["claude","codex","gemini"], rendered as
+    # `raised_by: claude, codex, gemini`.
+    if printf '%s' "$gate_report" | grep -qE 'raised_by:[[:space:]]+claude,[[:space:]]+codex,[[:space:]]+gemini'; then
+        log_grn "$scenario: gate report renders raised_by indicator for multi-reviewer finding"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate report missing 'raised_by: claude, codex, gemini' indicator (multi-reviewer merged finding)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 3: P1 priority appears in the rendered card head
+    # (`### [P1] Hardcoded credential...`).
+    if printf '%s' "$gate_report" | grep -qE '###[[:space:]]+\[P1\][[:space:]]+Hardcoded credential'; then
+        log_grn "$scenario: gate report renders priority prefix in finding card head"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate report missing '[P1]' priority prefix in finding card head"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 4: Aggregate verdict line is present and labels Stop-hook
+    # authoritative. Planted P1 → aggregate.verdict=NEEDS_WORK, Stop-hook
+    # blocks on P1 → consensus=requires_decision.
+    if printf '%s' "$gate_report" | grep -qE 'Aggregate verdict:[[:space:]]+NEEDS_WORK[[:space:]]*\|[[:space:]]*Stop-hook verdict[[:space:]]+\(authoritative\):[[:space:]]+requires_decision'; then
+        log_grn "$scenario: gate report renders aggregate-vs-Stop-hook verdict line with authoritative label"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate report missing side-by-side aggregate-vs-Stop-hook verdict line (expected 'Aggregate verdict: NEEDS_WORK | Stop-hook verdict (authoritative): requires_decision')"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_verdict_divergence_rendering() {
+    local scenario="verdict-divergence"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    # Two reviewers (codex, claude). codex emits PASS@0.6, claude emits
+    # NEEDS_WORK@0.85 with a P2 advisory finding (P2 → no P0/P1 blocking,
+    # so the Stop-hook's mode=majority logic actually produces
+    # requires_decision via the 1-1 split rather than the P0/P1 fast-
+    # path). Aggregate.verdict resolves to NEEDS_WORK via confidence
+    # tiebreak (0.85 > 0.6). Stop-hook resolves to requires_decision.
+    # Both must surface side-by-side in the gate report.
+    local pass_json='{"verdict":"PASS","summary":"Looks good to me.","overall_confidence":0.6,"findings":[]}'
+    local nw_json='{"verdict":"NEEDS_WORK","summary":"Minor advisory finding.","overall_confidence":0.85,"findings":[{"priority":2,"title":"Minor advisory","body":"Cosmetic naming nit; non-blocking.","confidence":0.85}]}'
+
+    cat > "$scenario_bin/codex" <<CODEX_DIV
+#!/usr/bin/env bash
+out_file=""
+prev=""
+for arg in "\$@"; do
+    if [[ "\$prev" == "-o" ]]; then
+        out_file="\$arg"
+    fi
+    prev="\$arg"
+done
+if [[ -n "\$out_file" ]]; then
+    printf '%s\n' '$pass_json' > "\$out_file"
+fi
+printf '{"type":"thread.started","id":"fixture-thread-001"}\n'
+printf '{"type":"turn.completed","id":"fixture-turn-001","usage":{"input_tokens":100,"output_tokens":50}}\n'
+exit 0
+CODEX_DIV
+
+    cat > "$scenario_bin/claude" <<CLAUDE_DIV
+#!/usr/bin/env bash
+result_json='$nw_json'
+escaped=\$(printf '%s' "\$result_json" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+printf '{"session_id":"fixture-session","result":"%s","tokens":{"input":100,"output":50,"cached":0},"duration_ms":100,"total_cost_usd":0.0001}\n' "\$escaped"
+exit 0
+CLAUDE_DIV
+
+    chmod +x "$scenario_bin/codex" "$scenario_bin/claude"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-divergence"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-divergence/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,claude \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >/dev/null 2>&1
+    set -e
+
+    wait_for_sentinels "$review_dir/reviews" 2 30 || true
+
+    # Capture aggregate.json BEFORE the gate-report check (which archives
+    # reviews/ when in the requires_decision branch).
+    local aggregate="$review_dir/reviews/aggregate.json"
+    local aggregate_snapshot="$scenario_work/aggregate.snapshot.json"
+    if [[ -f "$aggregate" ]]; then
+        cp "$aggregate" "$aggregate_snapshot"
+    fi
+
+    local gate_report
+    gate_report=$(run_scenario_check_and_get_report "$scenario_home" "$scenario_bin" "$session" "$transcript")
+
+    if [[ ! -f "$aggregate_snapshot" ]]; then
+        log_red "$scenario: aggregate.json absent — coordinator did not produce the final aggregate"
+        red_count=$((red_count + 1))
+        return
+    fi
+    aggregate="$aggregate_snapshot"
+
+    # Assertion 1: aggregate.verdict is NEEDS_WORK (confidence tiebreak
+    # picks the higher-confidence side under majority mode).
+    local agg_verdict
+    agg_verdict=$(jq -r '.verdict' "$aggregate" 2>/dev/null || echo "")
+    if [[ "$agg_verdict" == "NEEDS_WORK" ]]; then
+        log_grn "$scenario: aggregate.json.verdict == NEEDS_WORK (confidence tiebreak resolved 1-1 split)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: aggregate.json.verdict='$agg_verdict' (expected NEEDS_WORK from PASS@0.6 vs NEEDS_WORK@0.85 tiebreak)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 2: gate report renders aggregate verdict + Stop-hook
+    # verdict side-by-side with Stop-hook labeled authoritative.
+    if printf '%s' "$gate_report" | grep -qE 'Aggregate verdict:[[:space:]]+NEEDS_WORK[[:space:]]*\|[[:space:]]*Stop-hook verdict[[:space:]]+\(authoritative\):[[:space:]]+requires_decision'; then
+        log_grn "$scenario: gate report renders both verdicts side-by-side with Stop-hook labeled authoritative"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate report missing the side-by-side verdict line (expected 'Aggregate verdict: NEEDS_WORK | Stop-hook verdict (authoritative): requires_decision')"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_consensus_calculator_regression() {
+    local scenario="consensus-calculator-regression"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_home="$scenario_work/home"
+    local scenario_bin="$scenario_work/bin"
+    mkdir -p "$scenario_home" "$scenario_bin"
+
+    # The Stop-hook's calculate_consensus reads STATE_FILE (.config and
+    # .reviewers keys) plus per-reviewer JSONs in REVIEWS_DIR. We construct
+    # two synthetic gate states with IDENTICAL per-reviewer verdict +
+    # findings shape but: (a) state A has NO confidence/overall_confidence
+    # fields and NO aggregate.json sitting beside the JSONs (the legacy
+    # non-debate shape); (b) state B has the SAME verdict + findings
+    # shape but with confidence/overall_confidence fields ADDED and a
+    # synthetic aggregate.json present (with a deliberately-misleading
+    # verdict to falsify a calculator that incorrectly trusted aggregate.json).
+    # The Stop-hook's calculator output (renderable as "Revision Required"
+    # for requires_decision OR "Review Complete" for auto_approve) MUST
+    # be byte-identical across both states. This proves confidence and
+    # aggregate.json have no influence on the calculator (spec L376
+    # Verdict authority + task-context Implementation Notes' Renderer-vs-
+    # calculator split).
+
+    local sa_session="${scenario}-A"
+    local sb_session="${scenario}-B"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-consensus"
+    mkdir -p "$trans_dir"
+    local sa_transcript="$trans_dir/$sa_session.jsonl"
+    local sb_transcript="$trans_dir/$sb_session.jsonl"
+    touch "$sa_transcript" "$sb_transcript"
+    local sa_dir="$scenario_home/.claude/projects/-test-debate-consensus/cerberus/$sa_session"
+    local sb_dir="$scenario_home/.claude/projects/-test-debate-consensus/cerberus/$sb_session"
+    mkdir -p "$sa_dir/reviews" "$sb_dir/reviews"
+
+    # Per-reviewer JSONs — same verdicts (one PASS, one NEEDS_WORK with
+    # P2 only — the same shape that produces requires_decision through
+    # the majority mode's 1-1 split branch).
+    cat > "$sa_dir/reviews/codex.json" <<'JSON'
+{"verdict":"PASS","summary":"Looks good.","findings":[]}
+JSON
+    cat > "$sa_dir/reviews/claude.json" <<'JSON'
+{"verdict":"NEEDS_WORK","summary":"P2 advisory.","findings":[{"priority":2,"title":"Minor","body":"Cosmetic."}]}
+JSON
+    : > "$sa_dir/reviews/codex.done"
+    : > "$sa_dir/reviews/claude.done"
+
+    cat > "$sb_dir/reviews/codex.json" <<'JSON'
+{"verdict":"PASS","summary":"Looks good.","overall_confidence":0.6,"findings":[],"strategy":"verification-first","round":2,"peer_responses_seen":["Peer-A"]}
+JSON
+    cat > "$sb_dir/reviews/claude.json" <<'JSON'
+{"verdict":"NEEDS_WORK","summary":"P2 advisory.","overall_confidence":0.85,"findings":[{"priority":2,"title":"Minor","body":"Cosmetic.","confidence":0.85}],"strategy":"falsification-first","round":2,"peer_responses_seen":["Peer-B"]}
+JSON
+    : > "$sb_dir/reviews/codex.done"
+    : > "$sb_dir/reviews/claude.done"
+
+    # Synthetic aggregate.json with a DELIBERATELY-MISLEADING verdict
+    # (PASS) sitting beside the per-reviewer JSONs. A correct calculator
+    # MUST ignore this and still produce requires_decision based solely
+    # on the per-reviewer verdicts; if a regression made aggregate.verdict
+    # leak into the calculator it would flip to auto_approve.
+    cat > "$sb_dir/reviews/aggregate.json" <<'JSON'
+{"verdict":"PASS","summary":"sentinel — calculator MUST ignore this","findings":[],"consensus_mode":"majority","rounds_consumed":2,"reviewers":["claude","codex"],"strategies":{"claude":"falsification-first","codex":"verification-first"}}
+JSON
+
+    # Pre-populate gate-state.json with .reviewers map (.config defaulted
+    # to majority) so the Stop-hook's check path runs the calculator.
+    local now_iso
+    now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    for d in "$sa_dir" "$sb_dir"; do
+        cat > "$d/gate-state.json" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "mode":{"type":"plan","plan_path":"$SAMPLE_PLAN"},
+  "reviewers":{"codex":{},"claude":{}},
+  "consensus":null,
+  "decision":null,
+  "trigger_source":"plan",
+  "created_at":"$now_iso"
+}
+JSON
+        printf '0' > "$d/iteration.txt"
+    done
+
+    # Drive the Stop-hook check path on each scenario. The check writes
+    # the gate-report markdown into the .reason field of its JSON output.
+    # The calculator's classification is encoded in the gate report
+    # markdown: "## Revision Required" → requires_decision; "## Review
+    # Complete" → auto_approve. We grep for these markers as the
+    # calculator's externally-observable output (the in-state
+    # consensus.verdict gets cleared by clean_for_rerun in the
+    # requires_decision path before the check returns, so the gate-
+    # report markdown is the stable surface to assert against).
+    local sa_report sb_report
+    sa_report=$(run_scenario_check_and_get_report "$scenario_home" "$scenario_bin" "$sa_session" "$sa_transcript")
+    sb_report=$(run_scenario_check_and_get_report "$scenario_home" "$scenario_bin" "$sb_session" "$sb_transcript")
+
+    classify_calculator_output() {
+        local report="$1"
+        if printf '%s' "$report" | grep -qF "## Revision Required"; then
+            echo "requires_decision"
+        elif printf '%s' "$report" | grep -qF "## Review Complete"; then
+            echo "auto_approve"
+        elif printf '%s' "$report" | grep -qF "## Max Iterations Reached"; then
+            echo "max_iterations"
+        else
+            echo "unknown"
+        fi
+    }
+
+    local sa_class sb_class
+    sa_class=$(classify_calculator_output "$sa_report")
+    sb_class=$(classify_calculator_output "$sb_report")
+
+    if [[ "$sa_class" == "$sb_class" && "$sa_class" != "unknown" ]]; then
+        log_grn "$scenario: calculate_consensus classification byte-identical across with-/without-confidence + with-/without-aggregate.json (sa=sb='$sa_class')"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: calculate_consensus output diverged — confidence/aggregate.json influenced the calculator (sa='$sa_class' vs sb='$sb_class'). Renderer-vs-calculator split has been violated."
+        red_count=$((red_count + 1))
+    fi
+
+    # Sanity assertion: both runs land in requires_decision (1-1 split,
+    # P2 advisory under majority mode). If this fails, the test fixture
+    # is wrong (not the calculator).
+    if [[ "$sa_class" == "requires_decision" ]]; then
+        log_grn "$scenario: calculator returns requires_decision for 1-1 PASS/NEEDS_WORK split with P2 advisory (today's behaviour, unchanged)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: calculator returned '$sa_class' for 1-1 PASS/NEEDS_WORK split (expected requires_decision)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Tighter assertion: scenario B (with aggregate.json having
+    # verdict=PASS) MUST NOT produce auto_approve. If a regression
+    # plumbed aggregate.verdict into the calculator, this would flip
+    # to auto_approve and the assertion would fail loudly.
+    if [[ "$sb_class" != "auto_approve" ]]; then
+        log_grn "$scenario: aggregate.json.verdict=PASS in scenario B did NOT leak into the calculator (output stayed at '$sb_class' rather than auto_approve)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: aggregate.json.verdict=PASS leaked into the calculator (sb='$sb_class') — calculator must ignore aggregate.json."
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_aggregate_finding_cards_rendering
+test_verdict_divergence_rendering
+test_consensus_calculator_regression
 
 # ---------------------------------------------------------------------------
 # Summary
