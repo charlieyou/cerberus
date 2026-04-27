@@ -223,17 +223,17 @@ work as well.
 
 ### Round Shape
 
-| Mode    | Inner debate rounds |
-|---------|---------------------|
+| Mode    | Total rounds |
+|---------|--------------|
 | `fast`  | 2 |
 | `smart` | 2 |
 | `max`   | 3 |
 
-Round 1 is the cold first read. Each subsequent round shows reviewers an
-anonymized block of their peers' prior-round outputs and their own prior-round
-output, then re-runs them. Reviewers are assigned distinct reasoning strategies
-(`verification-first`, `falsification-first`, `decompose`) per artifact for the
-duration of the run.
+Round 1 is the cold first read; the remaining round(s) are peer rounds. Each
+peer round shows reviewers an anonymized block of their peers' prior-round
+outputs and their own prior-round output, then re-runs them. Reviewers are
+assigned distinct reasoning strategies (`verification-first`,
+`falsification-first`, `decompose`) per artifact for the duration of the run.
 
 ### Cost & Latency
 
@@ -265,7 +265,8 @@ Distinct exit codes for debate-specific outcomes (in addition to the existing
 | Code | Meaning |
 |------|---------|
 | `5` | Aggregator failure (e.g., malformed reviewer JSON survived repair). `reviews/` left empty; `gate-state.json.status="pending"` so re-spawn under `REVIEW_GATE_RERUN=1` recovers. |
-| `6` | Degraded below 2 active reviewers (preflight or mid-debate). `gate-state.json.status="awaiting_decision"`; resolve via `bin/review-gate resolve` or re-spawn. |
+| `6` (preflight) | Fewer than 2 reviewers available before any model invocation. The coordinator has not yet touched `gate-state.json`, so no active gate is created; recovery is to re-invoke with `--agents` covering ≥2 available reviewers (or install the missing CLIs). `bin/review-gate resolve` does not apply because no gate was created. |
+| `6` (mid-debate) | Active reviewer count dropped below 2 during the run (abstentions / per-reviewer timeouts). `gate-state.json.status="awaiting_decision"` with `consensus.verdict="requires_decision"`; resolve via `bin/review-gate resolve` or re-spawn under `REVIEW_GATE_RERUN=1`. |
 | `130` | SIGINT / Ctrl-C cancellation during a debate run. The currently-running round is allowed to complete naturally; `reviews/` is left empty and `gate-state.json.status="pending"`. |
 
 ### Bare-spawn Whitelist
