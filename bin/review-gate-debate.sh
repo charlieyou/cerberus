@@ -2218,14 +2218,27 @@ run_debate_coordinator() {
     # aggregation succeeds).
     local _rdc_schema_file="$reviews_dir/review-schema.json"
     local -a _rdc_round2_spawned=()
+    local -a _rdc_round2_spawn_failed=()
     for _rev in "${_rdc_round1_active[@]}"; do
         local _r2_prompt="$_rdc_round2_dir/review.${_rev}.prompt"
         if spawn_reviewer "$_rev" "$_rev" "$_r2_prompt" "$_rdc_schema_file" "$_rdc_round2_dir"; then
             _rdc_round2_spawned+=("$_rev")
         else
-            echo "warning: spawn_reviewer failed for $_rev in round 2 (no Round-2 sentinel will appear; reviewer treated as abstained)" >&2
+            echo "warning: spawn_reviewer failed for $_rev in round 2 (no Round-2 sentinel will appear; reviewer pruned from state and treated as abstained)" >&2
+            _rdc_round2_spawn_failed+=("$_rev")
         fi
     done
+
+    # Prune peer-round spawn-failed reviewers from gate-state.json's
+    # reviewers map immediately. Without this prune the Stop-hook's wait
+    # loop would block waiting for a sentinel that no detached process
+    # will ever produce — `_rdc_classify_round_outputs` only iterates the
+    # SPAWNED set, so spawn-failed reviewers never reach the round's
+    # abstained list and never get pruned by the later post-classify
+    # prune call.
+    if [[ ${#_rdc_round2_spawn_failed[@]} -gt 0 ]]; then
+        _rdc_prune_state_reviewers "${_rdc_round2_spawn_failed[@]}"
+    fi
 
     # spawn_reviewer for every Round-1 active reviewer should have
     # succeeded (the Round-1 spawn already passed for the same reviewer);
@@ -2235,6 +2248,9 @@ run_debate_coordinator() {
     if [[ ${#_rdc_round2_spawned[@]} -lt 2 ]]; then
         echo "debate degraded below 2 active reviewers in the final peer round" >&2
         echo "  Round-2 spawn attempts succeeded for: ${_rdc_round2_spawned[*]:-(none)}" >&2
+        if [[ ${#_rdc_round2_spawn_failed[@]} -gt 0 ]]; then
+            echo "  Round-2 spawn attempts failed for: ${_rdc_round2_spawn_failed[*]+${_rdc_round2_spawn_failed[*]}}" >&2
+        fi
         _rdc_mark_state_degraded
         _rdc_degraded_exit
     fi
@@ -2408,18 +2424,34 @@ run_debate_coordinator() {
         # Spawn Round-3 reviewers with output_dir = round-3 staging.
         local _rdc_schema_file3="$reviews_dir/review-schema.json"
         local -a _rdc_round3_spawned=()
+        local -a _rdc_round3_spawn_failed=()
         for _rev3 in "${_rdc_round2_active[@]}"; do
             local _r3_prompt="$_rdc_round3_dir/review.${_rev3}.prompt"
             if spawn_reviewer "$_rev3" "$_rev3" "$_r3_prompt" "$_rdc_schema_file3" "$_rdc_round3_dir"; then
                 _rdc_round3_spawned+=("$_rev3")
             else
-                echo "warning: spawn_reviewer failed for $_rev3 in round 3 (no Round-3 sentinel will appear; reviewer treated as abstained)" >&2
+                echo "warning: spawn_reviewer failed for $_rev3 in round 3 (no Round-3 sentinel will appear; reviewer pruned from state and treated as abstained)" >&2
+                _rdc_round3_spawn_failed+=("$_rev3")
             fi
         done
+
+        # Prune peer-round spawn-failed reviewers from gate-state.json's
+        # reviewers map immediately. Without this prune the Stop-hook's
+        # wait loop would block waiting for a sentinel that no detached
+        # process will ever produce — `_rdc_classify_round_outputs` only
+        # iterates the SPAWNED set, so spawn-failed reviewers never reach
+        # the round's abstained list and never get pruned by the later
+        # post-classify prune call.
+        if [[ ${#_rdc_round3_spawn_failed[@]} -gt 0 ]]; then
+            _rdc_prune_state_reviewers "${_rdc_round3_spawn_failed[@]}"
+        fi
 
         if [[ ${#_rdc_round3_spawned[@]} -lt 2 ]]; then
             echo "debate degraded below 2 active reviewers in the final peer round" >&2
             echo "  Round-3 spawn attempts succeeded for: ${_rdc_round3_spawned[*]:-(none)}" >&2
+            if [[ ${#_rdc_round3_spawn_failed[@]} -gt 0 ]]; then
+                echo "  Round-3 spawn attempts failed for: ${_rdc_round3_spawn_failed[*]+${_rdc_round3_spawn_failed[*]}}" >&2
+            fi
             _rdc_mark_state_degraded
             _rdc_degraded_exit
         fi
