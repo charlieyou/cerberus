@@ -331,6 +331,340 @@ _rdc_cleanup_temp_files() {
 }
 
 # ---------------------------------------------------------------------------
+# T007 — R1 anonymization helpers.
+# ---------------------------------------------------------------------------
+#
+# These helpers implement the R1 anonymization pass:
+#
+#   1. DEBATE_DENYLIST_TERMS    — constant array of agent-identity tokens
+#                                  scrubbed from rendered peer blocks.
+#   2. debate_deny_list_scrub   — apply the canonical pinned POSIX ERE
+#                                  iterative substitution loop to stdin.
+#   3. debate_assign_peer_ids   — assign opaque per-run IDs (Peer-A ...).
+#   4. debate_peer_order_seeded — deterministic per-recipient ordering
+#                                  under `--debate-seed N` (D11 algorithm).
+#   5. debate_peer_order_random — non-deterministic per-recipient ordering
+#                                  for the production path (no seed).
+#   6. debate_render_active_peer    — render the R1 active-peer skeleton
+#                                      with deny-list redactions on
+#                                      title/body.
+#   7. debate_render_abstained_peer — render the R1 abstained-peer skeleton.
+#
+# Phase E scope (T007): provide the helpers and wire fixtures + tests. The
+# Round-2 prompt construction that consumes `${PEER_BLOCK}` lives in T008.
+# Bash 3.2 / BSD + GNU sed compatible throughout — no associative arrays,
+# no GNU-only sed extensions, no `\<` / `\>` / `[[:<:]]` boundary forms.
+#
+# DEBATE_DENYLIST_TERMS — canonical v1 deny-list (spec R1).
+#
+# Configurable via shell variable: tests and downstream callers MAY reassign
+# this array before invoking debate_deny_list_scrub to exercise edge cases.
+# The default v1 contents cover the agent-identity tokens that v1 reviewers
+# might emit (model brand names, vendor names, generic reviewer/agent
+# placeholders). Extending the deny-list is a code-change + spec-note path,
+# not a runtime-flag path, so additions land alongside the matching test
+# fixtures.
+DEBATE_DENYLIST_TERMS=(
+    "Claude"
+    "Codex"
+    "Gemini"
+    "GPT"
+    "Anthropic"
+    "OpenAI"
+    "Google"
+    "Reviewer 1"
+    "Reviewer 2"
+    "Reviewer 3"
+    "Agent 1"
+    "Agent 2"
+    "Agent 3"
+)
+
+# _debate_denylist_alternation — emit the `term1|term2|...` alternation
+# string used inside the canonical pinned regex form. Internal helper.
+# v1 deny-list contains no regex metacharacters, so terms are inserted
+# verbatim. Future deny-list additions that require regex escaping MUST
+# update this helper to escape per-term.
+_debate_denylist_alternation() {
+    local first=1 term out=""
+    for term in "${DEBATE_DENYLIST_TERMS[@]}"; do
+        if [[ $first -eq 1 ]]; then
+            out="$term"
+            first=0
+        else
+            out="$out|$term"
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# debate_deny_list_scrub — apply the canonical R1 deny-list scrub to stdin.
+#
+# Pinned canonical form (spec R1 + plan Implementation Constraints L67-L68):
+#
+#   sed -E "s/(^|[^A-Za-z0-9_])(<term1>|<term2>|...)($|[^A-Za-z0-9_])/\1[REDACTED]\3/gi"
+#
+# applied iteratively in a do-while shell loop until the buffer is
+# idempotent. The canonical pattern's negated character classes consume
+# one boundary character on each side, so a single non-iterative pass
+# over `Claude Codex` redacts only `Claude`: the first match consumes
+# the shared space as its trailing boundary, leaving `Codex` with no
+# preceding non-word character available for the next match in the same
+# pass. Iterating until no further substitution occurs handles adjacent
+# deny-list terms (`Claude Codex Gemini` redacts all three after at most
+# two iterations) without resorting to BSD-only `:a; ...; ta` label form.
+#
+# Capture-group numbering: the alternation `(^|[^A-Za-z0-9_])(<terms>)($|[^A-Za-z0-9_])`
+# captures the leading boundary as `\1`, the matched term as `\2`, and
+# the trailing boundary as `\3`. The replacement re-emits `\1` and `\3`
+# so the now-adjacent next-term boundary is preserved for the next pass.
+#
+# Reads stdin, writes scrubbed output to stdout. Trailing newlines in the
+# input are preserved verbatim via a sentinel byte: command substitution
+# strips trailing newlines, so we append `.` before each substitution and
+# strip it via parameter expansion after. The sentinel `.` is a non-word
+# character, so it serves as a valid trailing boundary for any deny-list
+# term that happens to end the buffer without its own trailing
+# whitespace — and that's the *correct* semantics under spec R1 because
+# end-of-buffer is a word boundary equivalent to end-of-line.
+#
+# Bash 3.2 + BSD/GNU sed compatible. The `-E` (ERE) and `gi` flags are
+# the portable subset accepted by both implementations. macOS BSD sed
+# and Linux GNU sed both preserve the trailing-LF count of the input
+# in their output (verified by direct test), so the sentinel-protected
+# round trip yields byte-identical output bytes on both platforms.
+debate_deny_list_scrub() {
+    local cur next alt
+    alt=$(_debate_denylist_alternation)
+    # Sentinel-protected read: append `.` before command substitution
+    # strips trailing newlines, then strip the sentinel.
+    cur=$(cat; printf '.')
+    cur="${cur%.}"
+    while :; do
+        next=$(printf '%s' "$cur" | sed -E "s/(^|[^A-Za-z0-9_])(${alt})(\$|[^A-Za-z0-9_])/\1[REDACTED]\3/gi"; printf '.')
+        next="${next%.}"
+        if [[ "$next" == "$cur" ]]; then
+            break
+        fi
+        cur=$next
+    done
+    printf '%s' "$cur"
+}
+
+# debate_assign_peer_ids — assign opaque per-run peer IDs (Peer-A,
+# Peer-B, ...) to canonical reviewer names.
+#
+# Args (positional): canonical reviewer names (e.g., claude codex gemini).
+# Output (stdout): one line per reviewer in canonical alphabetical order,
+#   format `<reviewer> Peer-<X>`, where `<X>` is `A`, `B`, `C`, ...
+#
+# The mapping is intentionally derivable from the (sorted) reviewer set
+# alone, so callers can re-run this function in subsequent rounds and
+# obtain the same mapping without persisting it. Stable across all rounds
+# within one debate run; reset between runs (callers should pass the
+# active set as of the *first* round so abstainers in later rounds keep
+# their original opaque ID — the terminal-abstention rule means an
+# abstainer in round k is presented as `(peer abstained)` in round k+1
+# under the *same* opaque ID it had in round 1).
+#
+# v1 supports up to 3 active reviewers, so the 26-letter cap is purely
+# defensive against fixture misuse. Empty reviewer list → empty output,
+# exit 0.
+debate_assign_peer_ids() {
+    local -a sorted=()
+    local r
+    while IFS= read -r r; do
+        [[ -z "$r" ]] && continue
+        sorted+=("$r")
+    done < <(printf '%s\n' "$@" | LC_ALL=C sort)
+
+    if [[ ${#sorted[@]} -eq 0 ]]; then
+        return 0
+    fi
+    if [[ ${#sorted[@]} -gt 26 ]]; then
+        echo "debate_assign_peer_ids: more than 26 reviewers passed (${#sorted[@]}); not supported in v1" >&2
+        return 1
+    fi
+
+    local letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    local i=0
+    while [[ $i -lt ${#sorted[@]} ]]; do
+        printf '%s Peer-%s\n' "${sorted[i]}" "${letters:$i:1}"
+        i=$((i + 1))
+    done
+}
+
+# debate_peer_order_seeded — compute the deterministic per-recipient peer
+# ordering under `--debate-seed N` per spec R1 / D11.
+#
+# Algorithm:
+#   For each peer P in the recipient's peer set (excluding the recipient
+#   itself), compute K(R, P) = sha256("<seed>:<R>:<P>") where:
+#     <seed>  is the integer N rendered as its decimal string
+#     <R>     is the recipient's canonical reviewer name (claude/codex/gemini)
+#     <P>     is the peer's opaque per-run ID (Peer-A, Peer-B, ...)
+#     `:`     is literal ASCII 0x3A
+#   Sort peers ascending by K(R, P) rendered as the lowercase 64-char hex
+#   digest, using lexicographic byte-order over the hex string. Tiebreak
+#   (effectively unreachable with SHA-256) by peer-opaque-ID lex ascending.
+#
+# Args:
+#   $1   seed (integer rendered as decimal string)
+#   $2   recipient canonical reviewer name
+#   $3+  peer opaque IDs to order
+#
+# Output (stdout): peer opaque IDs one per line, in computed order.
+#
+# Cross-platform byte-stable: SHA-256 is deterministic, sort uses
+# `LC_ALL=C` byte-order; macOS BSD `shasum` and Linux GNU `sha256sum`
+# emit identical digests for the same input.
+debate_peer_order_seeded() {
+    local seed="$1"; shift
+    local recipient="$1"; shift
+    if [[ $# -eq 0 ]]; then
+        return 0
+    fi
+    local p key
+    {
+        for p in "$@"; do
+            key=$(printf '%s' "${seed}:${recipient}:${p}" | _sha256_hex) || return 1
+            # Tab separates key from peer-ID so awk -F'\t' can recover the
+            # peer-ID after sort. SHA-256 hex digits never contain TAB, and
+            # the peer-ID values (Peer-A, Peer-B, ...) never contain TAB,
+            # so the separator is unambiguous.
+            printf '%s\t%s\n' "$key" "$p"
+        done
+    } | LC_ALL=C sort | awk -F'\t' '{print $2}'
+}
+
+# debate_peer_order_random — compute a non-deterministic per-recipient
+# peer ordering for the production path (no `--debate-seed`).
+#
+# Args: peer opaque IDs to shuffle.
+# Output (stdout): peer opaque IDs one per line, in shuffled order.
+#
+# RNG source contract (spec R1 production-path shuffle):
+#   - Prefer 4 bytes from `/dev/urandom` rendered as a uint32 decimal.
+#   - Fall back to `$RANDOM * 32768 + $RANDOM` (Bash 3.2 builtin; 30-bit
+#     entropy) when `/dev/urandom` is unreadable.
+#   - MUST NOT cross-derive from any byte-parity-protected input
+#     (artifact_id, reviewer canonical name, peer opaque ID, seed value,
+#     etc.). The function takes peer-ID args only — it does not consult
+#     the recipient name or any other contextual identifier — so the
+#     output is governed purely by the RNG.
+#
+# Two production runs over the same artifact MUST produce different
+# orderings with high probability (the test asserts this statistically
+# across N=20+ runs).
+debate_peer_order_random() {
+    if [[ $# -eq 0 ]]; then
+        return 0
+    fi
+    local p key
+    {
+        for p in "$@"; do
+            if [[ -r /dev/urandom ]]; then
+                # `od -An -N4 -tu4` emits a uint32 decimal in [0, 2^32).
+                # `tr -d ' \n'` strips od's leading-padding spaces and the
+                # trailing newline, leaving a bare decimal digit run.
+                key=$(od -An -N4 -tu4 < /dev/urandom 2>/dev/null | tr -d ' \n')
+            fi
+            if [[ -z "${key:-}" ]]; then
+                # Fallback: combine two $RANDOM draws for ~30 bits of
+                # entropy. Bash 3.2 $RANDOM is 15-bit unsigned.
+                key=$(( ${RANDOM:-0} * 32768 + ${RANDOM:-0} ))
+            fi
+            printf '%s\t%s\n' "$key" "$p"
+        done
+    } | LC_ALL=C sort -k1,1n | awk -F'\t' '{print $2}'
+}
+
+# debate_render_active_peer — render the R1 active-peer skeleton for one
+# peer, with deny-list redactions applied to titles and bodies.
+#
+# Args:
+#   $1  peer opaque ID (e.g., "Peer-A")
+#   $2  peer JSON (string), expected fields:
+#         .verdict             — PASS | FAIL | NEEDS_WORK
+#         .overall_confidence  — number in [0, 1]
+#         .findings            — array of {title, body, ...}
+#
+# Output (stdout): the rendered active-peer skeleton text per spec R1:
+#
+#   **Peer-X**
+#   Verdict: <V>
+#   Overall confidence: <C>
+#
+#   Findings:
+#   - **<title>**
+#     <body>
+#   - **<title>**
+#     <body>
+#
+# When `findings` is empty: the entire `Findings:` block collapses to the
+# single literal line `Findings: (none)` (no list items, no trailing blank
+# line).
+#
+# Per-finding `confidence` and per-peer `summary` are excluded from the
+# rendered shape; they remain in the underlying JSON for telemetry but
+# are not exposed to the next-round reviewer.
+debate_render_active_peer() {
+    local peer_id="$1"
+    local peer_json="$2"
+    local verdict overall_conf findings_count i title body s_title s_body
+
+    verdict=$(printf '%s' "$peer_json" | jq -r '.verdict // ""')
+    overall_conf=$(printf '%s' "$peer_json" | jq -r '(.overall_confidence // 0.5) | tostring')
+    findings_count=$(printf '%s' "$peer_json" | jq -r '(.findings // []) | length')
+
+    printf '**%s**\n' "$peer_id"
+    printf 'Verdict: %s\n' "$verdict"
+    printf 'Overall confidence: %s\n' "$overall_conf"
+    printf '\n'
+
+    if [[ "$findings_count" == "0" ]]; then
+        printf 'Findings: (none)\n'
+        return 0
+    fi
+
+    printf 'Findings:\n'
+    i=0
+    while [[ $i -lt $findings_count ]]; do
+        title=$(printf '%s' "$peer_json" | jq -r --argjson i "$i" '.findings[$i].title // ""')
+        body=$(printf '%s' "$peer_json" | jq -r --argjson i "$i" '.findings[$i].body // ""')
+        s_title=$(printf '%s' "$title" | debate_deny_list_scrub)
+        # `- **<title>**` on its own line.
+        printf -- '- **%s**\n' "$s_title"
+        if [[ -n "$body" ]]; then
+            s_body=$(printf '%s' "$body" | debate_deny_list_scrub)
+            # Indent each body line two spaces. `printf '%s\n'` adds the
+            # terminating LF; sed prepends `  ` to every line. A multi-line
+            # body keeps the two-space indent on every continuation line.
+            printf '%s\n' "$s_body" | sed 's/^/  /'
+        fi
+        i=$((i + 1))
+    done
+}
+
+# debate_render_abstained_peer — render the R1 abstained-peer skeleton.
+#
+# Args:
+#   $1  peer opaque ID
+#
+# Output (stdout): exactly two lines:
+#   **Peer-X**
+#   (peer abstained)
+#
+# The literal string `(peer abstained)` is the entire body of the peer's
+# entry; no findings list, no verdict, no overall_confidence are rendered.
+# The rendered string contains no model name, which is what makes R1's
+# deny-list trivially apply over the placeholder.
+debate_render_abstained_peer() {
+    local peer_id="$1"
+    printf '**%s**\n(peer abstained)\n' "$peer_id"
+}
+
+# ---------------------------------------------------------------------------
 # run_debate_coordinator — synchronous in-process coordinator (Phase D scope:
 # Round 1 only, stub aggregator, atomic promotion).
 # ---------------------------------------------------------------------------
