@@ -294,6 +294,33 @@ compute_sha256() {
 # --- Telemetry Integration Helpers ---
 # Note: init_iteration_dir is provided by telemetry-lib.sh (sourced above)
 
+# get_iteration_dir — return the iterations/<iter>/ path under a review_dir
+# WITHOUT creating it. Read-only counterpart to telemetry-lib.sh's
+# init_iteration_dir helper, used by debate-mode telemetry surfaces that
+# need the iter_dir path before init has run (or that don't want to
+# create the directory as a side effect of a path lookup).
+#
+# Why this is needed (debate-mode partial-state path): the debate
+# coordinator's degraded-preflight branch may need to compute the
+# iterations/<iter>/ path before any round has spawned a reviewer, in
+# order to write iterations/<iter>/debate-telemetry.json. init_iteration_dir
+# is path-creating and side-effecting; this helper is path-only.
+#
+# Args:
+#   $1  review_dir   absolute path to a session's $REVIEW_DIR
+#   $2  iteration    integer (defaults to 0)
+#
+# Output (stdout): the unverified iterations/<iter>/ path.
+# Returns 1 if review_dir is missing.
+get_iteration_dir() {
+    local review_dir="$1"
+    local iteration="${2:-0}"
+    if [[ -z "$review_dir" ]]; then
+        return 1
+    fi
+    printf '%s\n' "$review_dir/iterations/$iteration"
+}
+
 # Write iteration telemetry summary
 # Usage: write_iteration_telemetry "$iter_dir" "$status" "$consensus"
 write_iteration_telemetry() {

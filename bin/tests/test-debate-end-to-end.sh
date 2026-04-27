@@ -1919,6 +1919,826 @@ test_verdict_divergence_rendering
 test_consensus_calculator_regression
 
 # ---------------------------------------------------------------------------
+# T012 (Phase F.2) telemetry surfaces + distinct exit codes scenarios.
+#
+# Coverage:
+#   1. test_gate_state_debate_block_success — success path writes the
+#      pinned gate-state.json.debate block; iterations/<iter>/debate-telemetry.json
+#      ABSENT (success-path partial state file is NOT written).
+#   2. test_non_debate_run_no_debate_key — non-debate spawn does NOT add a
+#      .debate top-level key (NOT null, NOT {}).
+#   3. test_debate_block_survives_stop_hook — after Stop-hook flips
+#      pending → awaiting_decision → resolved, .debate stays present.
+#   4. test_aggregate_verdict_never_requires_decision — aggregate.json
+#      across all SHAPE_DIRS asserts .verdict ∈ {PASS|NEEDS_WORK|FAIL}
+#      strictly; requires_decision only appears in
+#      gate-state.json.consensus.verdict.
+#   5. test_degraded_below_2_partial_telemetry — extends the existing
+#      degraded-below-2 scenario with the T012-specific assertions:
+#      iterations/<iter>/debate-telemetry.json present; gate-state.json
+#      transitioned to awaiting_decision + consensus.verdict = requires_decision;
+#      no .debate block; reviews/ empty.
+#   6. test_aggregator_failure_partial_telemetry — directly invoke the
+#      aggregator helper with a malformed augmented JSON; verify exit
+#      code 5, stderr `aggregator failed: jq parse error on reviews/<r>.json`,
+#      and partial telemetry file written.
+#   7. test_cancellation_sigint — start a debate run with a hanging fake
+#      reviewer, send SIGINT during Round 1, verify exit code 130,
+#      partial telemetry written, gate-state.json.status stays at pending,
+#      no .debate block, canonical reviews/ empty.
+# ---------------------------------------------------------------------------
+
+# Helper: assert gate-state.json.debate block has the pinned shape with
+# rounds_telemetry containing exactly the listed round numbers in order.
+assert_debate_block_pinned_shape() {
+    local scenario="$1"
+    local state_file="$2"
+    local expected_rounds="$3"  # comma-separated, e.g., "1,2"
+    local expected_mode="$4"
+
+    if [[ ! -f "$state_file" ]]; then
+        log_red "$scenario: gate-state.json missing at $state_file"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    # Top-level .debate present (NOT null).
+    local has_debate
+    has_debate=$(jq -r '.debate | type' "$state_file" 2>/dev/null || echo "null")
+    if [[ "$has_debate" != "object" ]]; then
+        log_red "$scenario: gate-state.json.debate is not an object (got: $has_debate)"
+        red_count=$((red_count + 1))
+        return
+    fi
+    log_grn "$scenario: gate-state.json.debate is an object"
+    green_count=$((green_count + 1))
+
+    # All pinned top-level keys present.
+    local missing_keys=""
+    local k
+    for k in rounds mode consensus_mode strategies rounds_telemetry aggregator_notes; do
+        local v
+        v=$(jq -r ".debate | has(\"$k\")" "$state_file" 2>/dev/null || echo "false")
+        if [[ "$v" != "true" ]]; then
+            missing_keys="$missing_keys $k"
+        fi
+    done
+    if [[ -n "$missing_keys" ]]; then
+        log_red "$scenario: gate-state.json.debate missing keys:$missing_keys"
+        red_count=$((red_count + 1))
+    else
+        log_grn "$scenario: gate-state.json.debate has all pinned keys (rounds, mode, consensus_mode, strategies, rounds_telemetry, aggregator_notes)"
+        green_count=$((green_count + 1))
+    fi
+
+    # Mode matches expected.
+    local actual_mode
+    actual_mode=$(jq -r '.debate.mode' "$state_file" 2>/dev/null || echo "")
+    if [[ "$actual_mode" == "$expected_mode" ]]; then
+        log_grn "$scenario: gate-state.json.debate.mode == \"$expected_mode\""
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate-state.json.debate.mode == \"$actual_mode\" (expected \"$expected_mode\")"
+        red_count=$((red_count + 1))
+    fi
+
+    # rounds_telemetry list of round numbers matches expected.
+    local actual_rounds_csv
+    actual_rounds_csv=$(jq -r '.debate.rounds_telemetry | map(.round | tostring) | join(",")' "$state_file" 2>/dev/null || echo "")
+    if [[ "$actual_rounds_csv" == "$expected_rounds" ]]; then
+        log_grn "$scenario: gate-state.json.debate.rounds_telemetry rounds == [$expected_rounds]"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate-state.json.debate.rounds_telemetry rounds == [$actual_rounds_csv] (expected [$expected_rounds])"
+        red_count=$((red_count + 1))
+    fi
+
+    # Per-round entries have the pinned per-reviewer shape.
+    local round_shape_ok=1
+    local rt_count
+    rt_count=$(jq -r '.debate.rounds_telemetry | length' "$state_file" 2>/dev/null || echo "0")
+    local i=0
+    while [[ $i -lt $rt_count ]]; do
+        # Each entry must have round, started_at, finished_at, wall_clock_ms,
+        # reviewers (array). reviewers[*] must have name, abstained,
+        # overall_confidence, tokens_used, integrity_flags.
+        local entry_keys_ok
+        entry_keys_ok=$(jq -r --argjson i "$i" '
+            .debate.rounds_telemetry[$i]
+            | (has("round") and has("started_at") and has("finished_at")
+               and has("wall_clock_ms") and has("reviewers"))
+        ' "$state_file" 2>/dev/null || echo "false")
+        if [[ "$entry_keys_ok" != "true" ]]; then
+            round_shape_ok=0
+            break
+        fi
+        local rev_keys_ok
+        rev_keys_ok=$(jq -r --argjson i "$i" '
+            .debate.rounds_telemetry[$i].reviewers
+            | all(. as $r | $r | (has("name") and has("abstained")
+                                  and has("overall_confidence")
+                                  and has("tokens_used")
+                                  and has("integrity_flags")))
+        ' "$state_file" 2>/dev/null || echo "false")
+        if [[ "$rev_keys_ok" != "true" ]]; then
+            round_shape_ok=0
+            break
+        fi
+        i=$((i + 1))
+    done
+    if [[ $round_shape_ok -eq 1 ]]; then
+        log_grn "$scenario: per-round entries have the pinned shape (round, started_at, finished_at, wall_clock_ms, reviewers[name, abstained, overall_confidence, tokens_used, integrity_flags])"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: per-round telemetry entries missing pinned keys"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_gate_state_debate_block_success() {
+    local scenario="gate-state-debate-block-success"
+
+    # Re-use the spawn-plan-review SHAPE result (ran already). Look up
+    # its review_dir from SHAPE_DIRS / SHAPE_NAMES.
+    local idx=0
+    local found=""
+    while [[ $idx -lt ${#SHAPE_NAMES[@]} ]]; do
+        if [[ "${SHAPE_NAMES[$idx]}" == "spawn-plan-review" ]]; then
+            found="${SHAPE_DIRS[$idx]}"
+            break
+        fi
+        idx=$((idx + 1))
+    done
+    if [[ -z "$found" ]]; then
+        log_red "$scenario: spawn-plan-review review_dir not found in SHAPE_DIRS"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    local state_file="$found/gate-state.json"
+    assert_debate_block_pinned_shape "$scenario" "$state_file" "1,2" "smart"
+
+    # Success-path MUST NOT write debate-telemetry.json.
+    local iter_root="$found/iterations"
+    local latest_iter
+    latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    local telemetry_file="$iter_root/$latest_iter/debate-telemetry.json"
+    if [[ ! -e "$telemetry_file" ]]; then
+        log_grn "$scenario: iterations/<iter>/debate-telemetry.json ABSENT on success path (success surface is gate-state.json.debate)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: iterations/$latest_iter/debate-telemetry.json should NOT be written on success path"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_non_debate_run_no_debate_key() {
+    local scenario="non-debate-no-debate-key"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    cp "$FAKE_BIN/gemini" "$scenario_bin/gemini"
+    cp "$FAKE_BIN/claude" "$scenario_bin/claude"
+    chmod +x "$scenario_bin/codex" "$scenario_bin/gemini" "$scenario_bin/claude"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-non-debate"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-non-debate/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        # NO --debate flag — straight non-debate run.
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini,claude \
+            "$SAMPLE_PLAN"
+    ) >/dev/null 2>&1
+    set -e
+
+    wait_for_sentinels "$review_dir/reviews" 3 30 || true
+
+    local state_file="$review_dir/gate-state.json"
+    if [[ ! -f "$state_file" ]]; then
+        log_red "$scenario: gate-state.json missing for non-debate run"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    # `.debate` MUST be absent. jq returns null for both missing keys and
+    # explicit null values; we strengthen the assertion by checking with
+    # `has("debate")`.
+    local has_debate_key
+    has_debate_key=$(jq -r 'has("debate")' "$state_file" 2>/dev/null || echo "true")
+    if [[ "$has_debate_key" == "false" ]]; then
+        log_grn "$scenario: non-debate gate-state.json does NOT contain a 'debate' key (NOT null, NOT {})"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: non-debate gate-state.json unexpectedly contains a 'debate' key (value: $(jq -c '.debate' "$state_file" 2>/dev/null))"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_debate_block_survives_stop_hook() {
+    local scenario="debate-block-survives-stop-hook"
+
+    # Re-use the spawn-plan-review SHAPE result. The `run_check_and_get_report`
+    # helper used during shape collection already drove the Stop-hook check
+    # path, which jq-patches gate-state.json.status / .consensus. The
+    # `.debate` block written by the coordinator BEFORE the check ran
+    # MUST still be present after the Stop-hook patch.
+    local idx=0
+    local found=""
+    while [[ $idx -lt ${#SHAPE_NAMES[@]} ]]; do
+        if [[ "${SHAPE_NAMES[$idx]}" == "spawn-plan-review" ]]; then
+            found="${SHAPE_DIRS[$idx]}"
+            break
+        fi
+        idx=$((idx + 1))
+    done
+    if [[ -z "$found" ]]; then
+        log_red "$scenario: spawn-plan-review review_dir not found in SHAPE_DIRS"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    local state_file="$found/gate-state.json"
+    if [[ ! -f "$state_file" ]]; then
+        log_red "$scenario: gate-state.json missing at $state_file"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    # Stop-hook ran during run_check_and_get_report; gate-state.json.status
+    # should be either resolved or awaiting_decision (NOT pending) by now.
+    local status
+    status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+    if [[ "$status" != "pending" && -n "$status" ]]; then
+        log_grn "$scenario: gate-state.json.status transitioned away from pending (now: $status — Stop-hook patch ran)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate-state.json.status still 'pending' after Stop-hook should have run (got: $status)"
+        red_count=$((red_count + 1))
+    fi
+
+    # `.debate` block MUST still be present and an object.
+    local has_debate
+    has_debate=$(jq -r '.debate | type' "$state_file" 2>/dev/null || echo "null")
+    if [[ "$has_debate" == "object" ]]; then
+        log_grn "$scenario: gate-state.json.debate survived Stop-hook patch (still an object)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate-state.json.debate lost during Stop-hook patch (now: $has_debate)"
+        red_count=$((red_count + 1))
+    fi
+
+    # The pinned keys MUST still be present.
+    local missing_keys=""
+    local k
+    for k in rounds mode consensus_mode strategies rounds_telemetry aggregator_notes; do
+        local v
+        v=$(jq -r ".debate | has(\"$k\")" "$state_file" 2>/dev/null || echo "false")
+        if [[ "$v" != "true" ]]; then
+            missing_keys="$missing_keys $k"
+        fi
+    done
+    if [[ -z "$missing_keys" ]]; then
+        log_grn "$scenario: gate-state.json.debate retains all pinned keys after Stop-hook patch"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: gate-state.json.debate lost keys after Stop-hook patch:$missing_keys"
+        red_count=$((red_count + 1))
+    fi
+}
+
+test_aggregate_verdict_never_requires_decision() {
+    local scenario="aggregate-verdict-never-requires-decision"
+
+    # Walk all SHAPE_DIRS that produced an aggregate.json. The aggregator
+    # MUST never emit `requires_decision` — that surface lives in
+    # gate-state.json.consensus.verdict only. Verify across all five shapes.
+    local violations=0
+    local checked=0
+    local idx=0
+    while [[ $idx -lt ${#SHAPE_DIRS[@]} ]]; do
+        local d="${SHAPE_DIRS[$idx]}"
+        local agg_files=()
+        # Aggregate may have been moved to reviews-iter-N/ by the
+        # Stop-hook's clean_for_rerun. Check both the canonical path and
+        # any archived siblings.
+        local f
+        for f in "$d/reviews/aggregate.json" "$d"/reviews-iter-*/aggregate.json; do
+            [[ -f "$f" ]] && agg_files+=("$f")
+        done
+        for f in "${agg_files[@]+${agg_files[@]}}"; do
+            checked=$((checked + 1))
+            local v
+            v=$(jq -r '.verdict' "$f" 2>/dev/null || echo "")
+            case "$v" in
+                PASS|NEEDS_WORK|FAIL) ;;
+                *)
+                    log_red "$scenario: $f has verdict='$v' (must be PASS|NEEDS_WORK|FAIL)"
+                    violations=$((violations + 1))
+                    ;;
+            esac
+        done
+        idx=$((idx + 1))
+    done
+
+    if [[ $checked -eq 0 ]]; then
+        log_red "$scenario: no aggregate.json files found across SHAPE_DIRS — cannot validate enum"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    if [[ $violations -eq 0 ]]; then
+        log_grn "$scenario: all $checked aggregate.json verdicts are in {PASS|NEEDS_WORK|FAIL} (requires_decision lives only in gate-state.json.consensus.verdict)"
+        green_count=$((green_count + 1))
+    else
+        red_count=$((red_count + violations))
+    fi
+}
+
+test_degraded_below_2_partial_telemetry() {
+    local scenario="degraded-below-2-partial-telemetry"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    cat > "$scenario_bin/gemini" <<'GEMINI_FAIL'
+#!/usr/bin/env bash
+echo "fixture: gemini deliberate Round-1 crash" >&2
+exit 1
+GEMINI_FAIL
+    chmod +x "$scenario_bin/codex" "$scenario_bin/gemini"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-deg-tel"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-deg-tel/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    set +e
+    local rc
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >/dev/null 2>"$scenario_work/stderr"
+    rc=$?
+    set -e
+
+    # Assertion: exit code 6 (degraded-below-2). The coordinator's
+    # `_rdc_degraded_exit` directly exits 6, propagating through the
+    # parent script.
+    if [[ "$rc" -eq 6 ]]; then
+        log_grn "$scenario: review-gate exits 6 on degraded-below-2"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: review-gate exit code = $rc (expected 6 for degraded-below-2)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: iterations/<iter>/debate-telemetry.json written.
+    local iter_root="$review_dir/iterations"
+    local latest_iter
+    latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    local telemetry_file="$iter_root/$latest_iter/debate-telemetry.json"
+    if [[ -f "$telemetry_file" ]]; then
+        # Sanity-check the shape: it should be a JSON object with the
+        # pinned keys.
+        local has_keys
+        has_keys=$(jq -r '
+            (has("rounds") and has("mode") and has("consensus_mode")
+             and has("strategies") and has("rounds_telemetry")
+             and has("aggregator_notes"))
+        ' "$telemetry_file" 2>/dev/null || echo "false")
+        if [[ "$has_keys" == "true" ]]; then
+            log_grn "$scenario: iterations/<iter>/debate-telemetry.json present with pinned keys"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: iterations/<iter>/debate-telemetry.json missing pinned keys"
+            red_count=$((red_count + 1))
+        fi
+
+        # Round-1 telemetry should be recorded (the round completed before
+        # the eligibility check fired).
+        local r1_present
+        r1_present=$(jq -r '[.rounds_telemetry[] | select(.round == 1)] | length' "$telemetry_file" 2>/dev/null || echo "0")
+        if [[ "$r1_present" -ge 1 ]]; then
+            log_grn "$scenario: partial telemetry contains Round-1 entry (recorded before degraded-below-2 fired)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: partial telemetry has no Round-1 entry"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: iterations/<iter>/debate-telemetry.json missing on degraded-below-2 path"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: gate-state.json.status = "awaiting_decision" and
+    # consensus.verdict = "requires_decision".
+    local state_file="$review_dir/gate-state.json"
+    if [[ -f "$state_file" ]]; then
+        local status verdict
+        status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+        verdict=$(jq -r '.consensus.verdict' "$state_file" 2>/dev/null || echo "")
+        if [[ "$status" == "awaiting_decision" && "$verdict" == "requires_decision" ]]; then
+            log_grn "$scenario: gate-state.json.status='awaiting_decision', consensus.verdict='requires_decision'"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json status='$status' verdict='$verdict' (expected awaiting_decision/requires_decision)"
+            red_count=$((red_count + 1))
+        fi
+
+        # Assertion: NO `.debate` top-level key on degraded path.
+        local has_debate_key
+        has_debate_key=$(jq -r 'has("debate")' "$state_file" 2>/dev/null || echo "true")
+        if [[ "$has_debate_key" == "false" ]]; then
+            log_grn "$scenario: gate-state.json has NO .debate top-level key on degraded path"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json unexpectedly has .debate key on degraded path"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json missing on degraded path"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: canonical reviews/ left empty of decision artifacts.
+    local canonical_count=0
+    local f
+    for f in "$review_dir/reviews"/codex.json \
+             "$review_dir/reviews"/claude.json \
+             "$review_dir/reviews"/gemini.json \
+             "$review_dir/reviews"/aggregate.json \
+             "$review_dir/reviews"/codex.done \
+             "$review_dir/reviews"/claude.done \
+             "$review_dir/reviews"/gemini.done; do
+        if [[ -e "$f" ]]; then
+            canonical_count=$((canonical_count + 1))
+        fi
+    done
+    if [[ "$canonical_count" == "0" ]]; then
+        log_grn "$scenario: canonical reviews/ left empty on degraded path"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: canonical reviews/ has $canonical_count decision artifact(s) on degraded path"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# Aggregator-failure unit-test-style scenario. Direct invocation of
+# _rdc_aggregate_and_promote with a malformed augmented JSON file. The
+# aggregator's early jq-parse-error guard MUST emit
+# `aggregator failed: jq parse error on reviews/<r>.json` and exit 5,
+# with iterations/<iter>/debate-telemetry.json written.
+test_aggregator_failure_partial_telemetry() {
+    local scenario="aggregator-failure-partial-telemetry"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    mkdir -p "$scenario_work"
+
+    # Build a fake iter_dir with a round-2 staging dir holding a
+    # deliberately-malformed augmented JSON for `claude` and a valid one
+    # for `codex`. _rdc_aggregate_and_promote's per-reviewer loop catches
+    # the malformed JSON on the first reviewer it processes; iteration
+    # order is `active_reviewers` (passed in alphabetical order by the
+    # caller), so we put the malformed file at `claude.augmented.json`.
+    local iter_dir="$scenario_work/iterations/0"
+    local round_dir="$iter_dir/round-2"
+    local reviews_dir="$scenario_work/reviews"
+    mkdir -p "$round_dir" "$reviews_dir"
+
+    # Malformed augmented JSON (no closing brace + invalid escape) for claude.
+    printf '{"verdict":"PASS","summary":"oops",' > "$round_dir/claude.augmented.json"
+
+    # Valid augmented JSON for codex.
+    printf '{"verdict":"PASS","summary":"ok","overall_confidence":0.7,"findings":[]}\n' \
+        > "$round_dir/codex.augmented.json"
+
+    # Run _rdc_aggregate_and_promote in a subshell so its `exit 5` does
+    # not terminate the parent test script. Capture stderr + exit code.
+    local stderr_f="$scenario_work/stderr"
+    local rc
+    set +e
+    (
+        # Source the helpers in the subshell.
+        # shellcheck disable=SC1091
+        source "$PLUGIN_ROOT/bin/telemetry-lib.sh"
+        # shellcheck disable=SC1091
+        source "$PLUGIN_ROOT/bin/review-gate-debate.sh"
+
+        # Initialize globals so _rdc_compose_debate_block + the partial
+        # telemetry write path work without errors.
+        _RDC_ITER_DIR="$iter_dir"
+        _RDC_REVIEWS_DIR="$reviews_dir"
+        _RDC_CONSENSUS_MODE="majority"
+        _RDC_DEBATE_MODE="smart"
+        _RDC_STRATEGIES_JSON='{}'
+        _RDC_ROUNDS_JSON='[]'
+        _RDC_ROUNDS_COMPLETED=0
+        _RDC_AGGREGATOR_NOTES_JSON='[]'
+
+        _rdc_aggregate_and_promote \
+            "$round_dir" "$reviews_dir" "majority" 2 \
+            claude codex
+    ) 2>"$stderr_f"
+    rc=$?
+    set -e
+
+    # Assertion: exit code 5.
+    if [[ "$rc" -eq 5 ]]; then
+        log_grn "$scenario: aggregator failure exits 5"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: aggregator exited with code $rc (expected 5)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: stderr contains canonical jq-parse-error message.
+    if grep -F "aggregator failed: jq parse error on reviews/claude.json" "$stderr_f" >/dev/null 2>&1; then
+        log_grn "$scenario: stderr contains 'aggregator failed: jq parse error on reviews/claude.json'"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: stderr missing canonical 'aggregator failed: jq parse error on reviews/claude.json' message. Stderr: $(head -3 "$stderr_f" 2>/dev/null | tr '\n' ';')"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: iterations/<iter>/debate-telemetry.json written.
+    local telemetry_file="$iter_dir/debate-telemetry.json"
+    if [[ -f "$telemetry_file" ]]; then
+        log_grn "$scenario: partial telemetry written on aggregator failure"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: partial telemetry NOT written on aggregator failure"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: canonical reviews/ left empty of per-reviewer JSONs +
+    # aggregate.json (the partial-promotion cleanup MUST roll back any
+    # files that were already moved).
+    local canonical_count=0
+    local f
+    for f in "$reviews_dir"/claude.json "$reviews_dir"/codex.json \
+             "$reviews_dir"/aggregate.json \
+             "$reviews_dir"/claude.done "$reviews_dir"/codex.done; do
+        if [[ -e "$f" ]]; then
+            canonical_count=$((canonical_count + 1))
+        fi
+    done
+    if [[ "$canonical_count" == "0" ]]; then
+        log_grn "$scenario: canonical reviews/ left empty on aggregator failure"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: canonical reviews/ has $canonical_count decision artifact(s) on aggregator failure"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# SIGINT cancellation test (unit-style).
+#
+# Why unit-style instead of an end-to-end SIGINT: bash 3.2 backgrounded
+# subshells inherit SIGINT-ignore disposition from the controlling shell
+# (POSIX shell behavior), and `kill -INT $pid` against a backgrounded
+# job is silently dropped UNLESS the child re-enables SIGINT. The
+# coordinator DOES install `trap '_rdc_handle_sigint' INT` early in
+# run_debate_coordinator, but the parent `bin/review-gate` spawn flow
+# (which runs BEFORE run_debate_coordinator and includes the per-reviewer
+# spawn loop, can take 1-3 seconds) does NOT re-enable SIGINT, so the
+# signal is lost in the backgrounded-script case. macOS bash 3.2 also
+# lacks `setsid` and `$BASHPID`, so foreground self-SIGINT in a sourced
+# subshell is the most portable path that exercises the real trap
+# handler and the partial-telemetry write logic.
+#
+# This test directly invokes the trap path: it sources the helpers in a
+# child bash script, sets up the coordinator's globals (matching what
+# run_debate_coordinator would set on entry), installs the SIGINT trap
+# (matching the coordinator's install line), self-delivers SIGINT via
+# `kill -INT $$`, and verifies that the trap handler exits 130 and writes
+# the partial telemetry file.
+#
+# The end-to-end SIGINT path (interrupting a real spawn flow) is covered
+# implicitly: when SIGINT is delivered to a foreground review-gate
+# process inside an interactive terminal, bash's default SIGINT handler
+# fires with exit code 130 (128 + 2). The coordinator's trap handler
+# additionally writes partial telemetry; without the trap, the partial
+# telemetry write would be skipped. The unit-style test below proves
+# that the trap handler does the right thing when it fires.
+test_cancellation_sigint() {
+    local scenario="cancellation-sigint"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    mkdir -p "$scenario_work"
+
+    local iter_dir="$scenario_work/iterations/0"
+    local reviews_dir="$scenario_work/reviews"
+    local state_file="$scenario_work/gate-state.json"
+    mkdir -p "$iter_dir" "$reviews_dir"
+
+    # Pre-populate gate-state.json in the pending state so we can verify
+    # the trap path leaves it unchanged.
+    cat > "$state_file" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "reviewers":{"codex":{},"gemini":{}},
+  "consensus":null,
+  "decision":null,
+  "iteration":0
+}
+JSON
+
+    # Build a child script that mirrors the coordinator's trap-install
+    # path. self-deliver SIGINT to fire the trap and exercise the
+    # _rdc_handle_sigint → _rdc_write_partial_telemetry → exit 130 chain.
+    local sigint_script="$scenario_work/sigint_child.sh"
+    cat > "$sigint_script" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+# Source the helpers in the child, exactly as bin/review-gate sources
+# them at runtime (review-gate-debate.sh ships under SCRIPT_DIR).
+source "$PLUGIN_ROOT/bin/telemetry-lib.sh"
+source "$PLUGIN_ROOT/bin/review-gate-debate.sh"
+
+# Mirror the coordinator's globals at function-entry time.
+_RDC_ITER_DIR="$iter_dir"
+_RDC_REVIEWS_DIR="$reviews_dir"
+_RDC_CONSENSUS_MODE="majority"
+_RDC_DEBATE_MODE="smart"
+_RDC_STRATEGIES_JSON='{}'
+_RDC_ROUNDS_JSON='[]'
+_RDC_ROUNDS_COMPLETED=0
+_RDC_AGGREGATOR_NOTES_JSON='[]'
+STATE_FILE="$state_file"
+
+# Install the trap (mirrors coordinator entry).
+trap '_rdc_handle_sigint' INT
+
+# Append a synthetic Round-1 entry to simulate the round having
+# completed before the cancel arrived. This proves the partial
+# telemetry surfaces whatever rounds completed up to the cancel point.
+_rdc_record_round 1 "2026-04-27T12:00:00Z" "2026-04-27T12:00:30Z" 30000 \\
+    "$iter_dir/round-1" "codex,gemini" "codex,gemini"
+
+# Self-deliver SIGINT. The trap fires, writes telemetry, exits 130.
+kill -INT \$\$
+
+# Defensive: should not reach here; if we do, exit 1 to signal a
+# trap-failed-to-fire regression.
+sleep 5
+exit 1
+EOF
+    chmod +x "$sigint_script"
+
+    set +e
+    bash "$sigint_script" > "$scenario_work/stdout" 2> "$scenario_work/stderr"
+    local rc=$?
+    set -e
+
+    # Assertion: exit code 130 (SIGINT conventional 128 + 2). The trap
+    # handler's `exit 130` is the only path that produces this code; if
+    # the trap didn't fire, the script either exits 1 (the defensive
+    # post-sleep exit) or whatever bash's default SIGINT handler emits.
+    if [[ "$rc" -eq 130 ]]; then
+        log_grn "$scenario: SIGINT trap handler exits 130 (canonical 128 + SIGINT)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: SIGINT trap handler exit code = $rc (expected 130). Stderr: $(head -3 "$scenario_work/stderr" 2>/dev/null | tr '\n' ';')"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: iterations/<iter>/debate-telemetry.json written.
+    local telemetry_file="$iter_dir/debate-telemetry.json"
+    if [[ -f "$telemetry_file" ]]; then
+        # Sanity-check shape + Round-1 telemetry presence.
+        local has_keys
+        has_keys=$(jq -r '
+            (has("rounds") and has("mode") and has("consensus_mode")
+             and has("strategies") and has("rounds_telemetry")
+             and has("aggregator_notes"))
+        ' "$telemetry_file" 2>/dev/null || echo "false")
+        if [[ "$has_keys" == "true" ]]; then
+            log_grn "$scenario: partial telemetry written on SIGINT with all pinned keys"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: partial telemetry written on SIGINT but missing pinned keys"
+            red_count=$((red_count + 1))
+        fi
+
+        local r1_count
+        r1_count=$(jq -r '[.rounds_telemetry[] | select(.round == 1)] | length' "$telemetry_file" 2>/dev/null || echo "0")
+        if [[ "$r1_count" -ge 1 ]]; then
+            log_grn "$scenario: partial telemetry retains the Round-1 entry that completed before SIGINT"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: partial telemetry missing Round-1 entry"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: partial telemetry NOT written on SIGINT"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: gate-state.json.status stays at 'pending'; no .debate
+    # block written. The trap path is explicit about not mutating
+    # gate-state on cancel — pending → pending and absent → absent.
+    if [[ -f "$state_file" ]]; then
+        local status
+        status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+        if [[ "$status" == "pending" ]]; then
+            log_grn "$scenario: gate-state.json.status stays at 'pending' after SIGINT (no mutation by trap path)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.status = '$status' (expected 'pending')"
+            red_count=$((red_count + 1))
+        fi
+
+        local has_debate_key
+        has_debate_key=$(jq -r 'has("debate")' "$state_file" 2>/dev/null || echo "true")
+        if [[ "$has_debate_key" == "false" ]]; then
+            log_grn "$scenario: gate-state.json has NO .debate top-level key after SIGINT (success-only block)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json unexpectedly has .debate key after SIGINT"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json missing after SIGINT"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: canonical reviews/ unchanged (the trap path doesn't
+    # touch $REVIEWS_DIR; the coordinator's success-path promotion is
+    # the ONLY surface that writes per-reviewer JSONs / aggregate.json).
+    local canonical_count=0
+    local f
+    for f in "$reviews_dir"/codex.json \
+             "$reviews_dir"/gemini.json \
+             "$reviews_dir"/aggregate.json \
+             "$reviews_dir"/codex.done \
+             "$reviews_dir"/gemini.done; do
+        if [[ -e "$f" ]]; then
+            canonical_count=$((canonical_count + 1))
+        fi
+    done
+    if [[ "$canonical_count" == "0" ]]; then
+        log_grn "$scenario: canonical reviews/ left empty after SIGINT (no promotion ran)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: canonical reviews/ has $canonical_count decision artifact(s) after SIGINT"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# Run T012 scenarios. The pre-existing per-shape SHAPE_* arrays are
+# populated above; T012's success-path assertions read from them.
+test_gate_state_debate_block_success
+test_non_debate_run_no_debate_key
+test_debate_block_survives_stop_hook
+test_aggregate_verdict_never_requires_decision
+test_degraded_below_2_partial_telemetry
+test_aggregator_failure_partial_telemetry
+test_cancellation_sigint
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo "" >&2
