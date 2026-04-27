@@ -3246,6 +3246,13 @@ PROMPT
     # Spawn reviewers and record in state
     local reviewers_json='{}'
     local spawned=0
+    # Track the names of reviewers that successfully spawned. Under --debate
+    # this is the set passed to run_debate_coordinator's wait loop; reviewers
+    # that fail to spawn (missing CLI, gemini policy missing, etc.) MUST NOT
+    # be polled for sentinels because no detached process will ever produce
+    # one — passing the full agents_list would hang the coordinator for the
+    # entire timeout budget on a missing-CLI invocation.
+    local -a _debate_spawned_reviewers=()
 
     # Pre-resolve the default-strategy file content (verification-first.md)
     # ONCE for all reviewers; the prebuilt-prompt per-reviewer rendering
@@ -3377,6 +3384,7 @@ with open(out_path, "wb") as f: f.write(out)
                 --arg sentinel "$REVIEWS_DIR/${reviewer}.done" \
                 '.[$name] = {output_file: $output, sentinel_file: $sentinel, completed_at: null, result: null}')
             spawned=$((spawned + 1))
+            _debate_spawned_reviewers+=("$reviewer")
         fi
     done
 
@@ -3430,10 +3438,25 @@ with open(out_path, "wb") as f: f.write(out)
     if [[ "$debate" == "true" ]]; then
         local _rdc_timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
         local _rdc_poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+        # Pass ONLY the successfully-spawned reviewers to the coordinator.
+        # Reviewers that failed to spawn (missing CLI, missing gemini policy,
+        # spawn_reviewer non-zero return) never produce a sentinel, so a
+        # wait loop over the full agents_list would block for the entire
+        # timeout budget. The <2 reviewers preflight already runs above on
+        # the requested set; if we end up with <2 successfully-spawned
+        # reviewers here (e.g., due to a runtime CLI failure that the
+        # `command -v` preflight missed), abort cleanly with a distinct
+        # error rather than letting the coordinator hang.
+        if [[ ${#_debate_spawned_reviewers[@]} -lt 2 ]]; then
+            echo "" >&2
+            echo "Debate coordinator: only ${#_debate_spawned_reviewers[@]} reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
+            echo "Spawned: ${_debate_spawned_reviewers[*]:-(none)}" >&2
+            exit 1
+        fi
         if ! run_debate_coordinator \
                 "$_debate_staging_dir" "$REVIEWS_DIR" \
                 "$consensus_mode" "$_rdc_timeout" "$_rdc_poll" \
-                "${agents_list[@]}"; then
+                "${_debate_spawned_reviewers[@]}"; then
             echo "" >&2
             echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
             exit 1

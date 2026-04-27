@@ -643,6 +643,24 @@ extract_json() {
             if [[ -n "$result_str" ]]; then
                 raw_output="$result_str"
             fi
+            # Already-normalized review JSON path (e.g., the file was promoted
+            # by run_debate_coordinator after augmenting with the additive
+            # debate fields, so it is no longer in Claude's
+            # `--output-format json` metadata wrapper shape). If the file
+            # itself parses as a review object with a recognized verdict, use
+            # it directly. This keeps the existing wrapper extraction below
+            # as the primary path while letting downstream consumers
+            # (`extract_json` from `review_gate_wait`, the Stop-hook, T011's
+            # gate-report renderer) read the promoted Claude JSON without
+            # going through repair.
+            if [[ -z "$result_str" ]]; then
+                local _claude_direct
+                _claude_direct=$(jq -c 'select(type == "object" and (.verdict // null) != null)' "$file" 2>/dev/null || true)
+                if [[ -n "$_claude_direct" ]]; then
+                    rg_log "review-gate: extract_json claude file is already-normalized review JSON (no .result wrapper); using direct parse"
+                    json="$_claude_direct"
+                fi
+            fi
             if [[ -n "$result_str" ]]; then
                 # Try direct parse first (no fences)
                 json=$(printf '%s' "$result_str" | jq -c '.' 2>/dev/null || true)
