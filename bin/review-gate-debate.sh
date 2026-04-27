@@ -539,8 +539,33 @@ run_debate_coordinator() {
             return 1
         fi
 
+        # Verdict + findings — both REQUIRED per spec for the reviewer to
+        # have produced output at all (Mode A boundary distinguishes
+        # "didn't answer" from "had nothing to say"). Mode B confidence
+        # fallback applies ONLY to overall_confidence / per-finding
+        # confidence; absent `findings` (the field itself missing from
+        # the parsed JSON) or absent `verdict` is Mode A territory and
+        # MUST surface as an aggregator error in Phase D rather than be
+        # silently treated as `findings: []` / default verdict. Note that
+        # `findings: []` (empty array — reviewer saw no defects) IS
+        # valid; only the field's complete absence triggers this path.
+        # Claude/Gemini outputs are not schema-enforced by Codex's
+        # --output-schema, so this guard catches truncated or malformed
+        # reviewer outputs that would otherwise slip into aggregate.json.
+        # T008 will replace this with the real Mode A abstention path
+        # (terminal-abstention, abstained-peer surfacing).
+        local _rdc_findings_present
+        _rdc_findings_present=$(printf '%s' "$_rdc_parsed" | jq -r '
+            if has("findings") and (.findings | type == "array") then "yes" else "no" end' 2>/dev/null || echo "no")
+        if [[ "$_rdc_findings_present" != "yes" ]]; then
+            echo "aggregator failed: reviewer $_rdc_reviewer output missing or non-array .findings (Mode A boundary; Phase D treats absent findings as a hard aggregator error)" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        fi
+
         # Verdict — required for the stub aggregator's "most severe wins"
-        # rollup. Invalid verdict is an aggregator error in Phase D.
+        # rollup. Invalid (or absent / empty-string) verdict is an
+        # aggregator error in Phase D.
         local _rdc_verdict
         _rdc_verdict=$(printf '%s' "$_rdc_parsed" | jq -r '.verdict // ""' 2>/dev/null || echo "")
         case "$_rdc_verdict" in

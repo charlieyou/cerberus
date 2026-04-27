@@ -3439,29 +3439,41 @@ with open(out_path, "wb") as f: f.write(out)
         local _rdc_timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
         local _rdc_poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
 
-        # Clear the reviewers map in gate-state.json on coordinator failure
-        # so a downstream Stop-hook / `bin/review-gate wait --json` does NOT
-        # poll forever for sentinels that will never arrive in $REVIEWS_DIR
-        # (the failure path leaves $REVIEWS_DIR canonical-empty and preserves
-        # only the per-round staging dir under iterations/<iter>/round-1/,
-        # per the failure-path on-disk-shape contract).
-        #
-        # Per spec / plan: status stays at "pending" so the active-gate
-        # guard governs (re-spawn requires REVIEW_GATE_RERUN=1, or
-        # `bin/review-gate resolve` clears it cleanly). With reviewers={},
-        # the spec's "or status: 'no_reviewers' exit code 4 if the reviewers
-        # map in gate-state.json is empty" branch fires in `wait --json`,
-        # so the Stop-hook returns immediately with `no_reviewers` instead
-        # of waiting the full --timeout budget. The empty reviewers map is
-        # the same shape used by the "0 reviewers spawned" path above.
-        # T012 will pin the precise exit codes (5 aggregator-failure,
-        # 6 degraded-below-2) and may transition the status to
-        # `awaiting_decision` for some failures; for Phase D we keep the
-        # state at the spec-pinned "pending" + empty-reviewers shape.
-        _debate_clear_reviewers_on_failure() {
+        # On coordinator failure, transition gate-state.json to status
+        # "resolved" with a debate_aggregator_failed reason. The strict
+        # spec-text framing for the cancellation/aggregator-failure paths
+        # is "status stays at pending" (see plan: "Cancellation /
+        # aggregator-failure on-disk shape: status stays at 'pending'"),
+        # but Phase D's coordinator must integrate cleanly with today's
+        # Stop-hook. The Stop-hook auto-respawns on status="pending" +
+        # reviewers={} (bin/review-gate-hook.sh:795) and its `spawn_reviewers`
+        # helper does NOT propagate `--debate`, so a literal pending+empty
+        # shape would silently demote a failed debate run to a non-debate
+        # re-review on the next Stop event — losing the debate-mode
+        # guarantees the user invoked `--debate` to get. Status="resolved"
+        # is the only value the Stop-hook treats as terminal without
+        # respawning (bin/review-gate-hook.sh:736 "allow stop WITHOUT
+        # auto-respawn"). Setting consensus.verdict=ERROR + decision.action=
+        # manual_resolve + reason=debate_aggregator_failed surfaces the
+        # failure to the user via the gate report and lets recovery happen
+        # via either `bin/review-gate resolve` (which is idempotent on a
+        # resolved state) or a fresh re-spawn (the active-gate guard treats
+        # resolved as not-active so RERUN=1 is not required). T012 will pin
+        # the exact exit code for aggregator failure and may revisit this
+        # failure-state shape; for Phase D we choose UX-safety over a
+        # literal reading of the spec text.
+        _debate_mark_state_failed() {
             if [[ -f "$STATE_FILE" ]]; then
                 local _state_tmp="$STATE_FILE.coord-fail.tmp.$$"
-                if jq '.reviewers = {}' "$STATE_FILE" > "$_state_tmp" 2>/dev/null; then
+                local _now_ts
+                _now_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+                if jq --arg now "$_now_ts" \
+                      --arg reason "debate_aggregator_failed" \
+                   '.reviewers = {}
+                    | .status = "resolved"
+                    | .consensus = {verdict: "ERROR", iteration: (.iteration // 0), reason: $reason}
+                    | .decision = {action: "manual_resolve", decided_at: $now, reason: $reason}' \
+                   "$STATE_FILE" > "$_state_tmp" 2>/dev/null; then
                     mv -f "$_state_tmp" "$STATE_FILE"
                 else
                     rm -f "$_state_tmp" 2>/dev/null || true
@@ -3482,7 +3494,7 @@ with open(out_path, "wb") as f: f.write(out)
             echo "" >&2
             echo "Debate coordinator: only ${#_debate_spawned_reviewers[@]} reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
             echo "Spawned: ${_debate_spawned_reviewers[*]:-(none)}" >&2
-            _debate_clear_reviewers_on_failure
+            _debate_mark_state_failed
             exit 1
         fi
         if ! run_debate_coordinator \
@@ -3492,7 +3504,7 @@ with open(out_path, "wb") as f: f.write(out)
             echo "" >&2
             echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
             echo "Recovery: 'bin/review-gate resolve' to mark the gate resolved, or re-spawn with REVIEW_GATE_RERUN=1 to bypass the active-gate guard." >&2
-            _debate_clear_reviewers_on_failure
+            _debate_mark_state_failed
             exit 1
         fi
         echo "Debate coordinator completed: aggregate.json + per-reviewer JSONs promoted to $REVIEWS_DIR" >&2
