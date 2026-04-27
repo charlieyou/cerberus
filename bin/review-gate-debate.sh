@@ -1972,25 +1972,62 @@ _rdc_aggregate_and_promote() {
           | sub("^[[:space:]]+"; "")
           | sub("[[:space:]]+$"; "")
           | ascii_downcase;
+        # Reviewer schema (bin/review-gate-models.sh) enforces integer
+        # priority 0..3. Normalize both numeric `0..3` and string
+        # `"P0".."P3"` to canonical string form so sort, dedup, and
+        # summary counters all see the same shape regardless of which
+        # form the reviewer emitted. Out-of-range / unparseable values
+        # become null (excluded from P0..P3 counters; sorted to the
+        # bottom via pri_idx 99).
+        def to_pri_str:
+          if . == null then null
+          elif type == "number" then
+            (if . == 0 then "P0"
+             elif . == 1 then "P1"
+             elif . == 2 then "P2"
+             elif . == 3 then "P3"
+             else null end)
+          elif type == "string" then
+            (if test("^P[0-3]$") then .
+             else null end)
+          else null end;
         def pri_idx:
           if . == "P0" then 0
           elif . == "P1" then 1
           elif . == "P2" then 2
           elif . == "P3" then 3
           else 99 end;
+        # Cross-reviewer dedup predicate. Same-reviewer findings are
+        # NEVER folded — the spec explicitly scopes the predicate to
+        # findings from *different* reviewers ("Two findings A and B
+        # from different reviewers MUST be considered duplicates if and
+        # only if..."). Without the `_reviewer` inequality, a reviewer
+        # that emits two same-title same-location findings would be
+        # collapsed into a single primary with a `raised_by` length of
+        # 1, violating the "≥2 reviewers" rule for `raised_by`.
         def is_dup(A; B):
-          (A.priority == B.priority)
+          (A._reviewer != B._reviewer)
+          and (A.priority == B.priority)
           and (A.file_path != null) and (B.file_path != null)
           and (A.file_path == B.file_path)
           and (A.line_start != null) and (A.line_end != null)
           and (B.line_start != null) and (B.line_end != null)
           and (A.line_start <= B.line_end) and (B.line_start <= A.line_end)
           and ((A.title | normalize_title) == (B.title | normalize_title));
+        # Normalize priority on each candidate before sorting / merging /
+        # output. The original priority is overwritten by its normalized
+        # form so the resulting `aggregate.json.findings[*].priority` is
+        # always the canonical string `"P0".."P3"` (matching the
+        # aggregate.json shape example in spec L222). Per-reviewer JSONs
+        # written to $REVIEWS_DIR are NOT mutated — they retain whatever
+        # form the reviewer emitted, so the Stop-hook (which expects
+        # numeric priority) keeps working unchanged.
+        ([.[] | .priority = (.priority | to_pri_str)]) as $cands
         # (1) Global pre-sort. Stable composite key: priority asc,
         # confidence desc, reviewer canonical name asc.
-        (. | sort_by([(.priority | pri_idx),
-                      -((.confidence // 0.5)),
-                      ._reviewer])) as $sorted
+        | ($cands | sort_by([(.priority | pri_idx),
+                             -((.confidence // 0.5)),
+                             ._reviewer])) as $sorted
         # (2) Greedy fold. Track primaries (in fold-iteration order) and a
         # set of merged-into-something indices. The state at the start of
         # iteration $i is read for the inner scan; new merges added during
@@ -2027,12 +2064,19 @@ _rdc_aggregate_and_promote() {
                  line_end: $p.line_end,
                  confidence: $p.confidence}
               else
-                # Merged finding — append "Also raised by another reviewer:"
-                # subsection containing each F'' body in fold order;
-                # `raised_by` is the set union of canonical reviewer
-                # names, deduplicated and order-preserved (the union
-                # order matches fold-iteration order: primary first,
-                # then absorbed candidates in encounter order).
+                # Merged finding. Append the "Also raised by another reviewer:"
+                # subsection containing each F-prime body in fold order.
+                # The `raised_by` field is the deduplicated set union of
+                # canonical reviewer names rendered in canonical
+                # alphabetical order (jq `unique` sorts the array; the
+                # spec describes raised_by as a set union and does not
+                # pin the array ordering, so the alphabetical render
+                # matches the alphabetical ordering already used for
+                # aggregate.json reviewers list for visual consistency).
+                # Because is_dup excludes same-reviewer pairs, the
+                # union always contains at least 2 distinct reviewer
+                # names when this branch fires (no risk of length-1
+                # raised_by entries).
                 {priority: $p.priority,
                  title: $p.title,
                  body: (

@@ -50,7 +50,12 @@ source "$HELPER"
 #   reviewer's augmented JSON, exports STRATEGY_NAME_<R> env vars, calls
 #   _rdc_aggregate_and_promote, and compares the produced aggregate.json
 #   to the fixture's expected_aggregate (using jq -S for stable key
-#   ordering). Returns 0 on byte-equal match, non-zero otherwise.
+#   ordering). Always returns 0 — failures are accumulated through
+#   log_fail (which increments FAIL_COUNT) so that the test harness
+#   continues running every fixture even when one fails. The script's
+#   final exit code is driven by FAIL_COUNT in main(), not by individual
+#   fixture-runner exit codes; this matches the convention used by every
+#   other test script in bin/tests/.
 run_fixture() {
     local fixture_path="$1"
     local label
@@ -108,13 +113,13 @@ run_fixture() {
         echo "--- reviews_dir ($reviews_dir):"
         ls -la "$reviews_dir"
         rm -rf "$tmp_root"
-        return 1
+        return 0
     fi
 
     if [[ ! -s "$reviews_dir/aggregate.json" ]]; then
         log_fail "$label — aggregate.json missing or empty"
         rm -rf "$tmp_root"
-        return 1
+        return 0
     fi
 
     # Compare aggregate.json to expected_aggregate (jq -S sorts keys).
@@ -132,7 +137,7 @@ run_fixture() {
         echo "--- diff"
         diff <(echo "$expected") <(echo "$actual") || true
         rm -rf "$tmp_root"
-        return 1
+        return 0
     fi
 
     rm -rf "$tmp_root"
@@ -207,6 +212,14 @@ test_low_confidence_p1_not_suppressed() {
     run_fixture "$FIXTURES_DIR/low-confidence-p1-not-suppressed.json"
 }
 
+test_numeric_priority_normalized() {
+    run_fixture "$FIXTURES_DIR/numeric-priority-normalized.json"
+}
+
+test_no_merge_same_reviewer() {
+    run_fixture "$FIXTURES_DIR/no-merge-same-reviewer.json"
+}
+
 # ---------------------------------------------------------------------------
 # Direct title-normalization unit tests for the [Px]-strip behaviors.
 # These exercise the same `normalize_title` jq def used inside the
@@ -249,6 +262,7 @@ EOF
 test_no_requires_decision_in_aggregate() {
     log_test "aggregate.json.verdict value space is strictly {PASS|NEEDS_WORK|FAIL}"
     local fix
+    local any_bad=0
     for fix in "$FIXTURES_DIR"/*.json; do
         local v
         v=$(jq -r '.expected_aggregate.verdict' "$fix")
@@ -256,11 +270,13 @@ test_no_requires_decision_in_aggregate() {
             PASS|NEEDS_WORK|FAIL) ;;
             *)
                 log_fail "fixture $(basename "$fix") expected_aggregate.verdict=$v (must be PASS|NEEDS_WORK|FAIL)"
-                return 1
+                any_bad=1
                 ;;
         esac
     done
-    log_pass "all fixture expected_aggregate.verdict values in {PASS|NEEDS_WORK|FAIL}"
+    if [[ $any_bad -eq 0 ]]; then
+        log_pass "all fixture expected_aggregate.verdict values in {PASS|NEEDS_WORK|FAIL}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -292,6 +308,8 @@ main() {
     test_verdict_all_needs_work
     test_verdict_any_pass
     test_low_confidence_p1_not_suppressed
+    test_numeric_priority_normalized
+    test_no_merge_same_reviewer
     test_px_strip_behaviors
     test_no_requires_decision_in_aggregate
 
