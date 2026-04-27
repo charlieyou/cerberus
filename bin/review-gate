@@ -277,11 +277,11 @@ substitute_debate_placeholders() {
         die "Strategy directive file not found: prompts/strategies/${strategy_name}.md"
     fi
 
-    # Substitute via awk: read each strategy file once via getline (preserving
-    # exact line bytes), then for each input line, replace whole-line
-    # placeholders with the file contents (or consume the line for
-    # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK when the matching env vars are
-    # unset). The accumulator+`print` pattern produces output bytes
+    # Substitute via awk: read each strategy / per-recipient block file once
+    # via getline (preserving exact line bytes), then for each input line,
+    # replace whole-line placeholders with the file contents (or consume the
+    # line for PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK when the matching env vars
+    # are unset). The accumulator+`print` pattern produces output bytes
     # byte-identical to the source files (each source ends with a single
     # trailing \n, which is what `print` emits).
     #
@@ -293,9 +293,33 @@ substitute_debate_placeholders() {
     # (line + trailing newline) so the rendered prompt is byte-identical to a
     # template that never had the placeholder. Under `--debate` absent the
     # consume path runs unconditionally above (the early `sed -E` branch).
+    #
+    # Multi-line content portability: PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK
+    # contain markdown with literal LFs. Many `awk` implementations (BSD
+    # awk, mawk) DO NOT accept literal newlines in `-v var="..."` value
+    # arguments — they replace the LF with whitespace or split the assign
+    # across multiple `-v` evaluations. The portable pattern that the
+    # rest of this function already uses is to write multi-line content
+    # to a temp file and read it via `getline` in BEGIN. We mirror that
+    # pattern here: stage env-var content (when set) into temp files,
+    # then pass file paths (single-line, no newlines) via -v. The temp
+    # files are cleaned up after awk returns.
+    local _peer_block_file=""
+    local _prior_self_block_file=""
+    if [[ -n "${PEER_BLOCK:-}" ]]; then
+        _peer_block_file=$(mktemp -t cerberus-debate-peer-block.XXXXXX) || \
+            die "substitute_debate_placeholders: cannot allocate temp file for PEER_BLOCK"
+        printf '%s' "$PEER_BLOCK" > "$_peer_block_file"
+    fi
+    if [[ -n "${PRIOR_ROUND_SELF_BLOCK:-}" ]]; then
+        _prior_self_block_file=$(mktemp -t cerberus-debate-prior-self.XXXXXX) || \
+            die "substitute_debate_placeholders: cannot allocate temp file for PRIOR_ROUND_SELF_BLOCK"
+        printf '%s' "$PRIOR_ROUND_SELF_BLOCK" > "$_prior_self_block_file"
+    fi
+
     awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" \
-        -v peer_block="${PEER_BLOCK:-}" \
-        -v prior_self_block="${PRIOR_ROUND_SELF_BLOCK:-}" '
+        -v peer_block_file="$_peer_block_file" \
+        -v prior_self_block_file="$_prior_self_block_file" '
         BEGIN {
             n = 0
             while ((getline line < anchors_file) > 0) {
@@ -309,6 +333,24 @@ substitute_debate_placeholders() {
                 else      strategy = line
             }
             close(strategy_file)
+            peer_block = ""
+            prior_self_block = ""
+            if (peer_block_file != "") {
+                n = 0
+                while ((getline line < peer_block_file) > 0) {
+                    if (n++) peer_block = peer_block "\n" line
+                    else      peer_block = line
+                }
+                close(peer_block_file)
+            }
+            if (prior_self_block_file != "") {
+                n = 0
+                while ((getline line < prior_self_block_file) > 0) {
+                    if (n++) prior_self_block = prior_self_block "\n" line
+                    else      prior_self_block = line
+                }
+                close(prior_self_block_file)
+            }
         }
         /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;  next }
         /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy; next }
@@ -322,6 +364,10 @@ substitute_debate_placeholders() {
                                          }
         { print }
     '
+    local _awk_rc=$?
+    [[ -n "$_peer_block_file" ]] && rm -f "$_peer_block_file"
+    [[ -n "$_prior_self_block_file" ]] && rm -f "$_prior_self_block_file"
+    return $_awk_rc
 }
 
 review_gate_spawn_code_review() {

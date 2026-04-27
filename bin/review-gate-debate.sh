@@ -1049,26 +1049,34 @@ _rdc_render_prior_round_self_block() {
     done
 }
 
-# _rdc_build_round2_prompt — append a clearly-marked Round-2 instructions
-# section to reviewer R's existing Round-1 rendered prompt, save the result
-# as the Round-2 prompt for R, ready for spawn_reviewer.
+# _rdc_build_round2_prompt — build reviewer R's Round-2 prompt by inserting
+# the Round-2 directive + R's prior-round-self block + R's per-recipient
+# anonymized peer block immediately BEFORE the rendered Round-1 prompt's
+# `## Output Format` section. The Round-1 prompt's intro/artifact/criteria
+# (with strategy + confidence anchors already inlined per T004/T005) and
+# the trailing `## Output Format` block are preserved verbatim; the new
+# Round-2 sections sit between the criteria and the output-format
+# instructions so the reviewer reads:
 #
-# The Round-1 prompt at $reviews_dir/review.<reviewer>.prompt has already
-# been rendered with the canonical confidence anchors + R's per-reviewer
-# strategy directive (T004/T005); the artifact context is also inlined.
-# Round-2 reuses that prompt verbatim and appends:
+#   1. Intro + artifact + Round-1 criteria (with confidence anchors +
+#      strategy directive — already substituted at Round-1 render time).
+#   2. ## Round 2 of debate-mode review — the confidence-conditioned-update
+#      directive.
+#   3. ### Your Round 1 output: — R's own Round-1 verdict + findings (with
+#      per-finding confidence) + overall_confidence rendered via
+#      `_rdc_render_prior_round_self_block`. NOT scrubbed by R1's deny-list
+#      per spec R2 (it's R's own labelled output back to itself).
+#   4. ### Anonymized peer outputs: — the per-recipient anonymized peer
+#      block built by `debate_build_peer_blocks` (T007), with deny-list
+#      scrub + per-recipient ordering already applied.
+#   5. ## Output Format — the existing JSON-only directive (unchanged from
+#      Round 1; the reviewer's emit format is the same).
 #
-#   - A short Round-2 directive instructing the reviewer to perform the
-#     confidence-conditioned update (lower-confidence prior findings yield
-#     to high-confidence peer dissent; high-confidence prior findings
-#     resist sycophantic peer pressure).
-#   - `### Your Round 1 output:` — R's own Round-1 verdict + findings (with
-#     per-finding confidence) + overall_confidence rendered via
-#     `_rdc_render_prior_round_self_block`. This block is NOT scrubbed by
-#     R1's deny-list per spec R2.
-#   - `### Anonymized peer outputs:` — the per-recipient anonymized peer
-#     block built by `debate_build_peer_blocks` (T007), which already
-#     applies the deny-list scrub + the per-recipient peer ordering.
+# Inserting BEFORE `## Output Format` (rather than appending at the end of
+# the prompt) keeps the JSON-only output instructions as the last thing
+# the reviewer sees — appending the new sections after `## Output Format`
+# would push the output-format directive away from the bottom and risk
+# degrading model adherence to the JSON-only contract.
 #
 # Args:
 #   $1  reviewer            canonical reviewer name
@@ -1123,10 +1131,38 @@ _rdc_build_round2_prompt() {
         return 1
     }
 
+    # Find the line number of the `## Output Format` header so we can
+    # split the Round-1 prompt into "before" and "from-output-format-on"
+    # halves and inject the Round-2 sections in between. `grep -n` numbers
+    # lines from 1; head/tail indices below match this convention.
+    local outfmt_line
+    outfmt_line=$(grep -n '^## Output Format' "$round1_prompt" 2>/dev/null | head -1 | cut -d: -f1)
+
     local out_path="$round2_dir/review.${reviewer}.prompt"
+    if [[ -z "$outfmt_line" ]]; then
+        # Defensive fallback: every reviewer template should have
+        # `## Output Format`, but if it is missing we still produce a
+        # valid Round-2 prompt by appending the new sections at the end.
+        # Surface a warning so the missing-marker case is observable.
+        echo "warning: _rdc_build_round2_prompt: '## Output Format' header not found in Round-1 prompt for $reviewer; appending Round-2 sections at the end (output-format adherence may degrade)" >&2
+        {
+            cat "$round1_prompt"
+            printf '\n\n'
+            printf '## Round 2 of debate-mode review\n\n'
+            printf 'This is Round 2. Your Round 1 output and the anonymized peer outputs from your fellow reviewers are reproduced below. Use them to perform a confidence-conditioned update: lower-confidence prior findings yield more readily to high-confidence peer dissent; high-confidence prior findings resist sycophantic peer pressure. Review your prior position, weigh peer evidence, and emit a fresh JSON review for Round 2 in the same schema as Round 1 — including per-finding confidence and overall_confidence.\n\n'
+            printf '### Your Round 1 output:\n\n'
+            printf '%s\n' "$self_block"
+            printf '\n'
+            printf '### Anonymized peer outputs:\n\n'
+            printf '%s\n' "$peer_block"
+        } > "$out_path"
+        return 0
+    fi
+
     {
-        cat "$round1_prompt"
-        printf '\n\n'
+        # Lines 1..(outfmt_line - 1): everything before `## Output Format`.
+        head -n $((outfmt_line - 1)) "$round1_prompt"
+        # Round-2 sections (directive + self-block + peer block).
         printf '## Round 2 of debate-mode review\n\n'
         printf 'This is Round 2. Your Round 1 output and the anonymized peer outputs from your fellow reviewers are reproduced below. Use them to perform a confidence-conditioned update: lower-confidence prior findings yield more readily to high-confidence peer dissent; high-confidence prior findings resist sycophantic peer pressure. Review your prior position, weigh peer evidence, and emit a fresh JSON review for Round 2 in the same schema as Round 1 — including per-finding confidence and overall_confidence.\n\n'
         printf '### Your Round 1 output:\n\n'
@@ -1134,6 +1170,10 @@ _rdc_build_round2_prompt() {
         printf '\n'
         printf '### Anonymized peer outputs:\n\n'
         printf '%s\n' "$peer_block"
+        printf '\n'
+        # Lines (outfmt_line)..end: `## Output Format` and everything that
+        # follows (the JSON-only directive).
+        tail -n +"$outfmt_line" "$round1_prompt"
     } > "$out_path"
 }
 
@@ -1326,10 +1366,19 @@ run_debate_coordinator() {
 
     # ======================================================================
     # Round 1: wait for sentinels, classify outputs, terminal-abstention.
+    #
+    # Per spec D5: a per-reviewer timeout (no sentinel within the round
+    # budget) is Mode A — that reviewer abstains for the round; the round
+    # MUST continue if eligibility >=2 remains. The wait helper therefore
+    # does NOT propagate timeout-as-coordinator-failure: it returns 0 on
+    # timeout (after logging the elapsed budget for observability) and
+    # `_rdc_classify_round_outputs` then handles the missing-sentinel /
+    # empty-JSON cases as abstain entries via the existing Mode A
+    # classification path. The eligibility check below catches the
+    # genuine degraded-below-2 case.
     # ======================================================================
     if ! _rdc_wait_round_sentinels "$round1_dir" "$timeout_sec" "$poll_interval" "${_rdc_initial_reviewers[@]}"; then
-        echo "aggregator failed: timeout waiting for round-1 reviewer sentinels under $round1_dir (budget ${timeout_sec}s)" >&2
-        return 1
+        echo "warning: round-1 sentinel wait budget elapsed (${timeout_sec}s); reviewers without sentinels will be classified as Mode A abstain (terminal for the run)" >&2
     fi
 
     local -a _rdc_round1_active=()
@@ -1475,9 +1524,12 @@ run_debate_coordinator() {
         return 6
     fi
 
+    # Wait for Round-2 sentinels. Same budget-as-Mode-A semantics as the
+    # Round-1 wait above: a reviewer that hangs past the round budget is
+    # classified as Mode A abstain (terminal); the run continues if at
+    # least 2 active final-round reviewers remain (Option B).
     if ! _rdc_wait_round_sentinels "$_rdc_round2_dir" "$timeout_sec" "$poll_interval" "${_rdc_round2_spawned[@]}"; then
-        echo "aggregator failed: timeout waiting for round-2 reviewer sentinels under $_rdc_round2_dir (budget ${timeout_sec}s)" >&2
-        return 1
+        echo "warning: round-2 sentinel wait budget elapsed (${timeout_sec}s); reviewers without sentinels will be classified as Mode A abstain (Option B exclusion from final aggregation)" >&2
     fi
 
     # Classify Round-2 outputs. Reviewers with .failed sentinel, missing
