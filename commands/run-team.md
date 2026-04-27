@@ -15,7 +15,7 @@ Run a strictly serial agent-team implementation loop from a `*-team-tasks.md` fi
 - The lead never invokes `/cerberus:review-code` directly. Code review fires automatically from the `TaskCompleted` hook.
 - Scheduling is strictly serial: run at most one implementer teammate at a time.
 - Every implementer teammate spawned with `Agent` MUST request `model: "opus"`; do not omit the model or spawn lower-tier teammates.
-- Implementer teammates are single-use. The plugin's `TeammateIdle` hook allows the first idle signal through for classification, then terminates repeat idle firings for that teammate so parked implementers do not spam the lead.
+- Implementer teammates are single-use. After a teammate's task is classified as successful, the lead MUST send that teammate a `shutdown_request`; the plugin's `TeammateIdle` hook remains a fallback for duplicate idle suppression if a teammate parks instead.
 
 ## Phase 0: Preflight
 
@@ -196,13 +196,13 @@ Agent({
 })
 ```
 
-Wait for the teammate to go idle. On the first `TeammateIdle`, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, and messages from the teammate. Do not wait for additional idle notifications from the same teammate; Cerberus implementers are never reused, and the plugin's `TeammateIdle` hook terminates duplicate idle firings after the first notification.
+Wait for the teammate to go idle. On the first `TeammateIdle`, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, and messages from the teammate. Do not wait for additional idle notifications from the same teammate; Cerberus implementers are never reused, and successful implementers are shut down after classification.
 
 ## Phase 4: Outcome Classification
 
 Classify the running task into exactly one category.
 
-- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the confirmed project-specific verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits in `baseline_sha..HEAD`, delete `state_dir`, and schedule the next ready task.
+- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the confirmed project-specific verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits in `baseline_sha..HEAD`, delete `state_dir`, send the completed teammate a `shutdown_request`, and schedule the next ready task.
 - **needs-human**: teammate sent `STATUS: NEEDS_HUMAN T###` while the Claude task remains `in_progress`, or `exhausted` exists while the task remains `in_progress`. Mark failed, retain `state_dir`, stop scheduling.
 - **unverified-failure**: task status is `completed` but `verified_pass` or `reviewed_pass` is absent, `verified_head` or `reviewed_head` does not equal current `HEAD`, or task status is `completed` while `exhausted` exists. Missing `verified_pass` means the confirmed project verification gate did not run or did not pass before completion; missing `reviewed_pass` means code review did not run or did not pass; head mismatch means the current code differs from what was verified or reviewed. The completed-plus-exhausted case should be impossible in the normal hook path, but the lead defends against stale/tampered state or runtime variance. Mark failed, retain `state_dir`, stop scheduling.
 - **infra-failure**: `last_error` exists. Mark failed, retain `state_dir`, include raw `last_error` in the final report, stop scheduling.
@@ -228,6 +228,19 @@ Run this only after a provisional `success` and before deleting `state_dir`.
    ```
 
    If any path is printed, downgrade to `unverified-failure` with reason `task left new untracked file(s) outside its commits`.
+
+### Completed Teammate Shutdown
+
+After a success passes the post-task clean-tree gate and is finalized, shut down that task's single-use teammate before scheduling the next ready task:
+
+```text
+SendMessage({
+  to: "impl-T###",
+  message: {type: "shutdown_request", reason: "Cerberus task T### completed"}
+})
+```
+
+Do not wait for another `TeammateIdle` or a reply from the completed teammate before continuing; the task has already been classified and the teammate will not be reused.
 
 On any non-success outcome, do not unblock dependents and do not schedule independent tasks. Failed task commits remain on the current branch; never run `git reset --hard` or destructive cleanup automatically.
 
@@ -263,4 +276,4 @@ Report:
 - For failures: baseline SHA, retained state directory, raw `last_error` if present, and manual recovery options such as `git reset --hard <baseline_sha>` or `git revert <commit_range>`.
 - Epic verification verdict and findings, or why it was skipped.
 - Retry note: rerunning `/cerberus:run-team` is safe after fixing the root cause because each invocation gets a fresh `team_hash`; stale state dirs remain only for debugging.
-- Cleanup note: successful task state dirs are deleted automatically; failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done. If a teammate parks at `needs-human`, do not rely on `shutdown_request` to quiet repeated idle pings; the installed `TeammateIdle` hook handles duplicate-idle suppression for Cerberus implementers.
+- Cleanup note: successful task state dirs are deleted automatically and completed teammates are shut down with `shutdown_request`; failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done. If a failed teammate parks at `needs-human`, do not rely on `shutdown_request` to quiet repeated idle pings; the installed `TeammateIdle` hook handles duplicate-idle suppression for Cerberus implementers.
