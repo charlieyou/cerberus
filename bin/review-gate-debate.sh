@@ -867,19 +867,23 @@ _rdc_wait_round_sentinels() {
         if [[ "$all_done" == "true" ]]; then
             return 0
         fi
-        # T012 cancellation: if the SIGINT trap set the request flag,
-        # treat the wait as if the round budget elapsed — return 1 so
-        # the caller's classify pass marks pending reviewers as Mode A
-        # abstain (per-reviewer-timeout semantics). The post-record
-        # cancel checkpoint then fires `_rdc_cancel_exit`.
-        if [[ "${_RDC_CANCEL_REQUESTED:-0}" == "1" ]]; then
-            return 1
-        fi
         now=$(date +%s)
         elapsed=$(( now - start_time ))
         if [[ $elapsed -ge $timeout_sec ]]; then
             return 1
         fi
+        # T012 cancellation: SIGINT does NOT short-circuit this wait
+        # loop. The spec says cancel "lets in-flight reviewers complete
+        # or hit per-reviewer timeout" — i.e., the in-flight round runs
+        # to its natural end (all sentinels OR round-budget timeout)
+        # before the cancel takes effect. Reviewers spawn detached
+        # (`nohup`/`setsid`); SIGINT to the parent does NOT kill them.
+        # Short-circuiting here would mark a reviewer that finishes
+        # seconds later as abstained in partial telemetry, which would
+        # contradict the actual on-disk reviewer output. The cancel
+        # checkpoint after `_rdc_record_round` (`_rdc_check_cancel_after_round`)
+        # exits 130 with telemetry that reflects the round's true
+        # outcome.
         sleep "$poll_interval"
     done
 }
@@ -1753,23 +1757,23 @@ _rdc_degraded_exit() {
 #
 # Per spec, on SIGINT the coordinator MUST "let in-flight reviewers
 # complete or hit per-reviewer timeout, write whatever rounds completed
-# as partial telemetry". A direct exit-from-trap would skip the
-# in-flight Round-N classify + record step, producing a partial-telemetry
-# file with zero round entries even when Round 1 was minutes from
-# completing. Instead, the trap sets a request flag and returns. The
-# wait loop checks the flag and returns "timed out" (return 1, identical
-# to the existing budget-elapsed path) so any reviewer without a
-# sentinel classifies as Mode A abstain — exactly the per-reviewer
-# timeout behavior the spec mandates. The classify + record pass
-# proceeds normally, and `_rdc_check_cancel_after_round` (called after
-# each `_rdc_record_round`) sees the flag and triggers
-# `_rdc_cancel_exit` which writes the partial telemetry and exits 130.
+# as partial telemetry". The trap therefore does NOT short-circuit the
+# in-flight wait loop: it sets a request flag and returns, allowing the
+# round to run to its natural conclusion (all sentinels appear OR the
+# per-reviewer round-budget timeout elapses). After the round
+# classifies + records, `_rdc_check_cancel_after_round` (the post-record
+# cancel checkpoint) sees the flag and triggers `_rdc_cancel_exit`,
+# which writes the partial telemetry and exits 130.
 #
-# Why a deferred exit instead of trap-exit: the partial-telemetry
-# `rounds_telemetry[]` SHOULD include Round N if Round N had reached
-# the wait loop, even when the cancel arrived mid-poll. The
-# round-record-then-check sequence guarantees this without forcing the
-# coordinator to wait the full per-reviewer timeout budget.
+# Why deferred + run-to-completion: reviewers spawn detached via
+# `nohup`/`setsid`; SIGINT to the parent shell does NOT kill the
+# child reviewer processes. A reviewer that's mid-LLM-call when SIGINT
+# arrives may finish writing its `<reviewer>.json` and `.done` sentinel
+# seconds later. Short-circuiting the wait would mark that reviewer
+# abstained in partial telemetry while its actual output lands on
+# disk — a contradiction that breaks the contract that
+# `iterations/<iter>/debate-telemetry.json.rounds_telemetry[]`
+# accurately reflects what actually happened in each round.
 #
 # Per spec, gate-state.json.status stays at `pending`, the canonical
 # $REVIEWS_DIR is left empty (no per-reviewer JSONs / sentinels /
@@ -1780,7 +1784,7 @@ _rdc_handle_sigint() {
     # Best-effort stderr message. The signal arrival point is undefined
     # so the message may interleave with other stderr; that's accepted.
     echo "" >&2
-    echo "debate SIGINT received; finishing current round (in-flight reviewers will hit per-reviewer timeout) before writing partial telemetry and exiting 130." >&2
+    echo "debate SIGINT received; in-flight round will run to completion (or hit per-reviewer timeout) before writing partial telemetry and exiting 130." >&2
 }
 
 # _rdc_cancel_exit — write partial telemetry and exit 130. Called from the
