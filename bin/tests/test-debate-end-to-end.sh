@@ -1054,6 +1054,127 @@ CODEX_R2_FAIL
 }
 
 # ---------------------------------------------------------------------------
+# T010 Round-3 peer-block surfaces R1/R2 abstainers as `(peer abstained)`
+# (spec R1 terminal-abstention rule + stable Peer-X contract).
+#
+# Three reviewers under --mode max; gemini fails Round 1 (terminal abstain).
+# Round 2 launches with claude+codex; both emit valid PASS outputs and
+# advance to Round 3. Assertion: each Round-3 prompt for the surviving
+# reviewers contains the literal `(peer abstained)` marker — gemini's
+# slot must surface as abstained in both surviving reviewers' Round-3
+# peer blocks (spec R1 + stable peer-ID contract: Peer-X labels stay
+# pinned to the same model across rounds, so the abstained slot must
+# still be rendered with the abstain placeholder rather than dropped).
+# ---------------------------------------------------------------------------
+test_round3_peer_block_includes_r1_abstainer() {
+    local scenario="round3-peer-includes-abstainer"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    cp "$FAKE_BIN/claude" "$scenario_bin/claude"
+    cat > "$scenario_bin/gemini" <<'GEMINI_FAIL'
+#!/usr/bin/env bash
+echo "fixture: gemini deliberate Round-1 crash" >&2
+exit 1
+GEMINI_FAIL
+    chmod +x "$scenario_bin/codex" "$scenario_bin/claude" "$scenario_bin/gemini"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-r3-abstain"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-r3-abstain/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    local stdout_f="$scenario_work/stdout"
+    local stderr_f="$scenario_work/stderr"
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode max \
+            --agents codex,gemini,claude \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >"$stdout_f" 2>"$stderr_f"
+    local rc=$?
+    set -e
+
+    local iter_root="$review_dir/iterations"
+    local latest_iter=""
+    if [[ -d "$iter_root" ]]; then
+        latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    fi
+    local round3_dir="$iter_root/$latest_iter/round-3"
+
+    # Round-3 prompts MUST exist for codex + claude (the survivors of
+    # Round 1's gemini crash).
+    if [[ -s "$round3_dir/review.codex.prompt" \
+          && -s "$round3_dir/review.claude.prompt" \
+          && ! -e "$round3_dir/review.gemini.prompt" ]]; then
+        log_grn "$scenario: Round-3 prompts exist for survivors (codex + claude); gemini absent"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: Round-3 prompt set unexpected. codex=$(test -s "$round3_dir/review.codex.prompt" && echo present || echo missing) claude=$(test -s "$round3_dir/review.claude.prompt" && echo present || echo missing) gemini=$(test -e "$round3_dir/review.gemini.prompt" && echo present || echo missing)"
+        red_count=$((red_count + 1))
+    fi
+
+    # The abstain marker `(peer abstained)` must appear in BOTH
+    # survivors' Round-3 peer blocks (spec R1: every initial peer slot
+    # surfaces in the per-recipient peer block; abstained peers render
+    # as the abstain placeholder).
+    local saw_abstained=0
+    if [[ -s "$round3_dir/review.codex.prompt" ]] \
+       && grep -F "(peer abstained)" "$round3_dir/review.codex.prompt" >/dev/null; then
+        saw_abstained=$((saw_abstained + 1))
+    fi
+    if [[ -s "$round3_dir/review.claude.prompt" ]] \
+       && grep -F "(peer abstained)" "$round3_dir/review.claude.prompt" >/dev/null; then
+        saw_abstained=$((saw_abstained + 1))
+    fi
+    if [[ $saw_abstained -eq 2 ]]; then
+        log_grn "$scenario: gemini's slot surfaces as '(peer abstained)' in BOTH survivors' Round-3 peer blocks (2/2)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: '(peer abstained)' marker present in only $saw_abstained/2 survivors' Round-3 peer blocks (expected 2 — Round-3 must surface every prior peer's slot per spec R1's terminal-abstention rule)"
+        red_count=$((red_count + 1))
+    fi
+
+    # aggregate.json.reviewers excludes gemini (terminal abstention).
+    local aggregate="$review_dir/reviews/aggregate.json"
+    if [[ -f "$aggregate" ]]; then
+        local agg_reviewers
+        agg_reviewers=$(jq -r '.reviewers | sort | join(",")' "$aggregate" 2>/dev/null || echo "")
+        if [[ "$agg_reviewers" == "claude,codex" ]]; then
+            log_grn "$scenario: aggregate.json.reviewers == [claude, codex] (gemini excluded — terminal abstention persists through Round 3)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: aggregate.json.reviewers='$agg_reviewers' (expected 'claude,codex')"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: aggregate.json absent — coordinator did not produce the final aggregate"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # T010 falsifiable-acceptance two-clause assertion (the v1 launch gate).
 #
 # Run debate against `bin/tests/fixtures/debate-bad-artifact/` (a fixture
@@ -1273,6 +1394,7 @@ CLAUDE_PLANTED
 # state does not collide.
 test_round3_launch_under_max_mode
 test_round3_degraded_below_2_under_max
+test_round3_peer_block_includes_r1_abstainer
 test_falsifiable_acceptance_two_clause
 
 # ---------------------------------------------------------------------------

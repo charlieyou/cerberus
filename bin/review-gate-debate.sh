@@ -1885,14 +1885,20 @@ run_debate_coordinator() {
         done
 
         # Build per-recipient anonymized peer blocks for Round 3 over the
-        # Round-2-active set (Round-2 abstainers are Option-B-excluded and
-        # do not appear in the Round-3 peer block — there is no terminal-
-        # abstention placeholder for them in Round 3 because they are no
-        # longer in the active reviewer set). Per-recipient ordering is
+        # FULL initial reviewer set so any Round-1 OR Round-2 abstainer's
+        # slot surfaces as `(peer abstained)` in the Round-3 peer block
+        # (per spec R1's terminal-abstention rule + the stable-Peer-X
+        # contract: opaque peer IDs MUST be assigned over the same input
+        # set in every round so a recipient sees the same Peer-X label
+        # for the same model across all rounds). Abstained reviewers
+        # have no augmented JSON in $_rdc_round2_clean (we only copied
+        # Round-2-active augmented JSONs above), so the missing-JSON
+        # branch in debate_build_peer_blocks fires for them and they
+        # render as the abstain placeholder. Per-recipient ordering is
         # reshuffled per T007's seeded/production rules.
         if ! debate_build_peer_blocks \
                 "$_rdc_round3_dir" "$_rdc_round2_clean" "${REVIEW_GATE_DEBATE_SEED:-}" \
-                "${_rdc_round2_active[@]}"; then
+                "${_rdc_initial_reviewers[@]}"; then
             echo "aggregator failed: debate_build_peer_blocks failed for round 3" >&2
             return 1
         fi

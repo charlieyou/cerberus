@@ -7,7 +7,8 @@ acceptance two-clause assertion in
 ## Files
 
 - `service.py` — a small Python module containing one **planted P1
-  defect** (a hardcoded credential in `login()` at lines 12-18).
+  defect** (a hardcoded credential in `login()`; the function spans
+  lines 12-22 with the credential literal on line 21).
 - `defect-location.json` — a stable record of the planted defect's exact
   `file_path`, `line_start`, `line_end`. The integration test reads this
   file to know where to look in the reviewer JSONs and the final
