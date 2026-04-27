@@ -4,6 +4,8 @@
 # Gates agent-team implementer task completion with Cerberus code review.
 # State lives under:
 #   ${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/
+# When TaskCompleted exposes metadata.cerberus_state_dir, that absolute path is
+# preferred; the TMPDIR-derived path is only a fallback.
 #
 # The hook is registered globally for TaskCompleted, which has no matcher. It
 # exits 0 for every task whose subject is not prefixed with
@@ -29,10 +31,38 @@ team_hash=""
 round="0"
 max_rounds="0"
 owned_task="0"
+verification_author_context=""
 
 json_get() {
     local filter="$1"
     printf '%s' "$hook_input" | jq -r "$filter" 2>/dev/null || printf ''
+}
+
+canonical_path() {
+    local path="$1"
+    local dir base resolved_dir
+
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+
+    if [[ -d "$path" ]]; then
+        (cd -P "$path" 2>/dev/null && pwd) || printf '%s' "$path"
+        return 0
+    fi
+
+    dir="$(dirname "$path")"
+    base="$(basename "$path")"
+    if [[ -d "$dir" ]]; then
+        resolved_dir="$(cd -P "$dir" 2>/dev/null && pwd)" || {
+            printf '%s' "$path"
+            return 0
+        }
+        printf '%s/%s' "$resolved_dir" "$base"
+        return 0
+    fi
+
+    printf '%s' "$path"
 }
 
 write_last_error() {
@@ -61,6 +91,118 @@ mark_exhausted_if_needed() {
 block() {
     printf '%s\n' "$1" >&2
     exit 2
+}
+
+capture_untracked_paths() {
+    local output_path="$1"
+    git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "$output_path"
+}
+
+new_untracked_paths() {
+    local current_path="$1"
+    local baseline_path="$2"
+    comm -23 <(LC_ALL=C sort "$current_path") <(LC_ALL=C sort "$baseline_path") || true
+}
+
+ensure_committed_tree_clean() {
+    local phase="$1"
+    local tracked_status=""
+    local current_untracked=""
+    local new_paths=""
+
+    tracked_status="$(git status --porcelain --untracked-files=no)"
+    if [[ -n "$tracked_status" ]]; then
+        touch "${state_dir}/verify_failed" 2>/dev/null || true
+        printf '%s\n' "$tracked_status" > "${state_dir}/dirty-tracked-${phase}.txt" 2>/dev/null || true
+        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nTracked files are modified outside commits, so reviewers would not see the same code being verified.\nCommit or revert these changes, then touch completion_intent and retry TaskUpdate(status:'completed').\n\n%s" "$task_id" "$tracked_status")"
+    fi
+
+    if [[ ! -f "${state_dir}/untracked_baseline.txt" ]]; then
+        write_last_error "state_invalid: missing untracked baseline for ${task_id} at ${state_dir}/untracked_baseline.txt"
+        block "INFRA-FAILURE: missing untracked baseline for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+    fi
+
+    current_untracked="${state_dir}/untracked-${phase}.txt"
+    capture_untracked_paths "$current_untracked"
+    new_paths="$(new_untracked_paths "$current_untracked" "${state_dir}/untracked_baseline.txt")"
+    if [[ -n "$new_paths" ]]; then
+        touch "${state_dir}/verify_failed" 2>/dev/null || true
+        printf '%s\n' "$new_paths" > "${state_dir}/new-untracked-${phase}.txt" 2>/dev/null || true
+        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nNew untracked files appeared outside commits, so reviewers would not see the full verified change.\nAdd intentional files to the task commit, remove generated files, or add an ignore rule before retrying TaskUpdate(status:'completed').\n\n%s" "$task_id" "$new_paths")"
+    fi
+}
+
+run_verification_gate() {
+    local verify_script_path="$1"
+    local verify_log="${state_dir}/verify-round${round}.log"
+    local verify_rc=0
+    local head_before_verify=""
+    local head_after_verify=""
+
+    rm -f "${state_dir}/verified_pass"
+    rm -f "${state_dir}/verified_head"
+
+    if [[ -z "$verify_script_path" ]]; then
+        write_last_error "state_invalid: missing verify_script_path in ${state_file}"
+        block "INFRA-FAILURE: missing confirmed verification script for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+    fi
+    if [[ ! -f "$verify_script_path" ]]; then
+        write_last_error "state_invalid: verify_script_path does not exist for ${task_id}: ${verify_script_path}"
+        block "INFRA-FAILURE: confirmed verification script is missing for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+    fi
+
+    head_before_verify="$(git rev-parse HEAD)"
+    ensure_committed_tree_clean "before-verify"
+
+    {
+        printf 'Running Cerberus pre-review verification for %s\n' "$task_id"
+        printf 'Script: %s\n\n' "$verify_script_path"
+    } > "$verify_log"
+
+    CERBERUS_TASK_ID="$task_id" \
+    CERBERUS_TEAM_HASH="$team_hash" \
+    CERBERUS_STATE_DIR="$state_dir" \
+    CERBERUS_COMMIT_RANGE="$commit_range" \
+    CERBERUS_BASELINE_SHA="$baseline_sha" \
+    CERBERUS_TASK_CONTEXT_PATH="$task_context_path" \
+        bash "$verify_script_path" >>"$verify_log" 2>&1 || verify_rc=$?
+
+    head_after_verify="$(git rev-parse HEAD 2>/dev/null || true)"
+    if [[ -z "$head_after_verify" || "$head_after_verify" != "$head_before_verify" ]]; then
+        write_last_error "verify_invalid: verification script changed HEAD from ${head_before_verify} to ${head_after_verify}"
+        block "CERBERUS VERIFY: verification script changed HEAD for ${task_id}. Verification commands must not create commits. Send NEEDS_HUMAN to lead and go idle."
+    fi
+
+    if [[ "$verify_rc" -ne 0 ]]; then
+        touch "${state_dir}/verify_failed" 2>/dev/null || true
+        block "$(
+            {
+                printf 'CERBERUS VERIFY: BLOCKED before code review for task %s.\n' "$task_id"
+                printf 'The user-confirmed verification gate failed with exit code %s. Fix the issue, commit the fix with Cerberus-Task: %s, touch completion_intent again, and retry TaskUpdate(status:'"'"'completed'"'"').\n' "$verify_rc" "$task_id"
+                printf 'Verification log: %s\n\n' "$verify_log"
+                printf 'Last 200 log lines:\n'
+                tail -200 "$verify_log" 2>/dev/null || true
+            }
+        )"
+    fi
+
+    ensure_committed_tree_clean "after-verify"
+    rm -f "${state_dir}/verify_failed"
+    printf '%s\n' "$head_after_verify" > "${state_dir}/verified_head"
+    touch "${state_dir}/verified_pass"
+
+    verification_author_context="$(
+        {
+            printf 'Pre-review verification passed for task %s.\n\n' "$task_id"
+            printf 'Verification script: `%s`\n\n' "$verify_script_path"
+            printf 'Verification script contents:\n```bash\n'
+            cat "$verify_script_path"
+            printf '\n```\n\n'
+            printf 'Verification output tail:\n```text\n'
+            tail -120 "$verify_log" 2>/dev/null || true
+            printf '\n```\n'
+        }
+    )"
 }
 
 on_err() {
@@ -120,8 +262,12 @@ if [[ -z "$task_id" ]]; then
     task_id="$(json_get '[.. | objects | .cerberus_task_id? // empty] | map(select(. != "")) | first // ""')"
 fi
 
+metadata_state_dir="$(json_get '[.task_metadata.cerberus_state_dir?, .metadata.cerberus_state_dir?] | map(select(. != null and . != "")) | first // ""')"
 state_root="${TMPDIR:-/tmp}/cerberus-task-completed-hook"
-if [[ -n "$team_hash" && -n "$task_id" ]]; then
+if [[ -n "$metadata_state_dir" ]]; then
+    state_dir="$metadata_state_dir"
+    state_file="${state_dir}/state.json"
+elif [[ -n "$team_hash" && -n "$task_id" ]]; then
     state_dir="${state_root}/${team_hash}/${task_id}"
     state_file="${state_dir}/state.json"
 else
@@ -137,32 +283,77 @@ if [[ ! -f "$state_file" ]]; then
     block "INFRA-FAILURE: missing Cerberus state for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
 fi
 
-# TaskCompleted can fire when a teammate finishes a turn with in-progress work.
-# Only an explicit implementer completion attempt writes this marker.
-if [[ ! -f "${state_dir}/completion_intent" ]]; then
+state_task_id="$(jq -r '.task_id // ""' "$state_file" 2>/dev/null || printf '')"
+state_team_hash="$(jq -r '.team_hash // ""' "$state_file" 2>/dev/null || printf '')"
+state_task_state_dir="$(jq -r '.task_state_dir // ""' "$state_file" 2>/dev/null || printf '')"
+if [[ -z "$task_id" && -n "$state_task_id" ]]; then
+    task_id="$state_task_id"
+fi
+if [[ -z "$team_hash" && -n "$state_team_hash" ]]; then
+    team_hash="$state_team_hash"
+fi
+if [[ -z "$task_id" || -z "$team_hash" ]]; then
+    write_last_error "state_invalid: missing task_id/team_hash after reading ${state_file}"
+    block "INFRA-FAILURE: Cerberus state is missing task identity. Send NEEDS_HUMAN to lead and go idle."
+fi
+if [[ -n "$state_task_id" && "$state_task_id" != "$task_id" ]]; then
+    write_last_error "state_invalid: event task_id=${task_id} does not match state task_id=${state_task_id}"
+    block "INFRA-FAILURE: Cerberus task metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
+fi
+if [[ -n "$state_team_hash" && "$state_team_hash" != "$team_hash" ]]; then
+    write_last_error "state_invalid: event team_hash=${team_hash} does not match state team_hash=${state_team_hash}"
+    block "INFRA-FAILURE: Cerberus team metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
+fi
+if [[ -n "$state_task_state_dir" && "$(canonical_path "$state_task_state_dir")" != "$(canonical_path "$state_dir")" ]]; then
+    write_last_error "state_invalid: resolved state_dir=${state_dir} does not match state task_state_dir=${state_task_state_dir}"
+    block "INFRA-FAILURE: Cerberus state directory metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
+fi
+
+if [[ -z "$cwd" || ! -d "$cwd" ]]; then
+    write_last_error "git_error: hook cwd is missing or not a directory: ${cwd}"
+    block "INFRA-FAILURE: hook did not receive a valid repository cwd for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+cd "$cwd"
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    write_last_error "git_error: hook cwd is not inside a git worktree: ${cwd}"
+    block "INFRA-FAILURE: hook did not run inside a git worktree. Send NEEDS_HUMAN to lead and go idle."
+fi
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$repo_root" || ! -d "$repo_root" ]]; then
+    write_last_error "git_error: unable to resolve repo root from cwd=${cwd}"
+    block "INFRA-FAILURE: unable to resolve git repo root for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+cd "$repo_root"
+
+current_head="$(git rev-parse HEAD 2>/dev/null || true)"
+verified_head="$(cat "${state_dir}/verified_head" 2>/dev/null || true)"
+reviewed_head="$(cat "${state_dir}/reviewed_head" 2>/dev/null || true)"
+if [[ -f "${state_dir}/verified_pass" && -f "${state_dir}/reviewed_pass" && -n "$current_head" && "$verified_head" == "$current_head" && "$reviewed_head" == "$current_head" ]]; then
     exit 0
+fi
+
+if [[ ! -f "${state_dir}/completion_intent" ]]; then
+    block "CERBERUS VERIFY: missing completion_intent marker for ${task_id}. Before marking the task completed, run: touch \"${state_dir}/completion_intent\". Then retry TaskUpdate(status:'completed')."
 fi
 rm -f "${state_dir}/completion_intent"
 
-if [[ -f "${state_dir}/reviewed_pass" ]]; then
-    exit 0
-fi
-
 round="$(jq -r '.round // 0' "$state_file" 2>/dev/null || printf '0')"
-max_rounds="$(jq -r '.max_rounds // 3' "$state_file" 2>/dev/null || printf '3')"
+max_rounds="$(jq -r '.max_rounds // 5' "$state_file" 2>/dev/null || printf '5')"
 baseline_sha="$(jq -r '.baseline_sha // ""' "$state_file" 2>/dev/null || printf '')"
 task_context_path="$(jq -r '.task_context_path // ""' "$state_file" 2>/dev/null || printf '')"
+verify_script_path="$(jq -r '.verify_script_path // ""' "$state_file" 2>/dev/null || printf '')"
 
 if [[ ! "$round" =~ ^[0-9]+$ ]]; then
     round="0"
 fi
 if [[ ! "$max_rounds" =~ ^[0-9]+$ || "$max_rounds" -lt 1 ]]; then
-    max_rounds="3"
+    max_rounds="5"
 fi
 
 if [[ "$round" -ge "$max_rounds" ]]; then
     touch "${state_dir}/exhausted"
-    exit 0
+    block "Already exhausted (round=${round}, max=${max_rounds}). Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
 fi
 
 if [[ -z "$baseline_sha" ]]; then
@@ -173,16 +364,17 @@ if [[ -z "$task_context_path" || ! -f "$task_context_path" ]]; then
     write_last_error "state_invalid: missing task_context_path '${task_context_path}' for ${task_id}"
     block "INFRA-FAILURE: missing task context for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
 fi
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    write_last_error "git_error: hook cwd is not inside a git worktree: ${cwd}"
-    block "INFRA-FAILURE: hook did not run inside a git worktree. Send NEEDS_HUMAN to lead and go idle."
-fi
 
-commit_range="${baseline_sha}..HEAD"
 if ! git rev-parse --verify "${baseline_sha}^{commit}" >/dev/null 2>&1; then
     write_last_error "git_error: baseline commit not found: ${baseline_sha}"
     block "INFRA-FAILURE: baseline commit ${baseline_sha} was not found. Send NEEDS_HUMAN to lead and go idle."
 fi
+candidate_head="$(git rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "$candidate_head" ]]; then
+    write_last_error "git_error: unable to resolve current HEAD"
+    block "INFRA-FAILURE: unable to resolve current HEAD for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
+fi
+commit_range="${baseline_sha}..${candidate_head}"
 
 commits_for_task="$(git log --pretty='%H %(trailers:key=Cerberus-Task,valueonly,separator=%x20)' "$commit_range" | awk -v t="$task_id" '$2 == t { print $1 }' || true)"
 if [[ -z "$commits_for_task" ]]; then
@@ -206,6 +398,18 @@ if [[ -n "$untagged_in_range" ]]; then
     block "Commits in ${commit_range} are missing the required Cerberus-Task: ${task_id} trailer or carry a different task trailer: ${untagged_in_range}. Amend/squash so every commit in the range belongs to ${task_id}, then retry. Round ${next_round} of ${max_rounds}."
 fi
 
+if [[ "$(git rev-parse HEAD)" != "$candidate_head" ]]; then
+    write_last_error "head_changed: HEAD changed after trailer validation from ${candidate_head} to $(git rev-parse HEAD)"
+    block "CERBERUS VERIFY: HEAD changed after trailer validation for ${task_id}. The current code was not fully validated. Send NEEDS_HUMAN to lead and go idle."
+fi
+run_verification_gate "$verify_script_path"
+if [[ "$(git rev-parse HEAD)" != "$candidate_head" ]]; then
+    write_last_error "head_changed: HEAD changed after verification from ${candidate_head} to $(git rev-parse HEAD)"
+    block "CERBERUS VERIFY: HEAD changed after verification for ${task_id}. The current code was not fully validated. Send NEEDS_HUMAN to lead and go idle."
+fi
+review_head="$candidate_head"
+rm -f "${state_dir}/reviewed_pass" "${state_dir}/reviewed_head"
+
 if [[ ! -x "$REVIEW_GATE" ]]; then
     write_last_error "spawn_failed: review-gate is not executable at ${REVIEW_GATE}"
     block "INFRA-FAILURE: review-gate is not executable. Send NEEDS_HUMAN to lead and go idle."
@@ -216,6 +420,7 @@ spawn_stdout="${state_dir}/spawn.stdout"
 spawn_stderr="${state_dir}/spawn.stderr"
 spawn_rc=0
 REVIEW_GATE_SESSION_KEY="$session_key" \
+REVIEW_GATE_AUTHOR_CONTEXT="$verification_author_context" \
     "$REVIEW_GATE" spawn-code-review \
     --max-rounds 0 --consensus majority --mode fast \
     --context-file "$task_context_path" \
@@ -235,6 +440,12 @@ wait_rc=0
 wait_json="$("$REVIEW_GATE" wait --json --finalize --timeout 1800 --poll-interval 3 --session-key "$session_key")" || wait_rc=$?
 printf '%s\n' "$wait_json" > "${state_dir}/wait.json"
 
+head_after_review="$(git rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "$head_after_review" || "$head_after_review" != "$review_head" ]]; then
+    write_last_error "review_invalid: HEAD changed during review from ${review_head} to ${head_after_review}"
+    block "CERBERUS REVIEW: HEAD changed while reviewers were running for ${task_id}. The current code was not reviewed. Send NEEDS_HUMAN to lead and go idle."
+fi
+
 verdict="$(printf '%s' "$wait_json" | jq -r '.consensus_verdict // empty' 2>/dev/null || printf '')"
 wait_status="$(printf '%s' "$wait_json" | jq -r '.status // empty' 2>/dev/null || printf '')"
 has_blockers="$(printf '%s' "$wait_json" | jq -r '[.aggregated_findings[]? | select(((.priority // "") | tostring | test("^(0|1|P0|P1)$"; "i")) or ((.severity // "") | tostring | test("^(P0|P1|0|1)$"; "i")) or ((.title // .body // "") | tostring | test("\\[P[01]\\]"; "i")))] | length' 2>/dev/null || printf '0')"
@@ -244,6 +455,7 @@ fi
 
 if [[ "$verdict" == "PASS" || ( "$verdict" == "NEEDS_WORK" && "$has_blockers" -eq 0 ) ]]; then
     increment_round
+    printf '%s\n' "$review_head" > "${state_dir}/reviewed_head"
     touch "${state_dir}/reviewed_pass"
     exit 0
 fi

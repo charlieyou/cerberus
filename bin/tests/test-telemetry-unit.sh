@@ -483,6 +483,35 @@ test_extract_missing_fields() {
     fi
 }
 
+test_extract_claude_telemetry_model_string() {
+    ((TESTS_RUN++)) || true
+    log_test "extract_claude_telemetry handles string model field"
+
+    setup_test_dir
+    local model_file="$TEST_DIR/claude-model-string.json"
+    cat > "$model_file" <<'EOF'
+{
+  "model": "claude-test-model",
+  "session_id": "session-model-string",
+  "tokens": {"input": 1, "output": 2, "cached": 0},
+  "duration_ms": 3,
+  "total_cost_usd": 0.001
+}
+EOF
+
+    local result model input output
+    result=$(extract_claude_telemetry "$model_file" 2>/dev/null) || true
+    model=$(printf '%s' "$result" | jq -r '.model // empty' 2>/dev/null || echo "")
+    input=$(printf '%s' "$result" | jq -r '.tokens.input // empty' 2>/dev/null || echo "")
+    output=$(printf '%s' "$result" | jq -r '.tokens.output // empty' 2>/dev/null || echo "")
+
+    if [[ "$model" == "claude-test-model" && "$input" == "1" && "$output" == "2" ]]; then
+        log_pass "string model field parsed correctly"
+    else
+        log_fail "string model field parsing failed: $result"
+    fi
+}
+
 test_safe_extract_telemetry() {
     ((TESTS_RUN++)) || true
     log_test "safe_extract_telemetry wrapper never throws"
@@ -550,6 +579,7 @@ main() {
     # Error handling tests
     test_extract_malformed_json
     test_extract_missing_fields
+    test_extract_claude_telemetry_model_string
     test_safe_extract_telemetry
     
     echo ""

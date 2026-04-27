@@ -105,7 +105,7 @@ extract_claude_content() {
 
         else empty
         end
-    ' "$raw_file" 2>/dev/null)
+    ' "$raw_file" 2>/dev/null || true)
 
     # If jq extraction failed or returned empty, fall back to raw file
     if [[ -z "$content" ]]; then
@@ -124,47 +124,57 @@ extract_codex_content() {
     # - {"item":{"type":"function_call_output","output":"..."}}
     # Try multiple extraction strategies in order of likelihood:
     local content
-    content=$(jq -s -r '
-        # Strategy 1: Extract text from item.content arrays (message items)
+    content=$(jq -R -s -r '
+        split("\n")
+        | map(select(length > 0) | try fromjson catch empty)
+        |
+        # Strategy 1: Current Codex JSONL final answer shape.
+        ([.[] | select(
+            (.type // "") == "item.completed" and
+            (.item.type // "") == "agent_message"
+        ) | .item.text // empty] | last // "") as $agent_message |
+
+        # Strategy 2: Extract text from item.content arrays (message items)
         # Format: item.content is array of {type:"text", text:"..."} or {type:"output_text", text:"..."}
         ([.[] | select(.item.content) | .item.content |
           if type == "array" then .[] | select(.text) | .text
           elif type == "string" then .
           else empty end
         ] | join("")) as $item_content |
-        if ($item_content | length) > 0 then $item_content
-
-        # Strategy 2: Extract from item.output (function call outputs)
-        else ([.[] | select(.item.output) | .item.output |
-          if type == "string" then . else empty end
-        ] | join("")) as $item_output |
-        if ($item_output | length) > 0 then $item_output
 
         # Strategy 3: Find assistant role messages with content
-        else ([.[] | select(.role == "assistant" and .content) | .content] | join("")) as $assistant |
-        if ($assistant | length) > 0 then $assistant
+        ([.[] | select(.role == "assistant" and .content) | .content] | join("")) as $assistant |
 
         # Strategy 4: Find response.output_text or output_text fields
-        else ([.[] | select(.response.output_text) | .response.output_text] | join("")) as $resp_out |
-        if ($resp_out | length) > 0 then $resp_out
+        ([.[] | select(.response.output_text) | .response.output_text] | join("")) as $resp_out |
 
         # Strategy 5: Find .output string fields
-        else ([.[] | select(.output and (.output | type) == "string") | .output] | join("")) as $output |
-        if ($output | length) > 0 then $output
+        ([.[] | select(.output and (.output | type) == "string") | .output] | join("")) as $output |
 
         # Strategy 6: Find .message.content
-        else ([.[] | select(.message.content) | .message.content] | join("")) as $msg |
-        if ($msg | length) > 0 then $msg
+        ([.[] | select(.message.content) | .message.content] | join("")) as $msg |
 
         # Strategy 7: Find any .content or .text string field
-        else ([.[] | select(.content and (.content | type) == "string") | .content] | join("")) as $content |
-        if ($content | length) > 0 then $content
-        else ([.[] | select(.text and (.text | type) == "string") | .text] | join("")) as $text |
-        if ($text | length) > 0 then $text
+        ([.[] | select(.content and (.content | type) == "string") | .content] | join("")) as $content |
+        ([.[] | select(.text and (.text | type) == "string") | .text] | join("")) as $text |
 
+        # Last resort: tool/function output is useful only if no final-answer shape exists.
+        ([.[] | select(.item.output) | .item.output |
+          if type == "string" then . else empty end
+        ] | join("")) as $item_output |
+
+        if ($agent_message | length) > 0 then $agent_message
+        elif ($item_content | length) > 0 then $item_content
+        elif ($assistant | length) > 0 then $assistant
+        elif ($resp_out | length) > 0 then $resp_out
+        elif ($output | length) > 0 then $output
+        elif ($msg | length) > 0 then $msg
+        elif ($content | length) > 0 then $content
+        elif ($text | length) > 0 then $text
+        elif ($item_output | length) > 0 then $item_output
         else empty
-        end end end end end end end end
-    ' "$raw_file" 2>/dev/null)
+        end
+    ' "$raw_file" 2>/dev/null || true)
 
     # If jq extraction failed or returned empty, fall back to raw file
     if [[ -z "$content" ]]; then
@@ -178,6 +188,13 @@ extract_codex_content() {
 # Gemini -o json can return various structures similar to Claude
 extract_gemini_content() {
     local raw_file="$1"
+    local json_file="$raw_file"
+    local tmp_json=""
+    if ! jq -e . "$raw_file" >/dev/null 2>&1; then
+        tmp_json=$(mktemp)
+        awk 'found || $0 ~ /^[[:space:]]*\{/ || $0 ~ /^[[:space:]]*\[/ { found=1; print }' "$raw_file" > "$tmp_json"
+        json_file="$tmp_json"
+    fi
     local content
     content=$(jq -r '
         # Strategy 1: Simple top-level string fields
@@ -203,7 +220,8 @@ extract_gemini_content() {
 
         else empty
         end
-    ' "$raw_file" 2>/dev/null)
+    ' "$json_file" 2>/dev/null || true)
+    [[ -n "$tmp_json" ]] && rm -f "$tmp_json"
 
     # If jq extraction failed or returned empty, fall back to raw file
     if [[ -z "$content" ]]; then
@@ -414,6 +432,9 @@ review_gate_generate() {
 
     # Create agent subdirectories
     mkdir -p "$draft_dir/codex" "$draft_dir/gemini" "$draft_dir/claude"
+    local prompt_input
+    prompt_input=$(mktemp)
+    printf '%s' "$prompt_content" > "$prompt_input"
 
     # Detect CLI JSON support
     local codex_json_mode=false
@@ -434,6 +455,9 @@ review_gate_generate() {
     echo "Draft directory: $draft_dir" >&2
     echo "JSON modes: codex=$codex_json_mode, gemini=$gemini_json_mode, claude=$claude_json_mode" >&2
 
+    local generator_timeout=1800
+    local generator_timeout_bin="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
+
     # Spawn Codex (with repo access via read-only sandbox)
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
     local codex_reasoning="${CODEX_REASONING_EFFORT:-medium}"
@@ -445,9 +469,17 @@ review_gate_generate() {
             local codex_stats="$draft_dir/codex/stats.json"
             local codex_done="$draft_dir/codex/codex.done"
             local codex_failed="$draft_dir/codex/codex.failed"
+            local -a codex_extra_args=()
+            if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+                codex_extra_args=(--ephemeral)
+            fi
+            local -a timeout_prefix=()
+            if [[ -n "$generator_timeout_bin" ]]; then
+                timeout_prefix=("$generator_timeout_bin" "$generator_timeout")
+            fi
 
             if [[ "$codex_json_mode" == "true" ]]; then
-                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check --json "$prompt_content" > "$codex_raw" 2>&1; then
+                if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check --json - < "$prompt_input" > "$codex_raw" 2>&1; then
                     extract_codex_content "$codex_raw" > "$codex_draft"
                     safe_extract_telemetry codex "$codex_raw" > "$codex_stats"
                     touch "$codex_done"
@@ -456,7 +488,7 @@ review_gate_generate() {
                 fi
             else
                 # Fallback to text mode
-                if codex exec -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check "$prompt_content" > "$codex_draft" 2>&1; then
+                if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check - < "$prompt_input" > "$codex_draft" 2>&1; then
                     _emit_empty_telemetry codex > "$codex_stats"
                     touch "$codex_done"
                 else
@@ -484,12 +516,16 @@ review_gate_generate() {
                 local gemini_stats="$draft_dir/gemini/stats.json"
                 local gemini_done="$draft_dir/gemini/gemini.done"
                 local gemini_failed="$draft_dir/gemini/gemini.failed"
+                local -a timeout_prefix=()
+                if [[ -n "$generator_timeout_bin" ]]; then
+                    timeout_prefix=("$generator_timeout_bin" "$generator_timeout")
+                fi
+                export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings"
 
                 if [[ "$gemini_json_mode" == "true" ]]; then
-                    if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                        gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan --skip-trust \
                             --policy "$gemini_policy" --admin-policy "$gemini_policy" \
-                            -o json "$prompt_content" > "$gemini_raw" 2>&1; then
+                            -o json < "$prompt_input" > "$gemini_raw" 2>&1; then
                         extract_gemini_content "$gemini_raw" > "$gemini_draft"
                         safe_extract_telemetry gemini "$gemini_raw" > "$gemini_stats"
                         touch "$gemini_done"
@@ -498,10 +534,9 @@ review_gate_generate() {
                     fi
                 else
                     # Fallback to text mode
-                    if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                        gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan --skip-trust \
                             --policy "$gemini_policy" --admin-policy "$gemini_policy" \
-                            -o text "$prompt_content" > "$gemini_draft" 2>&1; then
+                            -o text < "$prompt_input" > "$gemini_draft" 2>&1; then
                         _emit_empty_telemetry gemini > "$gemini_stats"
                         touch "$gemini_done"
                     else
@@ -535,13 +570,17 @@ review_gate_generate() {
             local claude_stats="$draft_dir/claude/stats.json"
             local claude_done="$draft_dir/claude/claude.done"
             local claude_failed="$draft_dir/claude/claude.failed"
+            local -a timeout_prefix=()
+            if [[ -n "$generator_timeout_bin" ]]; then
+                timeout_prefix=("$generator_timeout_bin" "$generator_timeout")
+            fi
 
             if [[ "$claude_json_mode" == "true" ]]; then
-                if echo "$prompt_content" | claude -p --model "$claude_model" \
+                if "${timeout_prefix[@]}" claude -p --model "$claude_model" \
                     --output-format json \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
-                    > "$claude_raw" 2>&1; then
+                    < "$prompt_input" > "$claude_raw" 2>&1; then
                     extract_claude_content "$claude_raw" > "$claude_draft"
                     safe_extract_telemetry claude "$claude_raw" > "$claude_stats"
                     touch "$claude_done"
@@ -550,10 +589,10 @@ review_gate_generate() {
                 fi
             else
                 # Fallback to text mode
-                if echo "$prompt_content" | claude -p --model "$claude_model" \
+                if "${timeout_prefix[@]}" claude -p --model "$claude_model" \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
-                    > "$claude_draft" 2>&1; then
+                    < "$prompt_input" > "$claude_draft" 2>&1; then
                     _emit_empty_telemetry claude > "$claude_stats"
                     touch "$claude_done"
                 else
@@ -572,7 +611,7 @@ review_gate_generate() {
     echo "Waiting for generators to complete..." >&2
     local wait_start
     wait_start=$(date +%s)
-    local timeout=1800  # 30 minutes
+    local timeout="$generator_timeout"  # 30 minutes
 
     while true; do
         local codex_complete=false
@@ -594,11 +633,15 @@ review_gate_generate() {
             [[ -n "${pid_codex:-}" ]] && kill "$pid_codex" 2>/dev/null || true
             [[ -n "${pid_gemini:-}" ]] && kill "$pid_gemini" 2>/dev/null || true
             [[ -n "${pid_claude:-}" ]] && kill "$pid_claude" 2>/dev/null || true
+            [[ ! -f "$draft_dir/codex/codex.done" && ! -f "$draft_dir/codex/codex.failed" ]] && touch "$draft_dir/codex/codex.failed" 2>/dev/null || true
+            [[ ! -f "$draft_dir/gemini/gemini.done" && ! -f "$draft_dir/gemini/gemini.failed" ]] && touch "$draft_dir/gemini/gemini.failed" 2>/dev/null || true
+            [[ ! -f "$draft_dir/claude/claude.done" && ! -f "$draft_dir/claude/claude.failed" ]] && touch "$draft_dir/claude/claude.failed" 2>/dev/null || true
             break
         fi
 
         sleep 2
     done
+    rm -f "$prompt_input"
 
     # Count successful drafts and collect telemetry
     local draft_count=0

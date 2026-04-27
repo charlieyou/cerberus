@@ -35,6 +35,7 @@ GEMINI_AVAILABLE=false
 
 # Test timeout in seconds
 TEST_TIMEOUT=30
+TIMEOUT_BIN="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
 
 log_test() {
     echo -e "${YELLOW}TEST:${NC} $1"
@@ -97,8 +98,13 @@ run_with_timeout() {
     local output_file
     output_file=$(mktemp)
     local exit_code=0
+    if [[ -z "$TIMEOUT_BIN" ]]; then
+        echo "timeout/gtimeout not installed (install GNU coreutils on macOS)" >&2
+        rm -f "$output_file"
+        return 2
+    fi
     
-    if timeout "$timeout_secs" "$@" > "$output_file" 2>&1; then
+    if "$TIMEOUT_BIN" "$timeout_secs" "$@" > "$output_file" 2>&1; then
         cat "$output_file"
         rm -f "$output_file"
         return 0
@@ -117,6 +123,16 @@ run_with_timeout() {
     fi
 }
 
+CAPTURED_OUTPUT=""
+CAPTURED_STATUS=0
+run_with_timeout_capture() {
+    set +e
+    CAPTURED_OUTPUT=$(run_with_timeout "$@" 2>&1)
+    CAPTURED_STATUS=$?
+    set -e
+    return "$CAPTURED_STATUS"
+}
+
 # =============================================================================
 # JSON Output Tests
 # =============================================================================
@@ -131,8 +147,9 @@ test_claude_json_output() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" claude -p "Say hello" --output-format json 2>&1); then
-        local exit_code=$?
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" claude -p "Say hello" --output-format json; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "claude timed out after ${TEST_TIMEOUT}s"
         else
@@ -140,6 +157,7 @@ test_claude_json_output() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
     # Verify output is valid JSON
     if echo "$output" | jq -e . >/dev/null 2>&1; then
@@ -164,8 +182,13 @@ test_codex_json_output() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" codex exec "Say hello" --json 2>&1); then
-        local exit_code=$?
+    local -a codex_extra_args=()
+    if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+        codex_extra_args=(--ephemeral)
+    fi
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" codex exec "${codex_extra_args[@]}" --json "Say hello"; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "codex timed out after ${TEST_TIMEOUT}s"
         else
@@ -173,24 +196,21 @@ test_codex_json_output() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
-    # Codex outputs JSONL - verify each line is valid JSON
-    local valid_lines=0
-    local total_lines=0
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        ((total_lines++)) || true
-        if echo "$line" | jq -e . >/dev/null 2>&1; then
-            ((valid_lines++)) || true
-        fi
-    done <<< "$output"
+    # Codex outputs JSONL, but some versions also emit non-JSON diagnostics.
+    # Assert the required JSON events are present instead of treating diagnostics as failures.
+    local total_lines has_thread has_turn
+    total_lines=$(echo "$output" | jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | length')
+    has_thread=$(echo "$output" | jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(.type == "thread.started")) | length')
+    has_turn=$(echo "$output" | jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(.type == "turn.completed")) | length')
     
     if [[ $total_lines -eq 0 ]]; then
-        log_fail "codex produced no output"
-    elif [[ $valid_lines -eq $total_lines ]]; then
-        log_pass "codex output is valid JSONL ($valid_lines lines)"
+        log_fail "codex produced no JSON events"
+    elif [[ $has_thread -gt 0 && $has_turn -gt 0 ]]; then
+        log_pass "codex output has parseable JSONL events ($total_lines lines)"
     else
-        log_fail "codex output has invalid JSON lines ($valid_lines/$total_lines valid)"
+        log_fail "codex output missing expected JSONL events"
     fi
 }
 
@@ -204,8 +224,9 @@ test_gemini_json_output() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" gemini -o json "Say hello" 2>&1); then
-        local exit_code=$?
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" gemini -o json "Say hello"; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "gemini timed out after ${TEST_TIMEOUT}s"
         else
@@ -213,9 +234,16 @@ test_gemini_json_output() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
+    # Gemini may print retry diagnostics before the JSON payload.
+    local json_output="$output"
+    if ! echo "$json_output" | jq -e . >/dev/null 2>&1; then
+        json_output=$(echo "$output" | awk 'found || $0 ~ /^[[:space:]]*\{/ || $0 ~ /^[[:space:]]*\[/ { found=1; print }')
+    fi
+
     # Verify output is valid JSON
-    if echo "$output" | jq -e . >/dev/null 2>&1; then
+    if echo "$json_output" | jq -e . >/dev/null 2>&1; then
         log_pass "gemini output is valid JSON"
     else
         log_fail "gemini output is not valid JSON: ${output:0:200}"
@@ -236,8 +264,9 @@ test_claude_real_telemetry() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" claude -p "Say hello" --output-format json 2>&1); then
-        local exit_code=$?
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" claude -p "Say hello" --output-format json; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "claude timed out after ${TEST_TIMEOUT}s"
         else
@@ -245,6 +274,7 @@ test_claude_real_telemetry() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
     # Extract telemetry using our library function
     local telemetry
@@ -278,8 +308,13 @@ test_codex_real_telemetry() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" codex exec "Say hello" --json 2>&1); then
-        local exit_code=$?
+    local -a codex_extra_args=()
+    if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+        codex_extra_args=(--ephemeral)
+    fi
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" codex exec "${codex_extra_args[@]}" --json "Say hello"; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "codex timed out after ${TEST_TIMEOUT}s"
         else
@@ -287,6 +322,7 @@ test_codex_real_telemetry() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
     # Codex outputs JSONL - get the last line with telemetry
     local last_json
@@ -331,8 +367,9 @@ test_gemini_real_telemetry() {
     fi
     
     local output
-    if ! output=$(run_with_timeout "$TEST_TIMEOUT" gemini -o json "Say hello" 2>&1); then
-        local exit_code=$?
+    if ! run_with_timeout_capture "$TEST_TIMEOUT" gemini -o json "Say hello"; then
+        local exit_code="$CAPTURED_STATUS"
+        output="$CAPTURED_OUTPUT"
         if [[ $exit_code -eq 1 ]]; then
             log_skip "gemini timed out after ${TEST_TIMEOUT}s"
         else
@@ -340,6 +377,7 @@ test_gemini_real_telemetry() {
         fi
         return
     fi
+    output="$CAPTURED_OUTPUT"
     
     # Extract telemetry using our library function
     local telemetry
@@ -402,7 +440,11 @@ test_full_agent_telemetry() {
             output=$(run_with_timeout "$TEST_TIMEOUT" claude -p "Say hello" --output-format json 2>&1) || exit_code=$?
             ;;
         codex)
-            output=$(run_with_timeout "$TEST_TIMEOUT" codex exec "Say hello" --json 2>&1) || exit_code=$?
+            local -a codex_extra_args=()
+            if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+                codex_extra_args=(--ephemeral)
+            fi
+            output=$(run_with_timeout "$TEST_TIMEOUT" codex exec "${codex_extra_args[@]}" --json "Say hello" 2>&1) || exit_code=$?
             ;;
         gemini)
             output=$(run_with_timeout "$TEST_TIMEOUT" gemini -o json "Say hello" 2>&1) || exit_code=$?

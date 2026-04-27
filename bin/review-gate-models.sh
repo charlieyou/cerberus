@@ -797,6 +797,8 @@ spawn_reviewer() {
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
     local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
+    local reviewer_timeout="${REVIEW_GATE_REVIEWER_TIMEOUT:-1800}"
+    local reviewer_timeout_bin="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
 
     local output_file="$output_dir/${name}.json"
     local transcript_file="$output_dir/${name}.jsonl"
@@ -829,8 +831,14 @@ spawn_reviewer() {
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_POLICY="$gemini_policy" \
             REVIEW_MODEL="$gemini_model" \
+            REVIEW_TIMEOUT="$reviewer_timeout" \
+            REVIEW_TIMEOUT_BIN="$reviewer_timeout_bin" \
             spawn_detached_review_shell '
-                if gemini -m "$REVIEW_MODEL" --approval-mode plan --skip-trust --policy "$REVIEW_POLICY" --admin-policy "$REVIEW_POLICY" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                timeout_prefix=()
+                if [[ -n "${REVIEW_TIMEOUT_BIN:-}" && -n "${REVIEW_TIMEOUT:-}" ]]; then
+                    timeout_prefix=("$REVIEW_TIMEOUT_BIN" "$REVIEW_TIMEOUT")
+                fi
+                if "${timeout_prefix[@]}" gemini -m "$REVIEW_MODEL" --approval-mode plan --skip-trust --policy "$REVIEW_POLICY" --admin-policy "$REVIEW_POLICY" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
@@ -850,12 +858,18 @@ spawn_reviewer() {
             REVIEW_SCHEMA="$schema_file" \
             REVIEW_MODEL="$codex_model" \
             REVIEW_REASONING="$codex_reasoning" \
+            REVIEW_TIMEOUT="$reviewer_timeout" \
+            REVIEW_TIMEOUT_BIN="$reviewer_timeout_bin" \
             spawn_detached_review_shell '
+                timeout_prefix=()
+                if [[ -n "${REVIEW_TIMEOUT_BIN:-}" && -n "${REVIEW_TIMEOUT:-}" ]]; then
+                    timeout_prefix=("$REVIEW_TIMEOUT_BIN" "$REVIEW_TIMEOUT")
+                fi
                 codex_extra_args=()
                 if codex exec --help 2>&1 | grep -q -- "--ephemeral"; then
                     codex_extra_args=(--ephemeral)
                 fi
-                if codex exec "${codex_extra_args[@]}" -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
+                if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"
@@ -871,10 +885,16 @@ spawn_reviewer() {
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_MODEL="$claude_model" \
+            REVIEW_TIMEOUT="$reviewer_timeout" \
+            REVIEW_TIMEOUT_BIN="$reviewer_timeout_bin" \
             spawn_detached_review_shell '
+                timeout_prefix=()
+                if [[ -n "${REVIEW_TIMEOUT_BIN:-}" && -n "${REVIEW_TIMEOUT:-}" ]]; then
+                    timeout_prefix=("$REVIEW_TIMEOUT_BIN" "$REVIEW_TIMEOUT")
+                fi
                 read -r -a claude_allowed_tools <<< "$CLAUDE_ALLOWED_TOOLS"
                 read -r -a claude_disallowed_tools <<< "$CLAUDE_DISALLOWED_TOOLS"
-                if claude -p --model "$REVIEW_MODEL" --output-format json \
+                if "${timeout_prefix[@]}" claude -p --model "$REVIEW_MODEL" --output-format json \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
                     < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then

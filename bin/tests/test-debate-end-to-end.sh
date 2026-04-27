@@ -1914,9 +1914,94 @@ JSON
     fi
 }
 
+test_string_priority_p1_triggers_requires_decision() {
+    local scenario="string-priority-p1-triggers-requires-decision"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_home="$scenario_work/home"
+    local scenario_bin="$scenario_work/bin"
+    mkdir -p "$scenario_home" "$scenario_bin"
+
+    # AC-4 regression (spec L212 R6 priority gate): "Confidence MUST NOT
+    # downgrade a P0/P1 finding: any P0/P1 finding present in any active
+    # final-round reviewer's output, at any confidence, triggers
+    # `requires_decision` exactly as today, regardless of consensus mode."
+    #
+    # Reviewers may emit `priority` as either numeric `0..3` or the
+    # canonical string `"P0".."P3"` form. The schema permits both, and
+    # bin/review-gate-debate.sh L2863-L2866 explicitly does NOT mutate
+    # per-reviewer JSONs written for the Stop-hook. Before this fix, the
+    # priority gate at bin/review-gate-hook.sh L1032-L1037 only updated
+    # `max_priority` when the extracted value matched `^[0-9]+$`, so a
+    # string `"P1"` was silently dropped to "no P0/P1 present" and a
+    # PASS-majority scenario (with a single string-P1 NEEDS_WORK
+    # reviewer) would auto-approve instead of triggering requires_decision.
+    #
+    # This scenario constructs that exact situation: 2 reviewers, codex
+    # PASS with no findings, claude NEEDS_WORK with a string `"P1"`
+    # finding at low confidence (0.3) — the priority gate MUST fire
+    # before the majority-mode tiebreak runs, so the calculator's
+    # observable output MUST be requires_decision.
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-string-pri"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local sdir="$scenario_home/.claude/projects/-test-debate-string-pri/cerberus/$session"
+    mkdir -p "$sdir/reviews"
+
+    cat > "$sdir/reviews/codex.json" <<'JSON'
+{"verdict":"PASS","summary":"Looks good.","findings":[]}
+JSON
+    cat > "$sdir/reviews/claude.json" <<'JSON'
+{"verdict":"NEEDS_WORK","summary":"Suspected race at low confidence.","overall_confidence":0.5,"findings":[{"priority":"P1","title":"Suspected race","body":"Low-confidence P1 — must still block per spec R6.","file_path":"src/handler.ts","line_start":200,"line_end":205,"confidence":0.3}]}
+JSON
+    : > "$sdir/reviews/codex.done"
+    : > "$sdir/reviews/claude.done"
+
+    local now_iso
+    now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    cat > "$sdir/gate-state.json" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "mode":{"type":"plan","plan_path":"$SAMPLE_PLAN"},
+  "reviewers":{"codex":{},"claude":{}},
+  "consensus":null,
+  "decision":null,
+  "trigger_source":"plan",
+  "created_at":"$now_iso"
+}
+JSON
+    printf '0' > "$sdir/iteration.txt"
+
+    local report
+    report=$(run_scenario_check_and_get_report "$scenario_home" "$scenario_bin" "$session" "$transcript")
+
+    local class
+    if printf '%s' "$report" | grep -qF "## Revision Required"; then
+        class="requires_decision"
+    elif printf '%s' "$report" | grep -qF "## Review Complete"; then
+        class="auto_approve"
+    elif printf '%s' "$report" | grep -qF "## Max Iterations Reached"; then
+        class="max_iterations"
+    else
+        class="unknown"
+    fi
+
+    if [[ "$class" == "requires_decision" ]]; then
+        log_grn "$scenario: string priority \"P1\" at confidence 0.3 in 1-1 PASS/NEEDS_WORK split triggers requires_decision (spec L212 R6 priority gate is form-agnostic)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: string priority \"P1\" was silently downgraded — calculator returned '$class' instead of requires_decision (spec L212 R6 priority gate violation: confidence MUST NOT downgrade a P1 regardless of priority form)"
+        red_count=$((red_count + 1))
+    fi
+}
+
 test_aggregate_finding_cards_rendering
 test_verdict_divergence_rendering
 test_consensus_calculator_regression
+test_string_priority_p1_triggers_requires_decision
 
 # ---------------------------------------------------------------------------
 # T012 (Phase F.2) telemetry surfaces + distinct exit codes scenarios.

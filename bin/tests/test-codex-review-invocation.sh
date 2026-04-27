@@ -50,8 +50,13 @@ CODEX_TEST_MODEL="${CODEX_TEST_MODEL:-gpt-5.5}"
 CODEX_TEST_REASONING="${CODEX_TEST_REASONING:-low}"
 # 5-minute hard cap — codex with reasoning can take ~30s even for trivial prompts.
 CODEX_TEST_TIMEOUT="${CODEX_TEST_TIMEOUT:-300}"
+TIMEOUT_BIN="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
 
 check_prerequisites() {
+    if [[ -z "$TIMEOUT_BIN" ]]; then
+        log_fail "timeout/gtimeout not installed (install GNU coreutils on macOS)"
+        exit 1
+    fi
     if ! command -v codex >/dev/null 2>&1; then
         log_skip "codex CLI not installed (set PATH or install codex-cli)"
         echo ""
@@ -108,10 +113,16 @@ EOF
 run_codex() {
     local out_file="$REVIEWS_DIR/codex.json"
     local jsonl_file="$REVIEWS_DIR/codex.jsonl"
+    local -a codex_extra_args=()
+
+    if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
+        codex_extra_args=(--ephemeral)
+    fi
 
     # Exact invocation from bin/review-gate-models.sh (spawn_reviewer codex branch).
     # Run synchronously here — we want to verify the call, not the detach path.
-    if ! timeout "$CODEX_TEST_TIMEOUT" codex exec \
+    local codex_rc=0
+    "$TIMEOUT_BIN" "$CODEX_TEST_TIMEOUT" codex exec "${codex_extra_args[@]}" \
             -m "$CODEX_TEST_MODEL" \
             -c "model_reasoning_effort=$CODEX_TEST_REASONING" \
             -s read-only \
@@ -119,8 +130,9 @@ run_codex() {
             --output-schema "$TEST_DIR/review-schema.json" \
             --json \
             -o "$out_file" \
-            - < "$TEST_DIR/review.prompt" > "$jsonl_file" 2>&1; then
-        log_fail "codex exec failed (exit $?) — jsonl head: $(head -5 "$jsonl_file" 2>/dev/null)"
+            - < "$TEST_DIR/review.prompt" > "$jsonl_file" 2>&1 || codex_rc=$?
+    if [[ "$codex_rc" -ne 0 ]]; then
+        log_fail "codex exec failed (exit $codex_rc) — jsonl head: $(head -5 "$jsonl_file" 2>/dev/null)"
         return 1
     fi
     return 0
@@ -188,28 +200,15 @@ test_verdict_json_is_pure_and_valid() {
 test_jsonl_has_expected_events() {
     log_test "JSONL transcript contains thread.started and turn.completed"
 
-    # Every line must parse.
-    local bad=0 total=0
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        ((total++)) || true
-        if ! jq -e . >/dev/null 2>&1 <<<"$line"; then
-            ((bad++)) || true
-        fi
-    done < "$REVIEWS_DIR/codex.jsonl"
-
-    if (( bad > 0 )); then
-        log_fail "$bad/$total lines in codex.jsonl are not valid JSON"
-        return
-    fi
+    local total has_thread has_turn
+    total=$(jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | length' "$REVIEWS_DIR/codex.jsonl")
     if (( total == 0 )); then
-        log_fail "codex.jsonl has no lines"
+        log_fail "codex.jsonl has no JSON events"
         return
     fi
 
-    local has_thread has_turn
-    has_thread=$(jq -s 'map(select(.type == "thread.started")) | length' "$REVIEWS_DIR/codex.jsonl")
-    has_turn=$(jq -s 'map(select(.type == "turn.completed")) | length' "$REVIEWS_DIR/codex.jsonl")
+    has_thread=$(jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(.type == "thread.started")) | length' "$REVIEWS_DIR/codex.jsonl")
+    has_turn=$(jq -R -s 'split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(.type == "turn.completed")) | length' "$REVIEWS_DIR/codex.jsonl")
 
     if (( has_thread == 0 )); then
         log_fail "no thread.started event in JSONL"
@@ -220,7 +219,7 @@ test_jsonl_has_expected_events() {
         return
     fi
 
-    log_pass "JSONL has $total valid events including thread.started and turn.completed"
+    log_pass "JSONL has $total parseable events including thread.started and turn.completed"
 }
 
 test_extract_codex_telemetry_parses_jsonl() {
