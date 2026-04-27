@@ -45,7 +45,7 @@ run_hook() {
 }
 
 write_state() {
-    local max_rounds="${1:-3}"
+    local max_rounds="${1:-5}"
     local baseline_sha="${2:-$(git rev-parse HEAD)}"
     local repo="${3:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
     local state_dir="$TMP_ROOT/cerberus-task-completed-hook/abc123/T001"

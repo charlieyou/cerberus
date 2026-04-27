@@ -339,7 +339,7 @@ fi
 rm -f "${state_dir}/completion_intent"
 
 round="$(jq -r '.round // 0' "$state_file" 2>/dev/null || printf '0')"
-max_rounds="$(jq -r '.max_rounds // 3' "$state_file" 2>/dev/null || printf '3')"
+max_rounds="$(jq -r '.max_rounds // 5' "$state_file" 2>/dev/null || printf '5')"
 baseline_sha="$(jq -r '.baseline_sha // ""' "$state_file" 2>/dev/null || printf '')"
 task_context_path="$(jq -r '.task_context_path // ""' "$state_file" 2>/dev/null || printf '')"
 verify_script_path="$(jq -r '.verify_script_path // ""' "$state_file" 2>/dev/null || printf '')"
@@ -348,7 +348,7 @@ if [[ ! "$round" =~ ^[0-9]+$ ]]; then
     round="0"
 fi
 if [[ ! "$max_rounds" =~ ^[0-9]+$ || "$max_rounds" -lt 1 ]]; then
-    max_rounds="3"
+    max_rounds="5"
 fi
 
 if [[ "$round" -ge "$max_rounds" ]]; then

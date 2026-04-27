@@ -51,7 +51,7 @@ Abort with a clear error if any hard gate fails.
 2. Read YAML frontmatter and every `## T### — <subject>` section.
 3. For each task, parse the first fenced block immediately under the heading as `meta`; the body extends from after that fence until the next `## ` heading at column 0 or EOF.
 4. Build a dependency graph from `depends: [...]`; abort on unknown task IDs or cycles.
-5. Resolve `--max-review-rounds` as an integer greater than zero, default `3`.
+5. Resolve `--max-review-rounds` as an integer greater than zero, default `5`.
 6. Resolve `--skip-verify` for the final epic verifier only, default false. This flag does not skip the per-task project verification gate confirmed in Phase 1.5.
 
 ## Phase 1.5: Confirm Verification Gate
