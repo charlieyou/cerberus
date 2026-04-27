@@ -376,6 +376,361 @@ while [[ $i -lt ${#SHAPE_NAMES[@]} ]]; do
 done
 
 # ---------------------------------------------------------------------------
+# T008 Round-2 prompt-shape assertions.
+#
+# After Phase E.2 lands, every shape's Round-2 prompts MUST:
+#   - exist under iterations/<iter>/round-2/review.<reviewer>.prompt
+#   - contain the literal section header `Your Round 1 output:` (the
+#     prior-round-self block, NOT scrubbed by R1's deny-list)
+#   - contain the literal section header `Anonymized peer outputs:` (the
+#     anonymized peer block, R1-scrubbed)
+# ---------------------------------------------------------------------------
+assert_round2_prompts_exist_with_markers() {
+    local shape="$1"
+    local review_dir="$2"
+
+    # Locate the iteration directory (typically iterations/0/, but the
+    # round-2 dir lives at <review_dir>/iterations/<iter>/round-2/). Pick
+    # the highest-numbered iteration directory if multiple exist.
+    local iter_root="$review_dir/iterations"
+    if [[ ! -d "$iter_root" ]]; then
+        log_red "$shape: iterations/ root missing under $review_dir (T008 wires Round-2 staging dirs here)"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    # Pick the latest iteration. Names are integers (0, 1, ...).
+    local latest_iter
+    latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    if [[ -z "$latest_iter" ]]; then
+        log_red "$shape: no iteration subdir under $iter_root"
+        red_count=$((red_count + 1))
+        return
+    fi
+    local round2_dir="$iter_root/$latest_iter/round-2"
+    if [[ ! -d "$round2_dir" ]]; then
+        log_red "$shape: iterations/$latest_iter/round-2/ missing (Round 2 was not launched)"
+        red_count=$((red_count + 1))
+        return
+    fi
+
+    local r2_pass=1
+    local rev
+    for rev in codex gemini claude; do
+        local p="$round2_dir/review.${rev}.prompt"
+        if [[ ! -s "$p" ]]; then
+            log_red "$shape: $p missing or empty (Round-2 prompt for $rev not built)"
+            r2_pass=0
+            continue
+        fi
+        if ! grep -q "Your Round 1 output:" "$p"; then
+            log_red "$shape: $p missing 'Your Round 1 output:' marker"
+            r2_pass=0
+        fi
+        if ! grep -q "Anonymized peer outputs:" "$p"; then
+            log_red "$shape: $p missing 'Anonymized peer outputs:' marker"
+            r2_pass=0
+        fi
+    done
+
+    if [[ $r2_pass -eq 1 ]]; then
+        log_grn "$shape: Round-2 prompts exist for all 3 reviewers and contain self+peer markers"
+        green_count=$((green_count + 1))
+    else
+        red_count=$((red_count + 1))
+    fi
+}
+
+# T008: prior-round-self block MUST NOT be scrubbed by the R1 deny-list.
+# The reviewer's own Round-1 JSON is presented back to itself for self-
+# comparison; the spec is explicit that the self-block is exempt from
+# anonymization. The canned fake reviewer outputs in this test do not
+# contain deny-list tokens, so the structural assertion here is that the
+# self-block content (verdict + overall confidence + findings list)
+# appears in the prompt unscrubbed (no `[REDACTED]` markers in the
+# self-block region).
+assert_round2_self_block_not_scrubbed() {
+    local shape="$1"
+    local review_dir="$2"
+    local iter_root="$review_dir/iterations"
+    if [[ ! -d "$iter_root" ]]; then
+        return  # already counted as red by the prompt-existence assertion above
+    fi
+    local latest_iter
+    latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    local round2_dir="$iter_root/$latest_iter/round-2"
+    if [[ ! -d "$round2_dir" ]]; then
+        return
+    fi
+    local p="$round2_dir/review.codex.prompt"
+    if [[ ! -s "$p" ]]; then
+        return
+    fi
+    # Extract the self-block region (between `### Your Round 1 output:` and
+    # the next `###` header). Assert it contains the canned `Verdict:` line
+    # and the canned overall-confidence default `0.5` (the canned fake
+    # CLIs emit no `overall_confidence` so Mode B defaults to 0.5).
+    local self_region
+    self_region=$(awk '
+        /^### Your Round 1 output:/ { capture=1; next }
+        /^### Anonymized peer outputs:/ { capture=0 }
+        capture { print }
+    ' "$p")
+    if printf '%s' "$self_region" | grep -q "Verdict:" \
+       && printf '%s' "$self_region" | grep -q "Overall confidence:"; then
+        log_grn "$shape: Round-2 self-block contains Verdict + Overall confidence (rendered, not scrubbed)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$shape: Round-2 self-block missing Verdict or Overall confidence lines (canned fake produces both)"
+        red_count=$((red_count + 1))
+    fi
+}
+
+i=0
+while [[ $i -lt ${#SHAPE_NAMES[@]} ]]; do
+    name="${SHAPE_NAMES[$i]}"
+    dir="${SHAPE_DIRS[$i]}"
+    assert_round2_prompts_exist_with_markers "$name" "$dir"
+    assert_round2_self_block_not_scrubbed "$name" "$dir"
+    i=$((i + 1))
+done
+
+# ---------------------------------------------------------------------------
+# T008 terminal-abstention scenario: 3 reviewers, gemini fakes a Round-1
+# crash. Round 2 launches with claude+codex only; gemini's slot surfaces
+# to claude/codex's Round-2 peer block as `(peer abstained)`.
+# ---------------------------------------------------------------------------
+test_terminal_abstention_round1() {
+    local scenario="terminal-abstention-r1"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    # Reuse the codex/claude canned CLIs from above; replace gemini with
+    # one that always fails (forcing a Round-1 .failed sentinel and
+    # therefore Mode A abstain — terminal for the run).
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    cp "$FAKE_BIN/claude" "$scenario_bin/claude"
+    cat > "$scenario_bin/gemini" <<'GEMINI_FAIL'
+#!/usr/bin/env bash
+echo "fixture: gemini deliberate Round-1 crash" >&2
+exit 1
+GEMINI_FAIL
+    chmod +x "$scenario_bin/codex" "$scenario_bin/claude" "$scenario_bin/gemini"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-abstain"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-abstain/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    local stdout_f="$scenario_work/stdout"
+    local stderr_f="$scenario_work/stderr"
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini,claude \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >"$stdout_f" 2>"$stderr_f"
+    local rc=$?
+    set -e
+
+    # Locate iteration root + Round-2 dir.
+    local iter_root="$review_dir/iterations"
+    local latest_iter=""
+    if [[ -d "$iter_root" ]]; then
+        latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    fi
+    local round2_dir="$iter_root/$latest_iter/round-2"
+
+    # Assertion 1: Round-2 prompt exists for codex + claude (NOT for gemini).
+    if [[ -s "$round2_dir/review.codex.prompt" \
+          && -s "$round2_dir/review.claude.prompt" \
+          && ! -e "$round2_dir/review.gemini.prompt" ]]; then
+        log_grn "$scenario: Round 2 launches only for non-abstained Round-1 reviewers (codex + claude); gemini excluded"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: Round-2 prompt set unexpected. codex=$(test -s "$round2_dir/review.codex.prompt" && echo present || echo missing) claude=$(test -s "$round2_dir/review.claude.prompt" && echo present || echo missing) gemini=$(test -e "$round2_dir/review.gemini.prompt" && echo present || echo missing)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 2: gemini surfaces in claude's/codex's Round-2 peer block as
+    # `(peer abstained)`.
+    local saw_abstained=0
+    if [[ -s "$round2_dir/review.codex.prompt" ]] \
+       && grep -F "(peer abstained)" "$round2_dir/review.codex.prompt" >/dev/null; then
+        saw_abstained=$((saw_abstained + 1))
+    fi
+    if [[ -s "$round2_dir/review.claude.prompt" ]] \
+       && grep -F "(peer abstained)" "$round2_dir/review.claude.prompt" >/dev/null; then
+        saw_abstained=$((saw_abstained + 1))
+    fi
+    if [[ $saw_abstained -ge 1 ]]; then
+        log_grn "$scenario: gemini's slot surfaces as '(peer abstained)' in active peers' Round-2 prompts ($saw_abstained/2 prompts)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: '(peer abstained)' marker absent from active peers' Round-2 prompts"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 3: aggregate.json reflects 2 reviewers (codex + claude),
+    # not 3.
+    local aggregate="$review_dir/reviews/aggregate.json"
+    if [[ -f "$aggregate" ]]; then
+        local agg_reviewers
+        agg_reviewers=$(jq -r '.reviewers | sort | join(",")' "$aggregate" 2>/dev/null || echo "")
+        if [[ "$agg_reviewers" == "claude,codex" ]]; then
+            log_grn "$scenario: aggregate.json.reviewers == [claude, codex] (gemini excluded — terminal abstention)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: aggregate.json.reviewers='$agg_reviewers' (expected 'claude,codex')"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: aggregate.json absent — coordinator did not produce the final aggregate"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# T008 degraded-below-2 mid-debate scenario: 2 reviewers, gemini fakes a
+# Round-1 crash. Round 2 cannot launch (only 1 eligible reviewer remains)
+# → the coordinator hard-errors with the canonical degraded-below-2
+# message and on-disk shape; canonical reviews/ left empty.
+# ---------------------------------------------------------------------------
+test_degraded_below_2_round1() {
+    local scenario="degraded-below-2"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    local scenario_bin="$scenario_work/bin"
+    local scenario_home="$scenario_work/home"
+    mkdir -p "$scenario_bin" "$scenario_home"
+
+    cp "$FAKE_BIN/codex" "$scenario_bin/codex"
+    cat > "$scenario_bin/gemini" <<'GEMINI_FAIL'
+#!/usr/bin/env bash
+echo "fixture: gemini deliberate Round-1 crash" >&2
+exit 1
+GEMINI_FAIL
+    chmod +x "$scenario_bin/codex" "$scenario_bin/gemini"
+    if [[ -n "$REAL_NOHUP" ]]; then
+        cp "$FAKE_BIN/nohup" "$scenario_bin/nohup"
+    fi
+
+    local session="$scenario"
+    local trans_dir="$scenario_home/.claude/projects/-test-debate-degraded"
+    mkdir -p "$trans_dir"
+    local transcript="$trans_dir/$session.jsonl"
+    touch "$transcript"
+    local review_dir="$scenario_home/.claude/projects/-test-debate-degraded/cerberus/$session"
+    mkdir -p "$review_dir/reviews"
+
+    local stdout_f="$scenario_work/stdout"
+    local stderr_f="$scenario_work/stderr"
+    set +e
+    (
+        export HOME="$scenario_home"
+        export PATH="$scenario_bin:$PATH"
+        export CLAUDE_SESSION_ID="$session"
+        export REVIEW_GATE_TRANSCRIPT_PATH="$transcript"
+        export GEMINI_READONLY_SETTINGS_PATH="$GEMINI_SETTINGS"
+        export GEMINI_READONLY_POLICY_PATH="$GEMINI_POLICY"
+        export REVIEW_GATE_MAX_ROUNDS=3
+        export REVIEW_GATE_RERUN=1
+        export REVIEW_GATE_MAX_WAIT_SECONDS=30
+        export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+        "$REVIEW_GATE" spawn-plan-review \
+            --mode smart \
+            --agents codex,gemini \
+            --debate \
+            "$SAMPLE_PLAN"
+    ) >"$stdout_f" 2>"$stderr_f"
+    local rc=$?
+    set -e
+
+    # Assertion 1: coordinator emits the canonical degraded-below-2
+    # message on stderr.
+    if grep -F "debate degraded below 2 active reviewers in the final peer round" "$stderr_f" >/dev/null; then
+        log_grn "$scenario: stderr contains canonical degraded-below-2 error message"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: stderr missing canonical degraded-below-2 message"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 2: canonical reviews/ left empty of decision artifacts.
+    # The spec's "canonical $REVIEWS_DIR is left empty" pertains to per-
+    # reviewer review JSONs + sentinels + aggregate.json (the artifacts
+    # that drive the Stop-hook's consensus calculator). The schema file
+    # `review-schema.json` is emitted by the spawn flow BEFORE the
+    # coordinator runs and is not a per-reviewer decision artifact, so
+    # we exclude it from the empty-canonical check.
+    local canonical_count=0
+    local f
+    for f in "$review_dir/reviews"/codex.json \
+             "$review_dir/reviews"/claude.json \
+             "$review_dir/reviews"/gemini.json \
+             "$review_dir/reviews"/aggregate.json \
+             "$review_dir/reviews"/codex.done \
+             "$review_dir/reviews"/claude.done \
+             "$review_dir/reviews"/gemini.done; do
+        if [[ -e "$f" ]]; then
+            canonical_count=$((canonical_count + 1))
+        fi
+    done
+    if [[ "$canonical_count" == "0" ]]; then
+        log_grn "$scenario: canonical reviews/ left empty of per-reviewer JSONs/sentinels/aggregate.json"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: canonical reviews/ has $canonical_count decision artifact(s) (expected 0)"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 3: Round 2 was NOT launched — iterations/<iter>/round-2/
+    # is absent or empty (no review.<reviewer>.prompt files).
+    local iter_root="$review_dir/iterations"
+    local latest_iter=""
+    if [[ -d "$iter_root" ]]; then
+        latest_iter=$(ls -1 "$iter_root" 2>/dev/null | LC_ALL=C sort -n | tail -1)
+    fi
+    local round2_dir="$iter_root/$latest_iter/round-2"
+    local r2_prompt_count=0
+    if [[ -d "$round2_dir" ]]; then
+        r2_prompt_count=$(ls -1 "$round2_dir"/review.*.prompt 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    if [[ "$r2_prompt_count" == "0" ]]; then
+        log_grn "$scenario: Round 2 was NOT launched (no review.*.prompt files under round-2 staging)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: Round 2 was launched ($r2_prompt_count Round-2 prompts found) — degraded-below-2 should have hard-errored before launch"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# Run the new T008 scenario tests. They share WORK_DIR (cleaned up by the
+# trap on EXIT) but use private subdirectories per scenario so concurrent
+# state does not collide.
+test_terminal_abstention_round1
+test_degraded_below_2_round1
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo "" >&2

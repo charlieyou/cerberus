@@ -825,8 +825,369 @@ ${rendered}"
 }
 
 # ---------------------------------------------------------------------------
-# run_debate_coordinator — synchronous in-process coordinator (Phase D scope:
-# Round 1 only, stub aggregator, atomic promotion).
+# T008 — Round 2 + terminal-abstention + Option B + degraded-below-2 helpers.
+# ---------------------------------------------------------------------------
+
+# _rdc_wait_round_sentinels — sync-wait for `.done`/`.failed` sentinels under
+# a staging directory. Mirrors the polling pattern used elsewhere by the
+# Stop-hook + Phase D round-1 wait loop.
+#
+# Args:
+#   $1   staging_dir
+#   $2   timeout_sec       integer; budget the wait abandons after.
+#   $3   poll_interval     integer >=1; seconds between polls.
+#   $@   (4+) reviewer canonical names — every name MUST eventually have a
+#         `.done` or `.failed` file under $staging_dir for the wait to
+#         return success.
+#
+# Returns 0 if every reviewer's sentinel appears before the timeout; 1 on
+# timeout. Stderr remains silent on success; the caller decides how to
+# surface a timeout (e.g., "timeout waiting for round-N sentinels").
+_rdc_wait_round_sentinels() {
+    local staging_dir="$1"; shift
+    local timeout_sec="$1"; shift
+    local poll_interval="$1"; shift
+    local -a reviewers=("$@")
+
+    if [[ ${#reviewers[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local start_time now elapsed r
+    start_time=$(date +%s)
+    while true; do
+        local all_done="true"
+        for r in "${reviewers[@]}"; do
+            if [[ ! -f "$staging_dir/${r}.done" ]] && \
+               [[ ! -f "$staging_dir/${r}.failed" ]]; then
+                all_done="false"
+                break
+            fi
+        done
+        if [[ "$all_done" == "true" ]]; then
+            return 0
+        fi
+        now=$(date +%s)
+        elapsed=$(( now - start_time ))
+        if [[ $elapsed -ge $timeout_sec ]]; then
+            return 1
+        fi
+        sleep "$poll_interval"
+    done
+}
+
+# _rdc_classify_round_outputs — for each reviewer's per-round output under
+# $staging_dir, determine Mode A (abstain) vs. parseable-and-active (Mode B
+# confidence defaults applied transparently below).
+#
+# Mode A (abstain) triggers (per spec R2 / Section 2):
+#   - `<reviewer>.failed` sentinel present
+#   - `<reviewer>.json` missing or empty
+#   - JSON unparseable (extract_json fails after repair fallback)
+#   - Parseable JSON missing the `findings` field (the array itself absent —
+#     `findings: []` is valid Mode B output and counts as active)
+#   - Parseable JSON missing `verdict` (or with empty/non-string verdict)
+#   - Verdict not in {PASS, FAIL, NEEDS_WORK}
+#
+# Mode B (parseable, active) handling:
+#   - Missing `overall_confidence` → 0.5
+#   - Per-finding `confidence` missing → 0.5
+#   - Out-of-range values clamped to [0, 1]
+#   - Reviewer remains active; findings count toward final aggregation.
+#
+# Side effects:
+#   - For active reviewers, writes augmented JSON (Mode B defaults applied,
+#     no other modifications) to `$staging_dir/<reviewer>.augmented.json`.
+#     The augmented JSON is what the final aggregator reads when promoting
+#     the per-reviewer JSON to $REVIEWS_DIR.
+#   - For abstained reviewers, no augmented JSON is written.
+#
+# Output (stdout): one line per reviewer in input order:
+#   `<reviewer> active`     — reviewer is non-abstained, augmented JSON staged.
+#   `<reviewer> abstained`  — reviewer abstained for this round (Mode A).
+#
+# Returns 0 unconditionally; failure to classify a single reviewer is recorded
+# as `abstained` rather than propagated as a function-level error (the
+# coordinator decides whether the resulting active count satisfies the
+# eligibility threshold).
+_rdc_classify_round_outputs() {
+    local staging_dir="$1"; shift
+    local r out_file failed_file parsed verdict augmented aug_path guard
+
+    for r in "$@"; do
+        out_file="$staging_dir/${r}.json"
+        failed_file="$staging_dir/${r}.failed"
+
+        if [[ -f "$failed_file" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+        if [[ ! -s "$out_file" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+        if ! parsed=$(extract_json "$out_file" "$r" 2>/dev/null); then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+
+        # Mode A boundary: missing findings array OR missing/empty verdict
+        # OR verdict not in the allowed set ⇒ abstain entirely. `findings: []`
+        # (empty array) IS valid Mode B output and falls through to the
+        # active-augmentation step.
+        guard=$(printf '%s' "$parsed" | jq -r '
+            if (has("findings") and (.findings | type == "array"))
+                and (has("verdict") and (.verdict | type == "string") and (.verdict != "")) then
+                "ok"
+            else
+                "abstain"
+            end' 2>/dev/null || echo "abstain")
+        if [[ "$guard" != "ok" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+
+        verdict=$(printf '%s' "$parsed" | jq -r '.verdict // ""' 2>/dev/null)
+        case "$verdict" in
+            PASS|FAIL|NEEDS_WORK) ;;
+            *)
+                printf '%s abstained\n' "$r"
+                continue
+                ;;
+        esac
+
+        # Mode B confidence defaulting + clamping. Missing per-finding
+        # `confidence` defaults to 0.5; missing `overall_confidence` defaults
+        # to 0.5; values outside [0, 1] clamp at the boundary. Other fields
+        # (priority, file_path, line ranges, title, body, etc.) pass through
+        # unchanged so the augmented JSON remains a strict superset of the
+        # parsed output for downstream consumers.
+        augmented=$(printf '%s' "$parsed" | jq '
+            (.overall_confidence
+                | if (type == "number") then
+                    if . < 0 then 0 elif . > 1 then 1 else . end
+                  else 0.5 end) as $oc
+            | (.findings | map(. + {
+                confidence: (
+                    .confidence
+                    | if (type == "number") then
+                        if . < 0 then 0 elif . > 1 then 1 else . end
+                      else 0.5 end)
+              })) as $f
+            | .overall_confidence = $oc
+            | .findings = $f
+        ' 2>/dev/null)
+        if [[ -z "$augmented" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+
+        aug_path="$staging_dir/${r}.augmented.json"
+        if ! printf '%s\n' "$augmented" > "$aug_path"; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+        printf '%s active\n' "$r"
+    done
+}
+
+# _rdc_render_prior_round_self_block — render reviewer R's prior-round
+# verdict + per-finding confidence + overall confidence as a clearly-labelled
+# self-block for inclusion in the next-round prompt.
+#
+# Args:
+#   $1  reviewer JSON (string) — typically the augmented-JSON form (Mode B
+#       defaults applied) so the rendered self-block reflects the same
+#       `confidence` values the aggregator will see.
+#
+# Output (stdout): markdown text. NOT scrubbed by R1's deny-list (this is
+# R's own labelled output presented back to itself for self-comparison; the
+# spec is explicit that the self-block is exempt from anonymization).
+#
+# Empty findings render as the single line `Findings: (none)` (mirrors the
+# active-peer skeleton's empty-findings collapse rule for visual symmetry).
+_rdc_render_prior_round_self_block() {
+    local rj="$1"
+    local verdict overall_conf findings_count i title body conf
+    verdict=$(printf '%s' "$rj" | jq -r '.verdict // ""' 2>/dev/null)
+    overall_conf=$(printf '%s' "$rj" | jq -r '
+        (.overall_confidence // 0.5)
+        | if (type == "number") then
+            if . < 0 then 0 elif . > 1 then 1 else . end
+          else 0.5 end
+        | tostring' 2>/dev/null)
+    findings_count=$(printf '%s' "$rj" | jq -r '(.findings // []) | length' 2>/dev/null)
+
+    printf 'Verdict: %s\n' "$verdict"
+    printf 'Overall confidence: %s\n' "$overall_conf"
+    printf '\n'
+
+    if [[ -z "$findings_count" || "$findings_count" == "0" ]]; then
+        printf 'Findings: (none)\n'
+        return 0
+    fi
+
+    printf 'Findings:\n'
+    i=0
+    while [[ $i -lt $findings_count ]]; do
+        title=$(printf '%s' "$rj" | jq -r --argjson i "$i" '.findings[$i].title // ""' 2>/dev/null)
+        body=$(printf '%s' "$rj" | jq -r --argjson i "$i" '.findings[$i].body // ""' 2>/dev/null)
+        conf=$(printf '%s' "$rj" | jq -r --argjson i "$i" '
+            (.findings[$i].confidence // 0.5)
+            | if (type == "number") then
+                if . < 0 then 0 elif . > 1 then 1 else . end
+              else 0.5 end
+            | tostring' 2>/dev/null)
+        printf -- '- **%s** (confidence: %s)\n' "$title" "$conf"
+        if [[ -n "$body" ]]; then
+            # Indent each body line two spaces, mirroring the active-peer
+            # skeleton body indent (presentation-only; the JSON underneath
+            # is unchanged).
+            printf '%s\n' "$body" | sed 's/^/  /'
+        fi
+        i=$((i + 1))
+    done
+}
+
+# _rdc_build_round2_prompt — append a clearly-marked Round-2 instructions
+# section to reviewer R's existing Round-1 rendered prompt, save the result
+# as the Round-2 prompt for R, ready for spawn_reviewer.
+#
+# The Round-1 prompt at $reviews_dir/review.<reviewer>.prompt has already
+# been rendered with the canonical confidence anchors + R's per-reviewer
+# strategy directive (T004/T005); the artifact context is also inlined.
+# Round-2 reuses that prompt verbatim and appends:
+#
+#   - A short Round-2 directive instructing the reviewer to perform the
+#     confidence-conditioned update (lower-confidence prior findings yield
+#     to high-confidence peer dissent; high-confidence prior findings
+#     resist sycophantic peer pressure).
+#   - `### Your Round 1 output:` — R's own Round-1 verdict + findings (with
+#     per-finding confidence) + overall_confidence rendered via
+#     `_rdc_render_prior_round_self_block`. This block is NOT scrubbed by
+#     R1's deny-list per spec R2.
+#   - `### Anonymized peer outputs:` — the per-recipient anonymized peer
+#     block built by `debate_build_peer_blocks` (T007), which already
+#     applies the deny-list scrub + the per-recipient peer ordering.
+#
+# Args:
+#   $1  reviewer            canonical reviewer name
+#   $2  reviews_dir         canonical $REVIEWS_DIR (source of Round-1 prompt)
+#   $3  round1_dir          iterations/<iter>/round-1/ (source of R's
+#                           Round-1 augmented JSON)
+#   $4  round2_dir          iterations/<iter>/round-2/ (target staging dir)
+#
+# The peer block is read from the `PEER_BLOCK_<UPPER>` env var that
+# `debate_build_peer_blocks` exports per recipient.
+#
+# Returns 0 on success; non-zero (with stderr message) on any input-missing
+# error so the coordinator can surface a hard failure rather than spawn a
+# reviewer with a malformed Round-2 prompt.
+_rdc_build_round2_prompt() {
+    local reviewer="$1"
+    local reviews_dir="$2"
+    local round1_dir="$3"
+    local round2_dir="$4"
+
+    local round1_prompt="$reviews_dir/review.${reviewer}.prompt"
+    # Prefer the augmented JSON (Mode B defaults applied) so the rendered
+    # self-block reflects the same `confidence` values the aggregator sees;
+    # fall back to the raw .json if augmentation didn't write one (defensive
+    # — should not happen for an active reviewer).
+    local self_json_path="$round1_dir/${reviewer}.augmented.json"
+    if [[ ! -s "$self_json_path" ]]; then
+        self_json_path="$round1_dir/${reviewer}.json"
+    fi
+
+    local upper peer_block_var peer_block
+    upper=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
+    peer_block_var="PEER_BLOCK_${upper}"
+    peer_block="${!peer_block_var:-}"
+
+    if [[ ! -s "$round1_prompt" ]]; then
+        echo "_rdc_build_round2_prompt: missing Round-1 prompt for $reviewer at $round1_prompt" >&2
+        return 1
+    fi
+    if [[ ! -s "$self_json_path" ]]; then
+        echo "_rdc_build_round2_prompt: missing Round-1 output for active reviewer $reviewer at $self_json_path" >&2
+        return 1
+    fi
+    if [[ -z "$peer_block" ]]; then
+        echo "_rdc_build_round2_prompt: missing peer block for $reviewer (env var $peer_block_var unset or empty)" >&2
+        return 1
+    fi
+
+    local self_block
+    self_block=$(_rdc_render_prior_round_self_block "$(cat "$self_json_path")") || {
+        echo "_rdc_build_round2_prompt: failed to render prior-round-self block for $reviewer" >&2
+        return 1
+    }
+
+    local out_path="$round2_dir/review.${reviewer}.prompt"
+    {
+        cat "$round1_prompt"
+        printf '\n\n'
+        printf '## Round 2 of debate-mode review\n\n'
+        printf 'This is Round 2. Your Round 1 output and the anonymized peer outputs from your fellow reviewers are reproduced below. Use them to perform a confidence-conditioned update: lower-confidence prior findings yield more readily to high-confidence peer dissent; high-confidence prior findings resist sycophantic peer pressure. Review your prior position, weigh peer evidence, and emit a fresh JSON review for Round 2 in the same schema as Round 1 — including per-finding confidence and overall_confidence.\n\n'
+        printf '### Your Round 1 output:\n\n'
+        printf '%s\n' "$self_block"
+        printf '\n'
+        printf '### Anonymized peer outputs:\n\n'
+        printf '%s\n' "$peer_block"
+    } > "$out_path"
+}
+
+# _rdc_mark_state_degraded — write the canonical degraded-below-2 on-disk
+# shape into $STATE_FILE per spec R6 / plan L202:
+#
+#   .reviewers = {}
+#   .status = "awaiting_decision"
+#   .consensus = {
+#     verdict: "requires_decision",
+#     iteration: <existing or 0>,
+#     reason: "debate degraded below 2 active reviewers in the final peer round"
+#   }
+#   .decision = null
+#
+# The canonical $REVIEWS_DIR is left empty (the coordinator never promotes
+# anything in the degraded path) and per-round staging under
+# iterations/<iter>/round-N/ is preserved for inspection.
+#
+# This helper is best-effort: if $STATE_FILE is unset or jq fails to write
+# the temp file, the helper returns silently rather than raising another
+# error on top of the coordinator's already-fatal degraded-below-2 path.
+# T012 will refine the failure-shape contract; the canonical fields above
+# match the spec text and are stable across T012's expected revisions.
+_rdc_mark_state_degraded() {
+    local state_file="${STATE_FILE:-}"
+    if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+        return 0
+    fi
+    local state_tmp="$state_file.degraded.tmp.$$"
+    local now_ts reason
+    now_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+    reason="debate degraded below 2 active reviewers in the final peer round"
+    if jq --arg now "$now_ts" \
+          --arg reason "$reason" \
+       '.reviewers = {}
+        | .status = "awaiting_decision"
+        | .consensus = {
+            verdict: "requires_decision",
+            iteration: (.iteration // 0),
+            reason: $reason
+          }
+        | .decision = null' \
+       "$state_file" > "$state_tmp" 2>/dev/null; then
+        mv -f "$state_tmp" "$state_file"
+    else
+        rm -f "$state_tmp" 2>/dev/null || true
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run_debate_coordinator — synchronous in-process coordinator (T008 scope:
+# Round 1 + Round 2 + terminal-abstention + Option B + degraded-below-2 +
+# stub aggregator + atomic promotion).
 # ---------------------------------------------------------------------------
 #
 # This function is the post-spawn finalize phase of the debate flow. By the
@@ -838,66 +1199,77 @@ ${rendered}"
 #     DEBATE_ARTIFACT_ID
 #   - Emitted the debate-conditional `review-schema.json` (via
 #     `_emit_review_schema "true"` from review-gate-models.sh)
-#   - Rendered per-reviewer prompts under --debate (T005 wires per-reviewer
-#     STRATEGY_NAME_<REVIEWER> bytes into each reviewer's prompt)
-#   - Detached each reviewer via `spawn_reviewer` with the staging dir
-#     ($staging_dir below) as the output directory, NOT the canonical
-#     $REVIEWS_DIR. Per-reviewer JSONs/sentinels currently land in staging.
+#   - Rendered per-reviewer Round-1 prompts under --debate (T005 wires
+#     per-reviewer STRATEGY_NAME_<REVIEWER> bytes into each reviewer's
+#     prompt) into `$REVIEWS_DIR/review.<reviewer>.prompt`
+#   - Detached each Round-1 reviewer via `spawn_reviewer` with the round-1
+#     staging dir ($staging_dir below) as the output directory, NOT the
+#     canonical $REVIEWS_DIR. Per-reviewer JSONs/sentinels currently land
+#     in staging.
 #
-# This function then:
+# This function then runs the multi-round loop:
 #
-#   1. Polls for `<reviewer>.done`/`<reviewer>.failed` sentinels under
-#      $staging_dir (mirrors the Stop-hook's polling pattern at
-#      bin/review-gate-hook.sh ~810-830).
-#   2. Phase D stub aggregator: parses each reviewer's JSON via the existing
-#      `extract_json` (which handles codex/claude/gemini wrappers + repair
-#      fallback), augments with per-reviewer additive fields
-#      (overall_confidence, strategy, round=1, peer_responses_seen=[]), and
-#      computes a single-round verdict via "most severe wins" semantics.
-#      T009 replaces this stub with the real confidence-weighted dedup.
-#   3. Atomic promotion: writes each augmented per-reviewer JSON to a temp
-#      path inside $reviews_dir, then `mv`s into the final
-#      $reviews_dir/<reviewer>.json position, then writes the
-#      $reviews_dir/<reviewer>.done sentinel. Stop-hook polls for the
-#      sentinel before reading the JSON, so writing the JSON BEFORE the
-#      sentinel avoids the half-written-JSON race.
-#   4. Writes $reviews_dir/aggregate.json after every per-reviewer JSON has
-#      been promoted. The Phase D stub shape:
-#        verdict, summary (placeholder; T009 replaces),
-#        findings[] (simple union with raised_by per-reviewer attribution),
-#        consensus_mode, rounds_consumed=1, reviewers[] (active set),
-#        strategies{}.
+#   1. Wait for Round-1 sentinels under $staging_dir.
+#   2. Classify Round-1 outputs as Mode A (abstain) or Mode B (parseable +
+#      active, with confidence defaults applied to the augmented JSON).
+#   3. Eligibility check (mid-debate): if fewer than 2 active reviewers
+#      remain after Round 1, hard-error with the canonical degraded-below-2
+#      message + on-disk shape (return code 6). Round 2 is NOT launched.
+#   4. Build per-recipient anonymized peer blocks via T007's
+#      debate_build_peer_blocks (deny-list scrubbed; abstained Round-1
+#      reviewers surface as `(peer abstained)` per spec R1).
+#   5. For each active Round-1 reviewer R, append the Round-2 directive +
+#      R's prior-round-self block (NOT scrubbed) + R's per-recipient peer
+#      block (scrubbed) to R's Round-1 prompt; save as
+#      iterations/<iter>/round-2/review.<reviewer>.prompt.
+#   6. Spawn each active Round-1 reviewer for Round 2 via spawn_reviewer
+#      with `output_dir = iterations/<iter>/round-2/`. Round-1 abstainers
+#      are NOT re-invoked (terminal-abstention rule, spec Section 2 / R6).
+#   7. Wait for Round-2 sentinels.
+#   8. Classify Round-2 outputs (same Mode A / Mode B rules as Round 1).
+#   9. Final-round Option B: a Round-2 abstainer is fully excluded from
+#      the final aggregation. No per-reviewer JSON is written for them
+#      into $REVIEWS_DIR; their Round-1 output is preserved in
+#      iterations/<iter>/round-1/ telemetry only.
+#  10. Final eligibility: if fewer than 2 active reviewers in the final
+#      peer round, hard-error with degraded-below-2 (return code 6).
+#  11. Stub aggregator over Round-2 outputs (active final-round reviewers
+#      only): atomic promotion of per-reviewer augmented JSONs +
+#      `<reviewer>.done` sentinels into $REVIEWS_DIR; aggregate.json with
+#      rounds_consumed=2 written last. T009 replaces the stub aggregator
+#      with the real confidence-weighted dedup + canonical merge order.
 #
 # Failure handling:
 #
-#   On any aggregator error (parse failure, .failed sentinel, missing
-#   output, jq crash), $reviews_dir is left UNTOUCHED — no per-reviewer
-#   JSONs, no .done sentinels, no aggregate.json. Any temp staging files
-#   under $reviews_dir created during the partial promotion are removed.
-#   The function returns non-zero. Staging ($staging_dir) is preserved
-#   for inspection. T012 will pin the exact exit codes (5 for aggregator
-#   failure, 130 for SIGINT, 6 for degraded-below-2); for now any
-#   non-zero return is surfaced to the caller.
+#   On any aggregator error (parse failure post-classify, jq crash during
+#   promotion), $reviews_dir is left UNTOUCHED — no per-reviewer JSONs,
+#   no .done sentinels, no aggregate.json. Any temp staging files under
+#   $reviews_dir created during the partial promotion are removed. Staging
+#   directories ($staging_dir + iterations/<iter>/round-2/) are preserved
+#   for inspection.
+#
+#   Return codes:
+#     0  — coordinator success; aggregate.json + per-reviewer JSONs
+#          promoted to $REVIEWS_DIR.
+#     6  — degraded-below-2 (mid-debate or final-round); state file
+#          transitioned to awaiting_decision/requires_decision per
+#          `_rdc_mark_state_degraded`.
+#     1+ — other aggregator failure (timeout, jq crash, etc.). T012 will
+#          pin the public exit codes for each failure mode.
 #
 # Args (positional):
-#   $1  staging_dir     Per-round staging directory (e.g.,
+#   $1  staging_dir     Round-1 staging directory (e.g.,
 #                       $REVIEW_DIR/iterations/<iter>/round-1/) where
-#                       spawn_reviewer wrote per-reviewer outputs.
+#                       Round-1 spawn_reviewer wrote per-reviewer outputs.
 #   $2  reviews_dir     Canonical $REVIEWS_DIR (atomic-promotion target).
 #   $3  consensus_mode  One of majority|all|any. Recorded in
 #                       aggregate.json.consensus_mode for downstream
 #                       surfaces (gate report, telemetry).
-#   $4  timeout_sec     Max seconds to wait for all sentinels before
-#                       erroring out (REVIEW_GATE_MAX_WAIT_SECONDS default
-#                       is 1800 in `wait`; we use the same default here so
-#                       the synchronous coordinator's wait budget mirrors
-#                       the Stop-hook's existing budget).
+#   $4  timeout_sec     Max seconds to wait for sentinels per round.
 #   $5  poll_interval   Seconds between polls (>=1).
-#   $@  (6+)            Reviewer canonical names (active set).
-#
-# Returns 0 on success; non-zero on any aggregator error.
+#   $@  (6+)            Reviewer canonical names (initial Round-1 set).
 run_debate_coordinator() {
-    local staging_dir="${1:-}"
+    local round1_dir="${1:-}"
     local reviews_dir="${2:-}"
     local consensus_mode="${3:-majority}"
     local timeout_sec="${4:-1800}"
@@ -907,10 +1279,10 @@ run_debate_coordinator() {
         return 1
     fi
     shift 5
-    local -a _rdc_reviewers=("$@")
+    local -a _rdc_initial_reviewers=("$@")
 
-    if [[ -z "$staging_dir" || ! -d "$staging_dir" ]]; then
-        echo "run_debate_coordinator: staging directory missing or invalid: $staging_dir" >&2
+    if [[ -z "$round1_dir" || ! -d "$round1_dir" ]]; then
+        echo "run_debate_coordinator: round-1 staging directory missing or invalid: $round1_dir" >&2
         return 1
     fi
     if [[ -z "$reviews_dir" ]]; then
@@ -937,319 +1309,437 @@ run_debate_coordinator() {
         poll_interval=3
     fi
 
-    # ----------------------------------------------------------------------
-    # Phase D step 4: sync-wait for all reviewer sentinels in $staging_dir.
-    # Mirrors the polling pattern at bin/review-gate-hook.sh:810-830 — wait
-    # until every reviewer has either a .done or .failed sentinel under
-    # $staging_dir, OR the timeout budget elapses.
-    # ----------------------------------------------------------------------
-    local _rdc_start_time _rdc_now _rdc_elapsed _rdc_reviewer
-    _rdc_start_time=$(date +%s)
-    while true; do
-        local _rdc_all_done="true"
-        for _rdc_reviewer in "${_rdc_reviewers[@]}"; do
-            if [[ ! -f "$staging_dir/${_rdc_reviewer}.done" ]] && \
-               [[ ! -f "$staging_dir/${_rdc_reviewer}.failed" ]]; then
-                _rdc_all_done="false"
-                break
+    # iterations/<iter>/ — the parent of round-1 staging. Round 2 and beyond
+    # land at sibling round-N directories under this same iteration root.
+    local _rdc_iter_dir
+    _rdc_iter_dir=$(dirname "$round1_dir")
+
+    # Determine how many rounds to drive. T008 caps at 2 rounds always
+    # (fast/smart/max all run 2 rounds); T010 lifts the cap to 3 under
+    # `--mode max` once Round 3 is wired. Mode is propagated via env
+    # var REVIEW_GATE_DEBATE_MODE which `bin/review-gate` sets before
+    # invoking the coordinator.
+    local _rdc_max_rounds=2
+    # NOTE: T010 will switch this to 3 when REVIEW_GATE_DEBATE_MODE == "max".
+    # For T008 we deliberately keep the cap at 2 rounds so debate runs
+    # remain a Round 1 + Round 2 flow under every mode.
+
+    # ======================================================================
+    # Round 1: wait for sentinels, classify outputs, terminal-abstention.
+    # ======================================================================
+    if ! _rdc_wait_round_sentinels "$round1_dir" "$timeout_sec" "$poll_interval" "${_rdc_initial_reviewers[@]}"; then
+        echo "aggregator failed: timeout waiting for round-1 reviewer sentinels under $round1_dir (budget ${timeout_sec}s)" >&2
+        return 1
+    fi
+
+    local -a _rdc_round1_active=()
+    local _line _r _status
+    while IFS= read -r _line; do
+        [[ -z "$_line" ]] && continue
+        _r="${_line%% *}"
+        _status="${_line##* }"
+        if [[ "$_status" == "active" ]]; then
+            _rdc_round1_active+=("$_r")
+        fi
+    done < <(_rdc_classify_round_outputs "$round1_dir" "${_rdc_initial_reviewers[@]}")
+
+    # ======================================================================
+    # Mid-debate eligibility check (degraded-below-2 — pinned spec R6).
+    # If fewer than 2 reviewers passed Round 1 (active set under the
+    # terminal-abstention rule), Round 2 cannot launch and the run hard-
+    # errors with the canonical degraded-below-2 message + on-disk shape.
+    # The canonical $REVIEWS_DIR is left empty; partial Round-1 outputs
+    # are preserved under iterations/<iter>/round-1/ for inspection.
+    # ======================================================================
+    if [[ ${#_rdc_round1_active[@]} -lt 2 ]]; then
+        echo "debate degraded below 2 active reviewers in the final peer round" >&2
+        echo "  Round-1 active: ${_rdc_round1_active[*]:-(none)}" >&2
+        echo "  Round-1 abstained: " >&2
+        local _r_check
+        for _r_check in "${_rdc_initial_reviewers[@]}"; do
+            local _is_active=0
+            local _ar
+            for _ar in ${_rdc_round1_active[@]+"${_rdc_round1_active[@]}"}; do
+                if [[ "$_ar" == "$_r_check" ]]; then
+                    _is_active=1
+                    break
+                fi
+            done
+            if [[ $_is_active -eq 0 ]]; then
+                echo "    - $_r_check" >&2
             fi
         done
-        if [[ "$_rdc_all_done" == "true" ]]; then
-            break
-        fi
-        _rdc_now=$(date +%s)
-        _rdc_elapsed=$(( _rdc_now - _rdc_start_time ))
-        if [[ $_rdc_elapsed -ge $timeout_sec ]]; then
-            echo "aggregator failed: timeout waiting for round-1 reviewer sentinels under $staging_dir (elapsed ${_rdc_elapsed}s, budget ${timeout_sec}s)" >&2
+        _rdc_mark_state_degraded
+        return 6
+    fi
+
+    # ======================================================================
+    # Round 2: build per-recipient anonymized peer blocks + Round-2 prompts;
+    # spawn only Round-1 active reviewers (terminal-abstention); wait,
+    # classify.
+    # ======================================================================
+    local _rdc_round2_dir="$_rdc_iter_dir/round-2"
+    mkdir -p "$_rdc_round2_dir"
+    # Defensive cleanup: stale sentinels/JSONs from a prior re-spawn (e.g.,
+    # under REVIEW_GATE_RERUN=1 in the same iteration directory) would
+    # short-circuit the Round-2 wait loop before the freshly-spawned
+    # reviewers wrote outputs.
+    rm -f "$_rdc_round2_dir"/*.done \
+          "$_rdc_round2_dir"/*.failed \
+          "$_rdc_round2_dir"/*.json \
+          "$_rdc_round2_dir"/*.jsonl 2>/dev/null || true
+
+    # Build a clean source dir with only active Round-1 reviewers' augmented
+    # JSONs (renamed to `<reviewer>.json` so debate_build_peer_blocks can
+    # consume them via its existing per-reviewer file convention). This is
+    # the simplest way to surface Round-1 abstainers as `(peer abstained)`:
+    # the helper's missing-file branch triggers exactly when the per-reviewer
+    # JSON is absent, so omitting abstained reviewers' JSONs from the
+    # helper's source dir is sufficient.
+    #
+    # Why not pass `round1_dir` directly? Round-1 staging contains the raw
+    # provider-wrapped reviewer outputs (codex JSONL, claude session JSON,
+    # gemini JSON); a Round-1 reviewer that crashed has the raw stderr
+    # dumped into `<reviewer>.json` which is non-empty but not parseable
+    # as JSON. debate_build_peer_blocks's `[[ -s ... ]]` size-only check
+    # would then fall into the active-peer rendering path on a malformed
+    # JSON and silently emit a degraded skeleton instead of the
+    # `(peer abstained)` placeholder. Using the augmented JSON dir
+    # sidesteps both the wrapper-stripping question and the malformed-on-
+    # crash question — the augmented JSON is parseable by construction
+    # (otherwise the reviewer would have classified as abstained, hence
+    # would not be in the active set whose JSONs we copy here).
+    local _rdc_round1_clean="$_rdc_iter_dir/round-1-clean"
+    mkdir -p "$_rdc_round1_clean"
+    rm -f "$_rdc_round1_clean"/*.json 2>/dev/null || true
+    local _r_active
+    for _r_active in "${_rdc_round1_active[@]}"; do
+        local _src="$round1_dir/${_r_active}.augmented.json"
+        local _dst="$_rdc_round1_clean/${_r_active}.json"
+        if ! cp "$_src" "$_dst" 2>/dev/null; then
+            echo "aggregator failed: cannot stage augmented Round-1 JSON for $_r_active at $_dst" >&2
             return 1
         fi
-        sleep "$poll_interval"
     done
 
-    # ----------------------------------------------------------------------
-    # Phase D step 5+7: stub aggregator. Parse each reviewer's JSON,
-    # augment with debate additive fields, collect verdicts and findings.
-    # On any reviewer-level failure (failed sentinel, missing output,
-    # parse error, invalid verdict), abort BEFORE writing anything to
-    # $reviews_dir so the canonical state stays empty per the failure
-    # contract.
-    # ----------------------------------------------------------------------
-    local -a _rdc_promoted_temp_files=()
-    local -a _rdc_promoted_target_files=()
-    local -a _rdc_promoted_sentinels=()
-    local -a _rdc_active_reviewers=()
-    local _rdc_has_fail=0 _rdc_has_needs=0 _rdc_has_pass=0
-    local _rdc_all_findings='[]'
-    local _rdc_strategies_json='{}'
-    local _rdc_pid_suffix="$$"
+    # Build the anonymized peer block for each Round-2 recipient. Pass the
+    # FULL initial reviewer set so Round-1 abstainers surface as
+    # `(peer abstained)` per spec R1's terminal-abstention rule (their slot
+    # appears in the rendered block; their content does not). Abstained
+    # reviewers have no per-reviewer JSON in $_rdc_round1_clean, so the
+    # helper's missing-JSON branch fires for them.
+    if ! debate_build_peer_blocks \
+            "$_rdc_round2_dir" "$_rdc_round1_clean" "${REVIEW_GATE_DEBATE_SEED:-}" \
+            "${_rdc_initial_reviewers[@]}"; then
+        echo "aggregator failed: debate_build_peer_blocks failed for round 2" >&2
+        return 1
+    fi
 
-    for _rdc_reviewer in "${_rdc_reviewers[@]}"; do
-        # Per-reviewer strategy from the assign_strategies pass that
-        # bin/review-gate already ran before spawn. STRATEGY_NAME_<UPPER>
-        # was exported from there; default to verification-first as a
-        # defensive last resort (assign_strategies always exports a name
-        # under valid invocations, but bare-spawn fixtures may invoke
-        # this function directly with a synthetic env).
-        local _rdc_upper
-        _rdc_upper=$(echo "$_rdc_reviewer" | tr '[:lower:]' '[:upper:]')
-        local _rdc_strategy_var="STRATEGY_NAME_${_rdc_upper}"
-        local _rdc_strategy="${!_rdc_strategy_var:-verification-first}"
-        _rdc_strategies_json=$(printf '%s' "$_rdc_strategies_json" | jq \
-            --arg name "$_rdc_reviewer" --arg strategy "$_rdc_strategy" \
+    # Build per-recipient Round-2 prompts (append-style: extends each
+    # reviewer's Round-1 prompt with `Your Round 1 output:` + the per-
+    # recipient anonymized peer block). Aborts hard on any input-missing
+    # error so we never spawn a reviewer with a malformed prompt.
+    local _rev
+    for _rev in "${_rdc_round1_active[@]}"; do
+        if ! _rdc_build_round2_prompt "$_rev" "$reviews_dir" "$round1_dir" "$_rdc_round2_dir"; then
+            echo "aggregator failed: could not build Round-2 prompt for $_rev" >&2
+            return 1
+        fi
+    done
+
+    # Spawn Round-2 reviewers via spawn_reviewer with output_dir set to the
+    # Round-2 staging dir so per-reviewer JSONs/sentinels land there
+    # rather than in the canonical $REVIEWS_DIR (canonical-emptiness
+    # invariant — Round 2 outputs only get promoted after final
+    # aggregation succeeds).
+    local _rdc_schema_file="$reviews_dir/review-schema.json"
+    local -a _rdc_round2_spawned=()
+    for _rev in "${_rdc_round1_active[@]}"; do
+        local _r2_prompt="$_rdc_round2_dir/review.${_rev}.prompt"
+        if spawn_reviewer "$_rev" "$_rev" "$_r2_prompt" "$_rdc_schema_file" "$_rdc_round2_dir"; then
+            _rdc_round2_spawned+=("$_rev")
+        else
+            echo "warning: spawn_reviewer failed for $_rev in round 2 (no Round-2 sentinel will appear; reviewer treated as abstained)" >&2
+        fi
+    done
+
+    # spawn_reviewer for every Round-1 active reviewer should have
+    # succeeded (the Round-1 spawn already passed for the same reviewer);
+    # a sudden runtime CLI failure here is rare but possible. Defensive
+    # eligibility re-check: with fewer than 2 successful Round-2 spawns
+    # the run is degraded.
+    if [[ ${#_rdc_round2_spawned[@]} -lt 2 ]]; then
+        echo "debate degraded below 2 active reviewers in the final peer round" >&2
+        echo "  Round-2 spawn attempts succeeded for: ${_rdc_round2_spawned[*]:-(none)}" >&2
+        _rdc_mark_state_degraded
+        return 6
+    fi
+
+    if ! _rdc_wait_round_sentinels "$_rdc_round2_dir" "$timeout_sec" "$poll_interval" "${_rdc_round2_spawned[@]}"; then
+        echo "aggregator failed: timeout waiting for round-2 reviewer sentinels under $_rdc_round2_dir (budget ${timeout_sec}s)" >&2
+        return 1
+    fi
+
+    # Classify Round-2 outputs. Reviewers with .failed sentinel, missing
+    # output, unparseable JSON, or missing findings/verdict abstain (Mode
+    # A). Active reviewers get an augmented JSON with confidence defaults
+    # applied (Mode B).
+    local -a _rdc_round2_active=()
+    while IFS= read -r _line; do
+        [[ -z "$_line" ]] && continue
+        _r="${_line%% *}"
+        _status="${_line##* }"
+        if [[ "$_status" == "active" ]]; then
+            _rdc_round2_active+=("$_r")
+        fi
+    done < <(_rdc_classify_round_outputs "$_rdc_round2_dir" "${_rdc_round2_spawned[@]}")
+
+    # ======================================================================
+    # Final-round Option B exclusion (spec R6): a reviewer that abstains in
+    # the final peer round is fully excluded from the final aggregation.
+    # No per-reviewer JSON is written for them into $REVIEWS_DIR; their
+    # earlier-round outputs live in iterations/<iter>/round-1/ telemetry
+    # only. Their slot is absent from aggregate.json's reviewers[] and
+    # their findings do not contribute.
+    # ======================================================================
+    if [[ ${#_rdc_round2_active[@]} -lt 2 ]]; then
+        echo "debate degraded below 2 active reviewers in the final peer round" >&2
+        echo "  Round-2 active: ${_rdc_round2_active[*]:-(none)}" >&2
+        echo "  Round-2 abstained (Option B exclusion would apply if final-round count >=2): " >&2
+        local _r_check
+        for _r_check in "${_rdc_round2_spawned[@]}"; do
+            local _is_active=0
+            local _ar
+            for _ar in ${_rdc_round2_active[@]+"${_rdc_round2_active[@]}"}; do
+                if [[ "$_ar" == "$_r_check" ]]; then
+                    _is_active=1
+                    break
+                fi
+            done
+            if [[ $_is_active -eq 0 ]]; then
+                echo "    - $_r_check" >&2
+            fi
+        done
+        _rdc_mark_state_degraded
+        return 6
+    fi
+
+    # ======================================================================
+    # Final aggregation over Round-2 outputs (active final-round reviewers
+    # only — Option B). Stub aggregator preserves the Phase-D shape: simple
+    # union of findings + most-severe-wins verdict + canonical reviewers
+    # array + per-reviewer strategies map. T009 replaces this with the
+    # confidence-weighted dedup + canonical merge order.
+    # ======================================================================
+    local _rdc_final_dir="$_rdc_round2_dir"
+    local _rdc_rounds_consumed=2
+
+    if ! _rdc_aggregate_and_promote \
+            "$_rdc_final_dir" "$reviews_dir" \
+            "$consensus_mode" "$_rdc_rounds_consumed" \
+            "${_rdc_round2_active[@]}"; then
+        return 1
+    fi
+
+    return 0
+}
+
+# _rdc_aggregate_and_promote — stub aggregator + atomic promotion of the
+# active final-round reviewers' augmented JSONs (and the cross-reviewer
+# `aggregate.json`) into the canonical $REVIEWS_DIR.
+#
+# This helper expects each active reviewer to have an
+# `<reviewer>.augmented.json` file under $final_dir (written by
+# `_rdc_classify_round_outputs` during the final-round classification).
+# Augmented JSONs already have Mode B confidence defaults applied, so the
+# aggregator can read them verbatim.
+#
+# Side effects:
+#   - On success: promotes per-reviewer JSONs to $reviews_dir/<r>.json (with
+#     `.staging.<pid>` intermediate names so a partial promotion never
+#     surfaces a half-written reviewer JSON to the Stop-hook), writes
+#     `<r>.done` sentinels, then promotes aggregate.json last so a partial-
+#     promotion failure leaves no aggregate.json behind.
+#   - On any aggregator error: $reviews_dir is left UNTOUCHED. Temp staging
+#     files inside $reviews_dir created during the partial promotion are
+#     removed via `_rdc_cleanup_temp_files`. The function returns non-zero;
+#     the per-round staging dirs are preserved for inspection.
+#
+# Args:
+#   $1  final_dir          per-round staging dir holding augmented JSONs
+#   $2  reviews_dir        canonical $REVIEWS_DIR (atomic-promotion target)
+#   $3  consensus_mode     majority|all|any (recorded in aggregate.json)
+#   $4  rounds_consumed    integer (1, 2, or 3) — final-round number
+#   $@  (5+)               active final-round reviewer canonical names
+_rdc_aggregate_and_promote() {
+    local final_dir="$1"; shift
+    local reviews_dir="$1"; shift
+    local consensus_mode="$1"; shift
+    local rounds_consumed="$1"; shift
+    local -a active_reviewers=("$@")
+
+    local -a _aap_promoted_temp_files=()
+    local -a _aap_promoted_target_files=()
+    local -a _aap_promoted_sentinels=()
+    local _aap_has_fail=0 _aap_has_needs=0 _aap_has_pass=0
+    local _aap_all_findings='[]'
+    local _aap_strategies_json='{}'
+    local _aap_pid_suffix="$$"
+
+    local _r _upper _strategy_var _strategy _aug_path _augmented _verdict
+    local _final_json _findings_with_raised
+    for _r in "${active_reviewers[@]}"; do
+        _upper=$(echo "$_r" | tr '[:lower:]' '[:upper:]')
+        _strategy_var="STRATEGY_NAME_${_upper}"
+        _strategy="${!_strategy_var:-verification-first}"
+        _aap_strategies_json=$(printf '%s' "$_aap_strategies_json" | jq \
+            --arg name "$_r" --arg strategy "$_strategy" \
             '.[$name] = $strategy') || {
-            echo "aggregator failed: jq strategies bookkeeping for reviewer $_rdc_reviewer" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            echo "aggregator failed: jq strategies bookkeeping for reviewer $_r" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
             return 1
         }
 
-        local _rdc_out_file="$staging_dir/${_rdc_reviewer}.json"
-        local _rdc_failed_file="$staging_dir/${_rdc_reviewer}.failed"
-
-        # Phase D stub: any .failed sentinel is a hard error. T008 will
-        # introduce Mode A abstain handling (terminal-abstention rule) and
-        # the degraded-below-2 mid-debate gate; for Phase D we surface
-        # the failure as an aggregator error so it is not silently
-        # swallowed.
-        if [[ -f "$_rdc_failed_file" ]]; then
-            echo "aggregator failed: reviewer $_rdc_reviewer wrote .failed sentinel under $staging_dir (T008 will wire Mode A abstention; Phase D treats this as a hard aggregator error)" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+        _aug_path="$final_dir/${_r}.augmented.json"
+        if [[ ! -s "$_aug_path" ]]; then
+            echo "aggregator failed: missing augmented JSON for active reviewer $_r at $_aug_path" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
             return 1
         fi
+        _augmented=$(cat "$_aug_path")
 
-        if [[ ! -s "$_rdc_out_file" ]]; then
-            echo "aggregator failed: reviewer $_rdc_reviewer output missing or empty: $_rdc_out_file" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
-            return 1
-        fi
-
-        # Parse + unwrap via the shared extract_json helper (handles
-        # codex/claude/gemini provider wrappers and the existing repair
-        # fallback). extract_json is defined in review-gate-models.sh,
-        # which bin/review-gate sources before sourcing this file.
-        local _rdc_parsed
-        if ! _rdc_parsed=$(extract_json "$_rdc_out_file" "$_rdc_reviewer" 2>/dev/null); then
-            echo "aggregator failed: cannot parse reviewer $_rdc_reviewer output ($_rdc_out_file)" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
-            return 1
-        fi
-
-        # Verdict + findings — both REQUIRED per spec for the reviewer to
-        # have produced output at all (Mode A boundary distinguishes
-        # "didn't answer" from "had nothing to say"). Mode B confidence
-        # fallback applies ONLY to overall_confidence / per-finding
-        # confidence; absent `findings` (the field itself missing from
-        # the parsed JSON) or absent `verdict` is Mode A territory and
-        # MUST surface as an aggregator error in Phase D rather than be
-        # silently treated as `findings: []` / default verdict. Note that
-        # `findings: []` (empty array — reviewer saw no defects) IS
-        # valid; only the field's complete absence triggers this path.
-        # Claude/Gemini outputs are not schema-enforced by Codex's
-        # --output-schema, so this guard catches truncated or malformed
-        # reviewer outputs that would otherwise slip into aggregate.json.
-        # T008 will replace this with the real Mode A abstention path
-        # (terminal-abstention, abstained-peer surfacing).
-        local _rdc_findings_present
-        _rdc_findings_present=$(printf '%s' "$_rdc_parsed" | jq -r '
-            if has("findings") and (.findings | type == "array") then "yes" else "no" end' 2>/dev/null || echo "no")
-        if [[ "$_rdc_findings_present" != "yes" ]]; then
-            echo "aggregator failed: reviewer $_rdc_reviewer output missing or non-array .findings (Mode A boundary; Phase D treats absent findings as a hard aggregator error)" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
-            return 1
-        fi
-
-        # Verdict — required for the stub aggregator's "most severe wins"
-        # rollup. Invalid (or absent / empty-string) verdict is an
-        # aggregator error in Phase D.
-        local _rdc_verdict
-        _rdc_verdict=$(printf '%s' "$_rdc_parsed" | jq -r '.verdict // ""' 2>/dev/null || echo "")
-        case "$_rdc_verdict" in
-            PASS) _rdc_has_pass=$((_rdc_has_pass + 1)) ;;
-            FAIL) _rdc_has_fail=$((_rdc_has_fail + 1)) ;;
-            NEEDS_WORK) _rdc_has_needs=$((_rdc_has_needs + 1)) ;;
+        _verdict=$(printf '%s' "$_augmented" | jq -r '.verdict // ""' 2>/dev/null)
+        case "$_verdict" in
+            PASS) _aap_has_pass=$((_aap_has_pass + 1)) ;;
+            FAIL) _aap_has_fail=$((_aap_has_fail + 1)) ;;
+            NEEDS_WORK) _aap_has_needs=$((_aap_has_needs + 1)) ;;
             *)
-                echo "aggregator failed: invalid verdict '$_rdc_verdict' for reviewer $_rdc_reviewer" >&2
-                _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+                # Should be unreachable — _rdc_classify_round_outputs
+                # already gates verdict to {PASS, FAIL, NEEDS_WORK}.
+                echo "aggregator failed: invalid verdict '$_verdict' for reviewer $_r (post-classify)" >&2
+                _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
                 return 1
                 ;;
         esac
 
-        # overall_confidence: default 0.5 under Mode B (parseable JSON,
-        # missing/out-of-range confidence); clamp to [0,1]. T008+ extends
-        # this with per-finding confidence handling.
-        local _rdc_overall_conf
-        _rdc_overall_conf=$(printf '%s' "$_rdc_parsed" | jq -r '
-            (.overall_confidence // 0.5)
-            | if (type != "number") then 0.5
-              elif . < 0 then 0
-              elif . > 1 then 1
-              else .
-              end' 2>/dev/null || echo "0.5")
-
-        # Augment with per-reviewer additive fields (overall_confidence,
-        # strategy, round=1, peer_responses_seen=[]). Phase D: peer block
-        # is empty in Round 1 (no prior round → no peers presented).
-        local _rdc_augmented
-        _rdc_augmented=$(printf '%s' "$_rdc_parsed" | jq \
-            --arg strategy "$_rdc_strategy" \
-            --argjson conf "$_rdc_overall_conf" \
+        # Stamp the per-reviewer JSON with the additive debate fields the
+        # Stop-hook + downstream surfaces expect. peer_responses_seen is
+        # left as an empty array in the stub aggregator (T009/T010 will
+        # populate from the actual peer-block opaque IDs).
+        _final_json=$(printf '%s' "$_augmented" | jq \
+            --arg strategy "$_strategy" \
+            --argjson rnd "$rounds_consumed" \
             '. + {
-                overall_confidence: $conf,
                 strategy: $strategy,
-                round: 1,
-                peer_responses_seen: []
+                round: $rnd,
+                peer_responses_seen: (.peer_responses_seen // [])
             }') || {
-            echo "aggregator failed: jq augment for reviewer $_rdc_reviewer" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            echo "aggregator failed: jq stamp additive fields for $_r" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
             return 1
         }
 
-        # Stage the promoted JSON to a hidden temp inside $reviews_dir.
-        # Using a `.staging.<pid>` suffix so a partial promotion never
-        # leaves a JSON the Stop-hook would mistakenly read (the Stop-hook
-        # globs on `$REVIEWS_DIR/<reviewer>.json`).
-        local _rdc_tmp_path="$reviews_dir/.${_rdc_reviewer}.json.staging.$_rdc_pid_suffix"
-        local _rdc_target_path="$reviews_dir/${_rdc_reviewer}.json"
-        local _rdc_sentinel_path="$reviews_dir/${_rdc_reviewer}.done"
-
-        if ! printf '%s\n' "$_rdc_augmented" > "$_rdc_tmp_path"; then
-            echo "aggregator failed: cannot stage augmented JSON for $_rdc_reviewer at $_rdc_tmp_path" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_tmp_path"
+        local _tmp_path="$reviews_dir/.${_r}.json.staging.$_aap_pid_suffix"
+        local _target_path="$reviews_dir/${_r}.json"
+        local _sentinel_path="$reviews_dir/${_r}.done"
+        if ! printf '%s\n' "$_final_json" > "$_tmp_path"; then
+            echo "aggregator failed: cannot stage augmented JSON for $_r at $_tmp_path" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"} "$_tmp_path"
             return 1
         fi
 
-        _rdc_promoted_temp_files+=("$_rdc_tmp_path")
-        _rdc_promoted_target_files+=("$_rdc_target_path")
-        _rdc_promoted_sentinels+=("$_rdc_sentinel_path")
-        _rdc_active_reviewers+=("$_rdc_reviewer")
+        _aap_promoted_temp_files+=("$_tmp_path")
+        _aap_promoted_target_files+=("$_target_path")
+        _aap_promoted_sentinels+=("$_sentinel_path")
 
-        # Append findings (simple union per Phase D scope; T009 replaces
-        # with confidence-weighted dedup + canonical merge order). Each
-        # finding gets a `raised_by` array pinning the source reviewer so
-        # downstream surfaces (gate report, T009 dedup, telemetry) can
-        # attribute findings.
-        local _rdc_rev_findings
-        _rdc_rev_findings=$(printf '%s' "$_rdc_augmented" | jq \
-            --arg name "$_rdc_reviewer" \
-            '(.findings // []) | map(. + {raised_by: [$name]})' 2>/dev/null) || _rdc_rev_findings='[]'
-        _rdc_all_findings=$(jq -c --argjson new "$_rdc_rev_findings" '. + $new' <<< "$_rdc_all_findings") || {
-            echo "aggregator failed: jq merge findings for $_rdc_reviewer" >&2
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+        # Append findings to the cross-reviewer union (simple union with
+        # raised_by attribution; T009 replaces with confidence-weighted
+        # dedup).
+        _findings_with_raised=$(printf '%s' "$_final_json" | jq \
+            --arg name "$_r" \
+            '(.findings // []) | map(. + {raised_by: [$name]})' 2>/dev/null) || _findings_with_raised='[]'
+        _aap_all_findings=$(jq -c --argjson new "$_findings_with_raised" '. + $new' <<< "$_aap_all_findings") || {
+            echo "aggregator failed: jq merge findings for $_r" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
             return 1
         }
     done
 
-    # ----------------------------------------------------------------------
-    # Stub aggregate verdict — "most severe wins" matches today's
-    # `wait_for_consensus`/`review_gate_wait` rollup at
-    # bin/review-gate:3855-3895 so the Phase D shape is internally
-    # consistent. T009 replaces with the real confidence-weighted
-    # tiebreak path.
-    # ----------------------------------------------------------------------
-    local _rdc_agg_verdict=""
-    if [[ $_rdc_has_fail -gt 0 ]]; then
-        _rdc_agg_verdict="FAIL"
-    elif [[ $_rdc_has_needs -gt 0 ]]; then
-        _rdc_agg_verdict="NEEDS_WORK"
-    elif [[ $_rdc_has_pass -gt 0 ]]; then
-        _rdc_agg_verdict="PASS"
+    # Aggregate verdict (most-severe-wins; T009 replaces with the
+    # confidence-weighted tiebreak path).
+    local _aap_agg_verdict=""
+    if [[ $_aap_has_fail -gt 0 ]]; then
+        _aap_agg_verdict="FAIL"
+    elif [[ $_aap_has_needs -gt 0 ]]; then
+        _aap_agg_verdict="NEEDS_WORK"
+    elif [[ $_aap_has_pass -gt 0 ]]; then
+        _aap_agg_verdict="PASS"
     else
-        echo "aggregator failed: no valid verdicts collected from round-1 reviewers" >&2
-        _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+        echo "aggregator failed: no valid verdicts collected from final-round reviewers" >&2
+        _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
         return 1
     fi
 
-    # Active reviewers list (canonical alphabetical order). The
-    # aggregate.json shape pins reviewers[] as the set of reviewers active
-    # in the final round; for Phase D that is just the Round-1 set.
-    local _rdc_active_sorted
-    _rdc_active_sorted=$(printf '%s\n' "${_rdc_active_reviewers[@]}" | LC_ALL=C sort)
-    local _rdc_active_json='[]'
-    local _rdc_r
-    while IFS= read -r _rdc_r; do
-        [[ -z "$_rdc_r" ]] && continue
-        _rdc_active_json=$(printf '%s' "$_rdc_active_json" | jq --arg n "$_rdc_r" '. + [$n]')
-    done <<< "$_rdc_active_sorted"
+    # Active reviewers list (canonical alphabetical order).
+    local _aap_active_sorted
+    _aap_active_sorted=$(printf '%s\n' "${active_reviewers[@]}" | LC_ALL=C sort)
+    local _aap_active_json='[]'
+    local _aap_r
+    while IFS= read -r _aap_r; do
+        [[ -z "$_aap_r" ]] && continue
+        _aap_active_json=$(printf '%s' "$_aap_active_json" | jq --arg n "$_aap_r" '. + [$n]')
+    done <<< "$_aap_active_sorted"
 
-    local _rdc_aggregate_tmp="$reviews_dir/.aggregate.json.staging.$_rdc_pid_suffix"
+    local _aap_aggregate_tmp="$reviews_dir/.aggregate.json.staging.$_aap_pid_suffix"
     if ! jq -n \
-        --arg verdict "$_rdc_agg_verdict" \
-        --argjson findings "$_rdc_all_findings" \
+        --arg verdict "$_aap_agg_verdict" \
+        --argjson findings "$_aap_all_findings" \
         --arg consensus_mode "$consensus_mode" \
-        --argjson reviewers "$_rdc_active_json" \
-        --argjson strategies "$_rdc_strategies_json" \
+        --argjson rounds_consumed "$rounds_consumed" \
+        --argjson reviewers "$_aap_active_json" \
+        --argjson strategies "$_aap_strategies_json" \
         '{
             verdict: $verdict,
-            summary: "Phase D stub aggregate (single-round, no dedup; T009 replaces with confidence-weighted dedup and the canonical jq summary template).",
+            summary: "Phase E.2 stub aggregate (multi-round; T009 replaces with confidence-weighted dedup and the canonical jq summary template).",
             findings: $findings,
             consensus_mode: $consensus_mode,
-            rounds_consumed: 1,
+            rounds_consumed: $rounds_consumed,
             reviewers: $reviewers,
             strategies: $strategies
-        }' > "$_rdc_aggregate_tmp"; then
+        }' > "$_aap_aggregate_tmp"; then
         echo "aggregator failed: jq could not produce aggregate.json" >&2
-        _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_aggregate_tmp"
+        _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"} "$_aap_aggregate_tmp"
         return 1
     fi
 
-    # ----------------------------------------------------------------------
-    # Phase D step 6: atomic promotion. mv each reviewer temp into the
-    # canonical target, then write the .done sentinel (sentinel last so a
-    # Stop-hook poll never reads a half-written reviewer JSON). aggregate
-    # last so a partial-promotion failure leaves no aggregate.json.
-    # ----------------------------------------------------------------------
-    local _rdc_i=0
-    while [[ $_rdc_i -lt ${#_rdc_promoted_temp_files[@]} ]]; do
-        if ! mv -f "${_rdc_promoted_temp_files[$_rdc_i]}" "${_rdc_promoted_target_files[$_rdc_i]}"; then
-            echo "aggregator failed: cannot promote ${_rdc_promoted_temp_files[$_rdc_i]} -> ${_rdc_promoted_target_files[$_rdc_i]}" >&2
-            # Best-effort cleanup: remove any sentinels/JSONs we already
-            # promoted so $reviews_dir does not surface a half-promoted
-            # state to the Stop-hook.
-            local _rdc_j=0
-            while [[ $_rdc_j -lt ${#_rdc_promoted_target_files[@]} ]]; do
-                rm -f "${_rdc_promoted_target_files[$_rdc_j]}" "${_rdc_promoted_sentinels[$_rdc_j]}" 2>/dev/null || true
-                _rdc_j=$((_rdc_j + 1))
+    # Atomic promotion. Per-reviewer JSON via mv first, then sentinel last.
+    # aggregate.json last of all so a per-reviewer promotion failure leaves
+    # no aggregate.json behind.
+    local _aap_i=0
+    while [[ $_aap_i -lt ${#_aap_promoted_temp_files[@]} ]]; do
+        if ! mv -f "${_aap_promoted_temp_files[$_aap_i]}" "${_aap_promoted_target_files[$_aap_i]}"; then
+            echo "aggregator failed: cannot promote ${_aap_promoted_temp_files[$_aap_i]} -> ${_aap_promoted_target_files[$_aap_i]}" >&2
+            local _aap_j=0
+            while [[ $_aap_j -lt ${#_aap_promoted_target_files[@]} ]]; do
+                rm -f "${_aap_promoted_target_files[$_aap_j]}" "${_aap_promoted_sentinels[$_aap_j]}" 2>/dev/null || true
+                _aap_j=$((_aap_j + 1))
             done
-            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_aggregate_tmp"
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"} "$_aap_aggregate_tmp"
             return 1
         fi
-        # Sentinel last (empty file; Stop-hook only checks existence).
-        : > "${_rdc_promoted_sentinels[$_rdc_i]}"
-        _rdc_i=$((_rdc_i + 1))
+        : > "${_aap_promoted_sentinels[$_aap_i]}"
+        _aap_i=$((_aap_i + 1))
     done
 
-    if ! mv -f "$_rdc_aggregate_tmp" "$reviews_dir/aggregate.json"; then
+    if ! mv -f "$_aap_aggregate_tmp" "$reviews_dir/aggregate.json"; then
         echo "aggregator failed: cannot promote aggregate.json into $reviews_dir" >&2
-        # Roll back per-reviewer promotions to keep $reviews_dir clean.
-        local _rdc_k=0
-        while [[ $_rdc_k -lt ${#_rdc_promoted_target_files[@]} ]]; do
-            rm -f "${_rdc_promoted_target_files[$_rdc_k]}" "${_rdc_promoted_sentinels[$_rdc_k]}" 2>/dev/null || true
-            _rdc_k=$((_rdc_k + 1))
+        local _aap_k=0
+        while [[ $_aap_k -lt ${#_aap_promoted_target_files[@]} ]]; do
+            rm -f "${_aap_promoted_target_files[$_aap_k]}" "${_aap_promoted_sentinels[$_aap_k]}" 2>/dev/null || true
+            _aap_k=$((_aap_k + 1))
         done
-        rm -f "$_rdc_aggregate_tmp" 2>/dev/null || true
+        rm -f "$_aap_aggregate_tmp" 2>/dev/null || true
         return 1
-    fi
-
-    # ----------------------------------------------------------------------
-    # T007 R1 anonymization: build per-recipient peer blocks from the
-    # promoted Round-1 JSONs. Populates `PEER_BLOCK_<UPPER>` env vars and
-    # writes `peer-block.<recipient>.txt` files into $staging_dir for the
-    # T008 Round-2 launcher to consume.
-    #
-    # Seed comes from REVIEW_GATE_DEBATE_SEED (set by bin/review-gate when
-    # `--debate-seed N` is passed) so this function's caller signature does
-    # not need to be widened. Empty seed → production-path shuffle per
-    # spec R1.
-    #
-    # Failure here is non-fatal in Phase D: Round 2 is not launched yet,
-    # so a missing peer block has no observable downstream effect. T008
-    # will harden this into a hard failure once it actually consumes the
-    # peer block. The warning is logged so the failure surfaces in the
-    # spawn output.
-    # ----------------------------------------------------------------------
-    if ! debate_build_peer_blocks \
-            "$staging_dir" "$reviews_dir" "${REVIEW_GATE_DEBATE_SEED:-}" \
-            "${_rdc_active_reviewers[@]}"; then
-        echo "warning: debate_build_peer_blocks failed (T007 anonymization). Round-2 (T008) will need to recover." >&2
     fi
 
     return 0

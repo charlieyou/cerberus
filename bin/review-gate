@@ -280,10 +280,22 @@ substitute_debate_placeholders() {
     # Substitute via awk: read each strategy file once via getline (preserving
     # exact line bytes), then for each input line, replace whole-line
     # placeholders with the file contents (or consume the line for
-    # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK). The accumulator+`print` pattern
-    # produces output bytes byte-identical to the source files (each source
-    # ends with a single trailing \n, which is what `print` emits).
-    awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" '
+    # PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK when the matching env vars are
+    # unset). The accumulator+`print` pattern produces output bytes
+    # byte-identical to the source files (each source ends with a single
+    # trailing \n, which is what `print` emits).
+    #
+    # T008: Round-2 prompt construction may pre-render per-recipient PEER_BLOCK
+    # and PRIOR_ROUND_SELF_BLOCK content into env vars before invoking
+    # build_prompt; when set (non-empty), the matching placeholder line is
+    # substituted with the env-var content (in place of consume). When unset
+    # (or empty — Round 1 default), the placeholder line is consumed entirely
+    # (line + trailing newline) so the rendered prompt is byte-identical to a
+    # template that never had the placeholder. Under `--debate` absent the
+    # consume path runs unconditionally above (the early `sed -E` branch).
+    awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" \
+        -v peer_block="${PEER_BLOCK:-}" \
+        -v prior_self_block="${PRIOR_ROUND_SELF_BLOCK:-}" '
         BEGIN {
             n = 0
             while ((getline line < anchors_file) > 0) {
@@ -300,8 +312,14 @@ substitute_debate_placeholders() {
         }
         /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;  next }
         /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy; next }
-        /^\$\{PEER_BLOCK\}$/             { next }
-        /^\$\{PRIOR_ROUND_SELF_BLOCK\}$/ { next }
+        /^\$\{PEER_BLOCK\}$/             {
+                                            if (peer_block != "") print peer_block
+                                            next
+                                         }
+        /^\$\{PRIOR_ROUND_SELF_BLOCK\}$/ {
+                                            if (prior_self_block != "") print prior_self_block
+                                            next
+                                         }
         { print }
     '
 }
@@ -3503,16 +3521,44 @@ with open(out_path, "wb") as f: f.write(out)
         # run_debate_coordinator's positional signature. Empty `debate_seed`
         # ⇒ the production-path /dev/urandom shuffle.
         export REVIEW_GATE_DEBATE_SEED="$debate_seed"
-        if ! run_debate_coordinator \
+        # Export the captured --mode so the coordinator can determine the
+        # max round count (2 under fast/smart, 3 under max — T010 wires
+        # Round 3). T008 caps at 2 rounds always; T010 lifts this when
+        # max-mode is the active mode.
+        export REVIEW_GATE_DEBATE_MODE="$mode"
+        # Capture the staging-dir's iteration parent so the coordinator can
+        # locate iterations/<iter>/round-2/ relative to the round-1 staging
+        # without re-deriving the path from REVIEW_DIR + iter#.
+        local _rdc_rc=0
+        run_debate_coordinator \
                 "$_debate_staging_dir" "$REVIEWS_DIR" \
                 "$consensus_mode" "$_rdc_timeout" "$_rdc_poll" \
-                "${_debate_spawned_reviewers[@]}"; then
-            echo "" >&2
-            echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
-            echo "Recovery: 'bin/review-gate resolve' to mark the gate resolved, or re-spawn with REVIEW_GATE_RERUN=1 to bypass the active-gate guard." >&2
-            _debate_mark_state_failed
-            exit 1
-        fi
+                "${_debate_spawned_reviewers[@]}" || _rdc_rc=$?
+        case "$_rdc_rc" in
+            0) ;;
+            6)
+                # Degraded-below-2 (mid-debate or final-round): coordinator
+                # already wrote `gate-state.json.status="awaiting_decision"`
+                # and `consensus.verdict="requires_decision"` per spec R6
+                # (see _rdc_mark_state_degraded in review-gate-debate.sh).
+                # Canonical $REVIEWS_DIR is left empty; partial outputs
+                # preserved under iterations/<iter>/round-N/. T012 will pin
+                # the public exit code; for T008 we surface non-zero so the
+                # caller's failure path is exercised.
+                echo "" >&2
+                echo "Debate coordinator: degraded below 2 active reviewers in the final peer round." >&2
+                echo "Reviews/ left empty; partial outputs preserved under $_debate_staging_dir (and round-2 staging if reached)." >&2
+                echo "Recovery: '${CLI_CMD} resolve --reason \"...\"' or re-spawn under REVIEW_GATE_RERUN=1." >&2
+                exit 1
+                ;;
+            *)
+                echo "" >&2
+                echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
+                echo "Recovery: 'bin/review-gate resolve' to mark the gate resolved, or re-spawn with REVIEW_GATE_RERUN=1 to bypass the active-gate guard." >&2
+                _debate_mark_state_failed
+                exit 1
+                ;;
+        esac
         echo "Debate coordinator completed: aggregate.json + per-reviewer JSONs promoted to $REVIEWS_DIR" >&2
     fi
 

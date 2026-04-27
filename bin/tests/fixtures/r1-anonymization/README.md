@@ -30,3 +30,11 @@ File layout:
 - `abstained-peer.expected.txt`                 — abstained-peer skeleton.
 - `seeded-ordering.json`                        — seeded peer-ordering tuples
   with pre-computed expected orderings.
+- `round2-three-reviewer-gemini-abstained.input.json` — T008 scenario fixture
+  documenting the 3-reviewer terminal-abstention case (gemini abstains in
+  Round 1; claude/codex see gemini's slot as `(peer abstained)` in their
+  Round-2 anonymized peer block; aggregate.json's reviewers[] excludes
+  gemini under Option B). The functional verification of this scenario is
+  the `test_terminal_abstention_round1` test in
+  `bin/tests/test-debate-end-to-end.sh`; this fixture serves as the pinned
+  input/expectation reference document for the scenario.
