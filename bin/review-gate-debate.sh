@@ -563,6 +563,14 @@ debate_peer_order_random() {
     local p key
     {
         for p in "$@"; do
+            # IMPORTANT: reset `key` at the top of each iteration. If we
+            # leave the previous iteration's value in place, the
+            # `[[ -z "${key:-}" ]]` guard short-circuits the $RANDOM
+            # fallback on every subsequent peer when `/dev/urandom` is
+            # unreadable, producing identical sort keys and a
+            # non-shuffled (alphabetical) ordering. Resetting here
+            # guarantees each peer's RNG draw is independent.
+            key=""
             if [[ -r /dev/urandom ]]; then
                 # `od -An -N4 -tu4` emits a uint32 decimal in [0, 2^32).
                 # `tr -d ' \n'` strips od's leading-padding spaces and the
@@ -662,6 +670,158 @@ debate_render_active_peer() {
 debate_render_abstained_peer() {
     local peer_id="$1"
     printf '**%s**\n(peer abstained)\n' "$peer_id"
+}
+
+# debate_build_peer_blocks — Round-1 outputs → rendered per-recipient peer
+# blocks; populates the values that bin/review-gate's `${PEER_BLOCK}`
+# substitution (T004) consumes for the next-round prompt construction
+# (T008 wires the actual Round-2 launch).
+#
+# Args:
+#   $1  staging_dir   — per-round staging directory; peer-block files are
+#                       written here as `peer-block.<recipient>.txt`.
+#   $2  reviews_dir   — canonical reviews dir holding promoted Round-1
+#                       per-reviewer JSONs (the input to peer rendering).
+#   $3  debate_seed   — decimal seed string under `--debate-seed N`, or
+#                       empty for the production-path shuffle.
+#   $4+ active reviewers (canonical names; the function alphabetizes via
+#       `debate_assign_peer_ids`).
+#
+# Side effects:
+#   - Writes `$staging_dir/peer-block.<recipient>.txt` for each recipient,
+#     containing the rendered anonymized peer block presented to that
+#     recipient under the recipient's per-recipient peer ordering.
+#   - Exports `PEER_BLOCK_<UPPER_RECIPIENT>` env vars holding the same
+#     rendered text. T008 may consume either surface; files are the more
+#     durable handoff because env-var values do not survive subshell
+#     boundaries cleanly when the value contains LFs.
+#
+# Phase E.1 scope (T007): Round-1 output → active-peer skeleton only.
+# Mode A abstain handling (Round-1 reviewer wrote `.failed` sentinel or
+# the augmented JSON is missing) renders the abstained-peer skeleton via
+# `debate_render_abstained_peer`. T008 extends Mode A handling for
+# subsequent rounds (terminal-abstention rule across rounds).
+#
+# Returns 0 on success; non-zero if a per-reviewer JSON cannot be read or
+# the renderer hard-errors. Failure is non-fatal at the call site (Phase D
+# does not actually launch Round 2 yet); the caller logs the warning and
+# proceeds.
+debate_build_peer_blocks() {
+    local staging_dir="$1"; shift
+    local reviews_dir="$1"; shift
+    local debate_seed="$1"; shift
+    if [[ $# -lt 2 ]]; then
+        # No peer block to render with fewer than 2 reviewers (the
+        # <2-reviewers preflight upstream already hard-errors before we
+        # get here; this is defensive).
+        return 0
+    fi
+    local -a active=("$@")
+
+    # 1. Assign opaque peer IDs (Peer-A, Peer-B, ...) in canonical
+    #    alphabetical reviewer order. Stable across rounds within one
+    #    debate run so the receiving reviewer sees the same Peer-X label
+    #    for the same model in every round.
+    local _bpb_peer_id_lines
+    _bpb_peer_id_lines=$(debate_assign_peer_ids "${active[@]}") || return 1
+
+    # Parallel arrays keyed by canonical reviewer name.
+    local -a _bpb_revs=() _bpb_pids=()
+    local _line _rev _pid
+    while IFS= read -r _line; do
+        [[ -z "$_line" ]] && continue
+        # Format: `<reviewer> Peer-X` (single space).
+        _rev="${_line%% *}"
+        _pid="${_line##* }"
+        _bpb_revs+=("$_rev")
+        _bpb_pids+=("$_pid")
+    done <<< "$_bpb_peer_id_lines"
+
+    # 2. For each recipient, compute peer ordering + render peer entries.
+    local recipient peer_id
+    for recipient in "${active[@]}"; do
+        # Find recipient's peer ID and the peer set (everyone else).
+        local recipient_pid="" idx=0
+        local -a peer_ids=()
+        while [[ $idx -lt ${#_bpb_revs[@]} ]]; do
+            if [[ "${_bpb_revs[$idx]}" == "$recipient" ]]; then
+                recipient_pid="${_bpb_pids[$idx]}"
+            else
+                peer_ids+=("${_bpb_pids[$idx]}")
+            fi
+            idx=$((idx + 1))
+        done
+
+        if [[ ${#peer_ids[@]} -eq 0 ]]; then
+            # Single-reviewer debate would've been rejected upstream; bail.
+            continue
+        fi
+
+        # Compute per-recipient ordering (seeded vs. production).
+        local ordered
+        if [[ -n "$debate_seed" ]]; then
+            ordered=$(debate_peer_order_seeded "$debate_seed" "$recipient" "${peer_ids[@]}") || return 1
+        else
+            ordered=$(debate_peer_order_random "${peer_ids[@]}") || return 1
+        fi
+
+        # Render each peer entry. Active vs. abstained is determined by
+        # whether the augmented per-reviewer JSON is present at the
+        # canonical $reviews_dir/<reviewer>.json location (presence ⇒
+        # active; absence ⇒ abstained). Phase D promotes only active
+        # reviewers, so the abstained branch is reached only via T008's
+        # Mode A integration.
+        local block="" rendered peer_id pj
+        local peer_rev pp jdx
+        while IFS= read -r peer_id; do
+            [[ -z "$peer_id" ]] && continue
+            # Map peer_id back to its canonical reviewer.
+            peer_rev=""
+            jdx=0
+            while [[ $jdx -lt ${#_bpb_pids[@]} ]]; do
+                if [[ "${_bpb_pids[$jdx]}" == "$peer_id" ]]; then
+                    peer_rev="${_bpb_revs[$jdx]}"
+                    break
+                fi
+                jdx=$((jdx + 1))
+            done
+
+            local peer_json_path="$reviews_dir/${peer_rev}.json"
+            if [[ -s "$peer_json_path" ]]; then
+                pj=$(cat "$peer_json_path")
+                rendered=$(debate_render_active_peer "$peer_id" "$pj") || return 1
+            else
+                # Mode A abstain placeholder. T007 ships the renderer; T008
+                # wires the upstream signal that decides which branch to
+                # take. With Phase D's hard-error-on-failed-sentinel
+                # contract, this branch is effectively unreachable in
+                # Phase D but is correct under T008.
+                rendered=$(debate_render_abstained_peer "$peer_id") || return 1
+            fi
+
+            if [[ -z "$block" ]]; then
+                block="$rendered"
+            else
+                # Blank-line separator between peer entries: one LF closes
+                # the previous entry's last content line, one blank LF
+                # separates entries visually. Per spec R1 the inter-entry
+                # glue is implementation-defined; the active/abstained
+                # skeletons themselves are byte-pinned.
+                block="${block}
+
+${rendered}"
+            fi
+        done <<< "$ordered"
+
+        # 3. Write to file + export env var. Both surfaces let T008 pick
+        #    the most convenient handoff for its Round-2 prompt path.
+        local recipient_upper
+        recipient_upper=$(echo "$recipient" | tr '[:lower:]' '[:upper:]')
+        printf '%s\n' "$block" > "$staging_dir/peer-block.${recipient}.txt"
+        export "PEER_BLOCK_${recipient_upper}=$block"
+    done
+
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1067,6 +1227,29 @@ run_debate_coordinator() {
         done
         rm -f "$_rdc_aggregate_tmp" 2>/dev/null || true
         return 1
+    fi
+
+    # ----------------------------------------------------------------------
+    # T007 R1 anonymization: build per-recipient peer blocks from the
+    # promoted Round-1 JSONs. Populates `PEER_BLOCK_<UPPER>` env vars and
+    # writes `peer-block.<recipient>.txt` files into $staging_dir for the
+    # T008 Round-2 launcher to consume.
+    #
+    # Seed comes from REVIEW_GATE_DEBATE_SEED (set by bin/review-gate when
+    # `--debate-seed N` is passed) so this function's caller signature does
+    # not need to be widened. Empty seed → production-path shuffle per
+    # spec R1.
+    #
+    # Failure here is non-fatal in Phase D: Round 2 is not launched yet,
+    # so a missing peer block has no observable downstream effect. T008
+    # will harden this into a hard failure once it actually consumes the
+    # peer block. The warning is logged so the failure surfaces in the
+    # spawn output.
+    # ----------------------------------------------------------------------
+    if ! debate_build_peer_blocks \
+            "$staging_dir" "$reviews_dir" "${REVIEW_GATE_DEBATE_SEED:-}" \
+            "${_rdc_active_reviewers[@]}"; then
+        echo "warning: debate_build_peer_blocks failed (T007 anonymization). Round-2 (T008) will need to recover." >&2
     fi
 
     return 0

@@ -3497,6 +3497,12 @@ with open(out_path, "wb") as f: f.write(out)
             _debate_mark_state_failed
             exit 1
         fi
+        # Export the captured `--debate-seed N` value (if any) so the
+        # synchronous coordinator's T007 anonymization pass can pick the
+        # seeded vs. production-path shuffle without widening
+        # run_debate_coordinator's positional signature. Empty `debate_seed`
+        # ⇒ the production-path /dev/urandom shuffle.
+        export REVIEW_GATE_DEBATE_SEED="$debate_seed"
         if ! run_debate_coordinator \
                 "$_debate_staging_dir" "$REVIEWS_DIR" \
                 "$consensus_mode" "$_rdc_timeout" "$_rdc_poll" \

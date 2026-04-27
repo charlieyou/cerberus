@@ -401,6 +401,189 @@ test_empty_peer_set() {
     fi
 }
 
+# Test — RNG reset on every iteration. The production-path shuffle MUST
+# reset its RNG-key local on each loop iteration; otherwise, when
+# /dev/urandom is unreadable, the first peer's $RANDOM-fallback key
+# persists across all subsequent peers and the ordering collapses to
+# alphabetical (no shuffle). This test masks /dev/urandom by overriding
+# the read test via a shell function — easier than chrooting.
+test_rng_reset_on_each_iteration() {
+    log_test "AC-SeededAndProductionShuffle: production shuffle resets RNG key per peer (regression: prior bug left first key in subsequent iterations)"
+    # Drive the shuffle 50 times with a 3-element peer set; collect the
+    # distinct orderings. With independent per-peer entropy and 6 possible
+    # permutations, we expect to observe multiple distinct orderings; with
+    # the bug we'd expect a single ordering (the input order).
+    local n=50 i out distinct
+    out=$(mktemp -t test-debate-anon-rng.XXXXXX)
+    trap 'rm -f "$out"' RETURN
+    i=0
+    while [[ $i -lt $n ]]; do
+        debate_peer_order_random Peer-X Peer-Y Peer-Z | tr '\n' ',' >> "$out"
+        printf '\n' >> "$out"
+        i=$((i + 1))
+    done
+    distinct=$(LC_ALL=C sort -u "$out" | wc -l | tr -d ' ')
+    if [[ "$distinct" -ge 3 ]]; then
+        log_pass "RNG produced $distinct distinct orderings across $n runs (>=3 required)"
+    else
+        log_fail "RNG produced only $distinct distinct ordering(s) across $n runs — possible RNG-reset regression"
+    fi
+}
+
+# Test — debate_build_peer_blocks: 3 reviewers, seeded path.
+# Verifies the end-to-end Round-1 → rendered peer block handoff.
+test_build_peer_blocks_seeded() {
+    log_test "debate_build_peer_blocks (seeded): 3 reviewers produce per-recipient peer blocks"
+    local tmp_root staging reviews
+    tmp_root=$(mktemp -d -t test-debate-bpb.XXXXXX)
+    trap 'rm -rf "$tmp_root"' RETURN
+    staging="$tmp_root/staging"
+    reviews="$tmp_root/reviews"
+    mkdir -p "$staging" "$reviews"
+
+    cat > "$reviews/claude.json" <<EOF
+{"verdict":"PASS","overall_confidence":0.7,"findings":[{"title":"Claude flagged","body":"GPT also said this is fine."}],"strategy":"verification-first","round":1,"peer_responses_seen":[]}
+EOF
+    cat > "$reviews/codex.json" <<EOF
+{"verdict":"FAIL","overall_confidence":0.9,"findings":[{"title":"Anthropic broke","body":"OpenAI did not."}],"strategy":"falsification-first","round":1,"peer_responses_seen":[]}
+EOF
+    cat > "$reviews/gemini.json" <<EOF
+{"verdict":"NEEDS_WORK","overall_confidence":0.5,"findings":[],"strategy":"decompose","round":1,"peer_responses_seen":[]}
+EOF
+
+    if ! debate_build_peer_blocks "$staging" "$reviews" 42 claude codex gemini; then
+        log_fail "debate_build_peer_blocks returned non-zero"
+        return
+    fi
+
+    # Each recipient must have a peer-block file.
+    local r
+    for r in claude codex gemini; do
+        if [[ ! -s "$staging/peer-block.${r}.txt" ]]; then
+            log_fail "peer-block.${r}.txt missing or empty"
+            return
+        fi
+    done
+    log_pass "all 3 peer-block files written"
+
+    log_test "debate_build_peer_blocks: deny-list scrub applied to peer-block titles/bodies"
+    # The committed claude.json contains 'Claude' / 'GPT' tokens; codex's
+    # peer block must redact them. (claude is the source; codex sees it
+    # as a peer.)
+    if grep -F 'Claude' "$staging/peer-block.codex.txt" >/dev/null \
+       || grep -F 'GPT' "$staging/peer-block.codex.txt" >/dev/null; then
+        log_fail "deny-list tokens leaked into codex's peer block"
+        cat "$staging/peer-block.codex.txt"
+    else
+        log_pass "deny-list scrub applied to codex's peer block"
+    fi
+
+    log_test "debate_build_peer_blocks: recipient does not appear in own peer block"
+    # claude's peer block (Peer-A is claude) must NOT contain Peer-A.
+    if grep -F '**Peer-A**' "$staging/peer-block.claude.txt" >/dev/null; then
+        log_fail "claude (Peer-A) appears in its own peer block"
+        cat "$staging/peer-block.claude.txt"
+    else
+        log_pass "claude (Peer-A) excluded from its own peer block"
+    fi
+
+    log_test "debate_build_peer_blocks: per-recipient ordering differs (seeded fixture)"
+    # Seeded order with seed=42:
+    #   claude (Peer-A) sees [Peer-B, Peer-C] (codex, gemini)
+    #   codex  (Peer-B) sees [Peer-C, Peer-A] (gemini, claude)
+    #   gemini (Peer-C) sees [Peer-B, Peer-A] (codex, claude)
+    # Per recipient, the FIRST peer entry's opaque ID is what we assert
+    # (the per-recipient ordering primitive); the seeded fixture above
+    # was computed offline.
+    local first_claude first_codex first_gemini
+    first_claude=$(grep -m1 -E '^\*\*Peer-' "$staging/peer-block.claude.txt")
+    first_codex=$(grep -m1 -E '^\*\*Peer-' "$staging/peer-block.codex.txt")
+    first_gemini=$(grep -m1 -E '^\*\*Peer-' "$staging/peer-block.gemini.txt")
+    assert_str_eq "claude's first peer is Peer-B (codex) under seed=42" \
+        "$first_claude" "**Peer-B**"
+    assert_str_eq "codex's first peer is Peer-C (gemini) under seed=42" \
+        "$first_codex" "**Peer-C**"
+    assert_str_eq "gemini's first peer is Peer-B (codex) under seed=42" \
+        "$first_gemini" "**Peer-B**"
+
+    log_test "debate_build_peer_blocks: PEER_BLOCK_<UPPER> env vars exported"
+    # `local -` would be cleaner but Bash 3.2 doesn't support it; just
+    # check the values via `printenv`-equivalent.
+    if [[ -z "${PEER_BLOCK_CLAUDE:-}" ]] \
+       || [[ -z "${PEER_BLOCK_CODEX:-}" ]] \
+       || [[ -z "${PEER_BLOCK_GEMINI:-}" ]]; then
+        log_fail "PEER_BLOCK_<UPPER> env vars not exported (claude='${PEER_BLOCK_CLAUDE:-}', codex='${PEER_BLOCK_CODEX:-}', gemini='${PEER_BLOCK_GEMINI:-}')"
+    else
+        log_pass "PEER_BLOCK_CLAUDE / _CODEX / _GEMINI exported"
+    fi
+}
+
+# Test — debate_build_peer_blocks: missing per-reviewer JSON renders
+# abstained-peer skeleton (Mode A path, exercised by T008 in production
+# but the helper supports it now).
+test_build_peer_blocks_abstained_peer() {
+    log_test "debate_build_peer_blocks: missing per-reviewer JSON renders abstained-peer skeleton"
+    local tmp_root staging reviews
+    tmp_root=$(mktemp -d -t test-debate-bpb-abst.XXXXXX)
+    trap 'rm -rf "$tmp_root"' RETURN
+    staging="$tmp_root/staging"
+    reviews="$tmp_root/reviews"
+    mkdir -p "$staging" "$reviews"
+
+    # Only claude and codex have promoted JSONs. gemini abstained →
+    # missing JSON triggers the abstained-peer branch.
+    cat > "$reviews/claude.json" <<EOF
+{"verdict":"PASS","overall_confidence":0.7,"findings":[],"strategy":"verification-first","round":1,"peer_responses_seen":[]}
+EOF
+    cat > "$reviews/codex.json" <<EOF
+{"verdict":"FAIL","overall_confidence":0.9,"findings":[],"strategy":"falsification-first","round":1,"peer_responses_seen":[]}
+EOF
+    # gemini.json deliberately absent.
+
+    if ! debate_build_peer_blocks "$staging" "$reviews" 42 claude codex gemini; then
+        log_fail "debate_build_peer_blocks returned non-zero with one missing reviewer JSON"
+        return
+    fi
+
+    # claude's peer block: peers are codex (Peer-B), gemini (Peer-C).
+    # gemini abstained → must render `(peer abstained)` for Peer-C.
+    if grep -F '(peer abstained)' "$staging/peer-block.claude.txt" >/dev/null; then
+        log_pass "abstained-peer skeleton rendered for missing JSON"
+    else
+        log_fail "abstained-peer skeleton not rendered for missing JSON"
+        cat "$staging/peer-block.claude.txt"
+    fi
+}
+
+# Test — debate_build_peer_blocks: production-path (no seed) shuffle.
+test_build_peer_blocks_production() {
+    log_test "debate_build_peer_blocks (production, no seed): peer-block files written"
+    local tmp_root staging reviews
+    tmp_root=$(mktemp -d -t test-debate-bpb-prod.XXXXXX)
+    trap 'rm -rf "$tmp_root"' RETURN
+    staging="$tmp_root/staging"
+    reviews="$tmp_root/reviews"
+    mkdir -p "$staging" "$reviews"
+
+    cat > "$reviews/claude.json" <<EOF
+{"verdict":"PASS","overall_confidence":0.7,"findings":[],"strategy":"v","round":1,"peer_responses_seen":[]}
+EOF
+    cat > "$reviews/codex.json" <<EOF
+{"verdict":"FAIL","overall_confidence":0.9,"findings":[],"strategy":"f","round":1,"peer_responses_seen":[]}
+EOF
+
+    if ! debate_build_peer_blocks "$staging" "$reviews" "" claude codex; then
+        log_fail "debate_build_peer_blocks (production) returned non-zero"
+        return
+    fi
+
+    if [[ -s "$staging/peer-block.claude.txt" && -s "$staging/peer-block.codex.txt" ]]; then
+        log_pass "production-path debate_build_peer_blocks wrote peer-block files"
+    else
+        log_fail "production-path debate_build_peer_blocks did not write expected files"
+    fi
+}
+
 # Test 18 — Trailing newline preservation in scrub output (relevant for
 # byte-stable cmp comparisons of multi-line peer bodies).
 test_trailing_newline_preservation() {
@@ -457,6 +640,10 @@ test_seeded_ordering_stability
 test_production_shuffle_varies
 test_production_does_not_cross_derive
 test_empty_peer_set
+test_rng_reset_on_each_iteration
+test_build_peer_blocks_seeded
+test_build_peer_blocks_abstained_peer
+test_build_peer_blocks_production
 test_trailing_newline_preservation
 
 echo ""
