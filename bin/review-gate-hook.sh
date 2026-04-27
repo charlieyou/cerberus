@@ -349,6 +349,18 @@ review_gate_check() {
             log "review-gate: using consensus '$consensus_mode'"
         fi
 
+        # Preserve --debate / --debate-seed across auto-respawns. Without
+        # these reads the rebuilt spawn_cmd silently drops the user's debate
+        # mode opt-in and the next iteration falls back to single-pass review,
+        # letting a revised artifact get approved without the debate the
+        # caller explicitly requested.
+        local debate_flag debate_seed_value
+        debate_flag=$(jq -r '.config.debate // empty' "$STATE_FILE" 2>/dev/null || echo "")
+        debate_seed_value=$(jq -r '.config.debate_seed // empty' "$STATE_FILE" 2>/dev/null || echo "")
+        if [[ "$debate_flag" == "true" ]]; then
+            log "review-gate: preserving --debate on auto-respawn"
+        fi
+
         # For code, re-fetch the diff from current args
         if [[ "$detected_type" == "code" ]]; then
             local diff_args
@@ -373,6 +385,12 @@ review_gate_check() {
             fi
             if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                 spawn_cmd+=(--consensus "$consensus_mode")
+            fi
+            if [[ "$debate_flag" == "true" ]]; then
+                spawn_cmd+=(--debate)
+            fi
+            if [[ -n "$debate_seed_value" ]]; then
+                spawn_cmd+=(--debate-seed "$debate_seed_value")
             fi
             if [[ -n "$diff_args" ]]; then
                 spawn_cmd+=("${args_array[@]}")
@@ -410,6 +428,12 @@ review_gate_check() {
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
                 fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
+                fi
                 spawn_cmd+=("$plan_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
@@ -432,6 +456,12 @@ review_gate_check() {
                 fi
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
                 fi
                 spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
@@ -468,6 +498,12 @@ review_gate_check() {
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
                 fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
+                fi
                 spawn_cmd+=("$spec_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
@@ -490,6 +526,12 @@ review_gate_check() {
                 fi
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
                 fi
                 spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
@@ -521,6 +563,12 @@ review_gate_check() {
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
                 fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
+                fi
                 spawn_cmd+=("$epic_path")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
                    REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
@@ -543,6 +591,12 @@ review_gate_check() {
                 fi
                 if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                     spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
                 fi
                 spawn_cmd+=("$ARTIFACT_FILE")
                 if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
@@ -567,6 +621,12 @@ review_gate_check() {
             fi
             if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
                 spawn_cmd+=(--consensus "$consensus_mode")
+            fi
+            if [[ "$debate_flag" == "true" ]]; then
+                spawn_cmd+=(--debate)
+            fi
+            if [[ -n "$debate_seed_value" ]]; then
+                spawn_cmd+=(--debate-seed "$debate_seed_value")
             fi
             spawn_cmd+=("$ARTIFACT_FILE")
             if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \

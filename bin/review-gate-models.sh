@@ -386,7 +386,7 @@ repair_review_output() {
             if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
                 codex_extra_args=(--ephemeral)
             fi
-            if codex exec "${codex_extra_args[@]}" -m "$model" -s read-only --skip-git-repo-check \
+            if codex exec ${codex_extra_args[@]+"${codex_extra_args[@]}"} -m "$model" -s read-only --skip-git-repo-check \
                 --output-schema "$schema_path" --json -o "$out_file" \
                 - < "$prompt_file" > "$jsonl_file" 2>&1; then
                 if [[ -s "$out_file" ]]; then
@@ -838,6 +838,9 @@ spawn_reviewer() {
             '
             ;;
         codex)
+            # Note: the heredoc body runs via spawn_detached_review_shell -> `bash -c`,
+            # which starts a fresh shell without `set -u`, so the unguarded
+            # "${codex_extra_args[@]}" expansion below is safe under bash 3.2.
             echo "Spawning codex reviewer (model: $codex_model, reasoning: $codex_reasoning)..." >&2
             REVIEW_OUT="$output_file" \
             REVIEW_JSONL="$transcript_file" \

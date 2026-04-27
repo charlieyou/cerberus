@@ -3274,6 +3274,8 @@ PROMPT
         --arg mode "$mode" \
         --arg max_rounds "$max_rounds" \
         --arg consensus_mode "$consensus_mode" \
+        --arg debate "$debate" \
+        --arg debate_seed "$debate_seed" \
         '{
             version: ($version | tonumber),
             status: $status,
@@ -3289,6 +3291,8 @@ PROMPT
                 | (if $max_rounds != "" then .max_rounds = ($max_rounds | tonumber) else . end)
                 | (if $mode != "" then .intelligence_mode = $mode else . end)
                 | (if $consensus_mode != "" then .consensus_mode = $consensus_mode else . end)
+                | (if $debate == "true" then .debate = true else . end)
+                | (if $debate_seed != "" then .debate_seed = $debate_seed else . end)
                 | if length == 0 then null else . end
             ),
             owner: (
