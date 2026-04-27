@@ -3453,7 +3453,31 @@ with open(out_path, "wb") as f: f.write(out)
     done
 
     if [[ $spawned -eq 0 ]]; then
-        # No reviewers available; resolve gate to avoid blocking stop hooks
+        # Under `--debate`, zero successful spawns is the realistic
+        # degraded-before-round case (every spawn_reviewer invocation
+        # returned non-zero — gemini policy lookup failure, missing CLI
+        # under runtime PATH, etc.) and MUST take the T012 distinct-
+        # exit-codes contract: exit 6, awaiting_decision/requires_decision,
+        # iterations/<iter>/debate-telemetry.json. Pre-write the gate
+        # state with .reviewers = {} so the degraded helper's
+        # `_rdc_mark_state_degraded` jq patch lands cleanly.
+        if [[ "$debate" == "true" ]]; then
+            state_json=$(echo "$state_json" | jq '.reviewers = {}')
+            echo "$state_json" > "$STATE_FILE"
+            echo "Debate coordinator: 0 reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
+            _RDC_ITER_DIR="$(dirname "$_debate_staging_dir")" \
+            _RDC_REVIEWS_DIR="$REVIEWS_DIR" \
+            _RDC_CONSENSUS_MODE="$consensus_mode" \
+            _RDC_DEBATE_MODE="$mode" \
+            _RDC_STRATEGIES_JSON='{}' \
+            _RDC_ROUNDS_JSON='[]' \
+            _RDC_ROUNDS_COMPLETED=0 \
+            _RDC_AGGREGATOR_NOTES_JSON='[]' \
+            _rdc_pre_round_degraded_exit
+        fi
+
+        # Non-debate path: resolve gate as proceed/no_reviewers to avoid
+        # blocking the Stop hook (legacy behavior, unchanged).
         state_json=$(echo "$state_json" | jq \
             --arg status "resolved" \
             --arg verdict "no_reviewers" \
