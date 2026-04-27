@@ -44,7 +44,7 @@ detect_cli_json_support() {
             command -v claude >/dev/null 2>&1 && claude --help 2>&1 | grep -q -- '--output-format'
             ;;
         codex)
-            command -v codex >/dev/null 2>&1 && codex --help 2>&1 | grep -qE -- '--json|JSONL'
+            command -v codex >/dev/null 2>&1 && codex exec --help 2>&1 | grep -qE -- '--json|JSONL'
             ;;
         gemini)
             command -v gemini >/dev/null 2>&1 && gemini --help 2>&1 | grep -q -- '-o json'
@@ -175,7 +175,7 @@ extract_claude_telemetry() {
     extracted=$(printf '%s' "$raw" | jq -c '
         {
             agent: "claude",
-            model: (.model // .modelUsage // {} | keys[0] // "unknown"),
+            model: (.model // ((.modelUsage // {}) | keys[0]) // "unknown"),
             session_id: (.session_id // null),
             tokens: {
                 input: ((.tokens.input // .usage.input_tokens // 0) | tonumber),
@@ -223,9 +223,12 @@ extract_codex_telemetry() {
     # Tool calls in current CLI (0.122.x): item.completed with .item.type == "command_execution"
     # Older/MCP-style tool calls: .item.type == "function_call" or top-level .type == "tool_use"
     local extracted
-    extracted=$(jq -s -c '
-        # Collect all lines into array, extract relevant data
-        . as $lines |
+    extracted=$(jq -R -s -c '
+        # Codex occasionally writes non-JSON diagnostics alongside JSONL.
+        # Ignore those lines so telemetry extraction stays best-effort.
+        (split("\n") | map(select(length > 0) | try fromjson catch empty)) as $lines |
+
+        if ($lines | length) == 0 then empty else
 
         # Find thread_id from any line that has it
         ($lines | map(select(.thread_id)) | .[0].thread_id // null) as $thread_id |
@@ -272,6 +275,7 @@ extract_codex_telemetry() {
             tools: $tools,
             extracted_at: (now | todate)
         }
+        end
     ' "$raw_file" 2>/dev/null)
     
     if [[ -z "$extracted" || "$extracted" == "null" ]]; then
@@ -296,6 +300,9 @@ extract_gemini_telemetry() {
     
     local raw
     raw=$(cat "$raw_file" 2>/dev/null) || return 1
+    if ! printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
+        raw=$(printf '%s' "$raw" | awk 'found || $0 ~ /^[[:space:]]*\{/ || $0 ~ /^[[:space:]]*\[/ { found=1; print }')
+    fi
     
     # Gemini -o json gives: session_id, .stats.tools.byName for per-tool breakdown,
     # .stats.models.<model>.tokens for token usage (input, candidates for output)

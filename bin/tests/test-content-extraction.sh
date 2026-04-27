@@ -64,6 +64,13 @@ extract_claude_content() {
 
 extract_gemini_content() {
     local raw_file="$1"
+    local json_file="$raw_file"
+    local tmp_json=""
+    if ! jq -e . "$raw_file" >/dev/null 2>&1; then
+        tmp_json=$(mktemp)
+        awk 'found || $0 ~ /^[[:space:]]*\{/ || $0 ~ /^[[:space:]]*\[/ { found=1; print }' "$raw_file" > "$tmp_json"
+        json_file="$tmp_json"
+    fi
     local content
     content=$(jq -r '
         # Strategy 1: Simple top-level string fields
@@ -89,7 +96,54 @@ extract_gemini_content() {
 
         else empty
         end
-    ' "$raw_file" 2>/dev/null)
+    ' "$json_file" 2>/dev/null || true)
+    [[ -n "$tmp_json" ]] && rm -f "$tmp_json"
+
+    if [[ -z "$content" ]]; then
+        cat "$raw_file"
+    else
+        printf '%s' "$content"
+    fi
+}
+
+extract_codex_content() {
+    local raw_file="$1"
+    local content
+    content=$(jq -R -s -r '
+        split("\n")
+        | map(select(length > 0) | try fromjson catch empty)
+        |
+        ([.[] | select(
+            (.type // "") == "item.completed" and
+            (.item.type // "") == "agent_message"
+        ) | .item.text // empty] | last // "") as $agent_message |
+        ([.[] | select(.item.content) | .item.content |
+          if type == "array" then .[] | select(.text) | .text
+          elif type == "string" then .
+          else empty end
+        ] | join("")) as $item_content |
+        ([.[] | select(.role == "assistant" and .content) | .content] | join("")) as $assistant |
+        ([.[] | select(.response.output_text) | .response.output_text] | join("")) as $resp_out |
+        ([.[] | select(.output and (.output | type) == "string") | .output] | join("")) as $output |
+        ([.[] | select(.message.content) | .message.content] | join("")) as $msg |
+        ([.[] | select(.content and (.content | type) == "string") | .content] | join("")) as $content |
+        ([.[] | select(.text and (.text | type) == "string") | .text] | join("")) as $text |
+        ([.[] | select(.item.output) | .item.output |
+          if type == "string" then . else empty end
+        ] | join("")) as $item_output |
+
+        if ($agent_message | length) > 0 then $agent_message
+        elif ($item_content | length) > 0 then $item_content
+        elif ($assistant | length) > 0 then $assistant
+        elif ($resp_out | length) > 0 then $resp_out
+        elif ($output | length) > 0 then $output
+        elif ($msg | length) > 0 then $msg
+        elif ($content | length) > 0 then $content
+        elif ($text | length) > 0 then $text
+        elif ($item_output | length) > 0 then $item_output
+        else empty
+        end
+    ' "$raw_file" 2>/dev/null || true)
 
     if [[ -z "$content" ]]; then
         cat "$raw_file"
@@ -286,6 +340,57 @@ EOF
     fi
 }
 
+test_gemini_ignores_retry_preamble() {
+    ((TESTS_RUN++)) || true
+    log_test "extract_gemini_content ignores retry preamble before JSON"
+
+    local tmp_file
+    tmp_file=$(mktemp)
+    cat > "$tmp_file" <<'EOF'
+Attempt 1 failed: transient quota. Retrying...
+{
+  "response": "Recovered Gemini response"
+}
+EOF
+
+    local result
+    result=$(extract_gemini_content "$tmp_file")
+    rm -f "$tmp_file"
+
+    if [[ "$result" == "Recovered Gemini response" ]]; then
+        log_pass "Ignored Gemini preamble and extracted JSON response"
+    else
+        log_fail "Gemini preamble extraction failed: ${result:0:100}"
+    fi
+}
+
+# =============================================================================
+# Codex Content Extraction Tests
+# =============================================================================
+
+test_codex_agent_message_preferred() {
+    ((TESTS_RUN++)) || true
+    log_test "extract_codex_content prefers final agent_message over tool output"
+
+    local tmp_file
+    tmp_file=$(mktemp)
+    cat > "$tmp_file" <<'EOF'
+{"type":"item.completed","item":{"type":"function_call_output","output":"tool output should not win"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"final codex draft"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+EOF
+
+    local result
+    result=$(extract_codex_content "$tmp_file")
+    rm -f "$tmp_file"
+
+    if [[ "$result" == "final codex draft" ]]; then
+        log_pass "Extracted final agent_message"
+    else
+        log_fail "Expected final agent_message, got: ${result:0:100}"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -307,6 +412,10 @@ main() {
     # Gemini tests
     test_gemini_simple_response
     test_gemini_candidates_format
+    test_gemini_ignores_retry_preamble
+
+    # Codex tests
+    test_codex_agent_message_preferred
 
     echo ""
     echo "=========================================="

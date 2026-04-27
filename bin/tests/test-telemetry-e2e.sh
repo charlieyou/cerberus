@@ -12,6 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW_GATE="$SCRIPT_DIR/../review-gate"
+ORIGINAL_HOME="${HOME:-}"
 source "$SCRIPT_DIR/../telemetry-lib.sh"
 source "$SCRIPT_DIR/../review-gate-lib.sh"
 
@@ -32,6 +33,7 @@ declare -a TEST_DIRS=()
 
 # Test timeout in seconds
 TEST_TIMEOUT=120
+TIMEOUT_BIN="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
 
 log_test() {
     echo -e "${CYAN}[TEST]${NC} $1"
@@ -64,6 +66,14 @@ setup_test_repo() {
     cd "$TEST_DIR"
     export HOME="$TEST_DIR/home"
     mkdir -p "$HOME/.claude/projects"
+    for cli_home in .codex .gemini; do
+        if [[ -n "$ORIGINAL_HOME" && -e "$ORIGINAL_HOME/$cli_home" && ! -e "$HOME/$cli_home" ]]; then
+            ln -s "$ORIGINAL_HOME/$cli_home" "$HOME/$cli_home"
+        fi
+    done
+    if [[ -n "$ORIGINAL_HOME" && -f "$ORIGINAL_HOME/.claude.json" && ! -e "$HOME/.claude.json" ]]; then
+        ln -s "$ORIGINAL_HOME/.claude.json" "$HOME/.claude.json"
+    fi
     git init -q
     git config user.email "test@test.com"
     git config user.name "Test User"
@@ -76,6 +86,10 @@ setup_test_repo() {
     # Export required env vars
     export CLAUDE_SESSION_ID="test-session-e2e-$$-$(date +%s)"
     export REVIEW_GATE_TRANSCRIPT_PATH="$TEST_DIR/transcript.jsonl"
+    local reviewer_timeout=$((TEST_TIMEOUT - 10))
+    [[ $reviewer_timeout -lt 1 ]] && reviewer_timeout="$TEST_TIMEOUT"
+    export REVIEW_GATE_REVIEWER_TIMEOUT="${REVIEW_GATE_REVIEWER_TIMEOUT:-$reviewer_timeout}"
+    [[ -n "$TIMEOUT_BIN" ]] && export TIMEOUT_BIN
     
     # Create transcript file
     touch "$REVIEW_GATE_TRANSCRIPT_PATH"
@@ -155,24 +169,45 @@ wait_for_files() {
     done
 }
 
-# Wait for .done files in a directory
+# Wait until at least one reviewer succeeds, or all available reviewers finish.
 wait_for_reviewers() {
     local reviews_dir="$1"
     local timeout="${2:-$TEST_TIMEOUT}"
+    local state_file
+    state_file="$(dirname "$reviews_dir")/gate-state.json"
+    local agents=()
+    local agent
+
+    if [[ -f "$state_file" ]]; then
+        while IFS= read -r agent; do
+            [[ -n "$agent" ]] && agents+=("$agent")
+        done < <(jq -r '.reviewers | keys[]?' "$state_file" 2>/dev/null || true)
+    fi
+    if [[ ${#agents[@]} -eq 0 ]]; then
+        for agent in codex gemini claude; do
+            if command -v "$agent" >/dev/null 2>&1; then
+                agents+=("$agent")
+            fi
+        done
+    fi
+    local expected_count=${#agents[@]}
     
     local start_time
     start_time=$(date +%s)
     
     while true; do
-        local done_count=0
-        for agent in codex gemini claude; do
+        local terminal_count=0
+        local success_count=0
+        for agent in "${agents[@]}"; do
             if [[ -f "$reviews_dir/${agent}.done" || -f "$reviews_dir/${agent}.failed" ]]; then
-                ((done_count++)) || true
+                ((terminal_count++)) || true
+            fi
+            if [[ -f "$reviews_dir/${agent}.done" ]]; then
+                ((success_count++)) || true
             fi
         done
         
-        # At least one reviewer must complete
-        if [[ $done_count -ge 1 ]]; then
+        if [[ $success_count -ge 1 || ( $expected_count -gt 0 && $terminal_count -ge $expected_count ) ]]; then
             return 0
         fi
         
@@ -183,6 +218,61 @@ wait_for_reviewers() {
         
         sleep 2
     done
+}
+
+wait_for_all_reviewers() {
+    local reviews_dir="$1"
+    local timeout="${2:-$TEST_TIMEOUT}"
+    local state_file
+    state_file="$(dirname "$reviews_dir")/gate-state.json"
+    local agents=()
+    local agent
+
+    if [[ -f "$state_file" ]]; then
+        while IFS= read -r agent; do
+            [[ -n "$agent" ]] && agents+=("$agent")
+        done < <(jq -r '.reviewers | keys[]?' "$state_file" 2>/dev/null || true)
+    fi
+    if [[ ${#agents[@]} -eq 0 ]]; then
+        for agent in codex gemini claude; do
+            if command -v "$agent" >/dev/null 2>&1; then
+                agents+=("$agent")
+            fi
+        done
+    fi
+    local expected_count=${#agents[@]}
+
+    local start_time
+    start_time=$(date +%s)
+
+    while true; do
+        local terminal_count=0
+        for agent in "${agents[@]}"; do
+            if [[ -f "$reviews_dir/${agent}.done" || -f "$reviews_dir/${agent}.failed" ]]; then
+                ((terminal_count++)) || true
+            fi
+        done
+
+        if [[ $expected_count -gt 0 && $terminal_count -ge $expected_count ]]; then
+            return 0
+        fi
+
+        local elapsed=$(( $(date +%s) - start_time ))
+        if [[ $elapsed -ge $timeout ]]; then
+            return 1
+        fi
+
+        sleep 2
+    done
+}
+
+run_review_gate_check() {
+    jq -n \
+        --arg session_id "$CLAUDE_SESSION_ID" \
+        --arg transcript_path "$REVIEW_GATE_TRANSCRIPT_PATH" \
+        --arg cwd "$(pwd)" \
+        '{session_id:$session_id, transcript_path:$transcript_path, cwd:$cwd}' \
+        | "$REVIEW_GATE" check >/dev/null 2>&1 || true
 }
 
 # =============================================================================
@@ -202,7 +292,11 @@ test_generate_telemetry() {
     
     # Run generate with timeout
     local generate_output
-    if timeout "$TEST_TIMEOUT" "$SCRIPT_DIR/../generate" "$output_dir" --mode fast >/dev/null 2>&1; then
+    if [[ -z "$TIMEOUT_BIN" ]]; then
+        log_fail "timeout/gtimeout not installed (install GNU coreutils on macOS)"
+        return
+    fi
+    if "$TIMEOUT_BIN" "$TEST_TIMEOUT" "$SCRIPT_DIR/../generate" "$output_dir" --mode fast --prompt "Return exactly: telemetry draft." >/dev/null 2>&1; then
         log_progress "Generate completed"
     else
         log_fail "generate command failed or timed out"
@@ -212,9 +306,9 @@ test_generate_telemetry() {
     # Check for draft files (at least one should exist)
     local draft_count=0
     for agent in codex gemini claude; do
-        if [[ -f "$output_dir/${agent}.md" && -s "$output_dir/${agent}.md" ]]; then
+        if [[ -f "$output_dir/${agent}/draft.md" && -s "$output_dir/${agent}/draft.md" ]]; then
             ((draft_count++)) || true
-            log_progress "Found ${agent}.md draft"
+            log_progress "Found ${agent}/draft.md draft"
         fi
     done
     
@@ -258,11 +352,11 @@ test_spawn_code_review_telemetry() {
     
     log_progress "Waiting for reviewers to complete..."
     
-    # Wait for at least one reviewer
-    if ! wait_for_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
+    if ! wait_for_all_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
         log_fail "timeout waiting for reviewers"
         return
     fi
+    run_review_gate_check
     
     # Check telemetry in iterations directory
     local iter_dir="$review_dir/iterations/0/agents"
@@ -280,17 +374,18 @@ test_spawn_code_review_telemetry() {
     
     # Also check run-telemetry.json
     if [[ -f "$review_dir/run-telemetry.json" ]]; then
-        log_progress "Found run-telemetry.json"
-        telemetry_found=true
+        local telemetry_agents
+        telemetry_agents=$(jq -r '.iterations["0"].agents | keys | length' "$review_dir/run-telemetry.json" 2>/dev/null || echo "0")
+        log_progress "run-telemetry.json has telemetry for $telemetry_agents agent(s)"
+        if [[ "$telemetry_agents" -ge 1 ]]; then
+            telemetry_found=true
+        fi
     fi
     
     if $telemetry_found; then
         log_pass "telemetry files created in iteration directory"
     else
-        # Telemetry may not be created if CLIs don't support JSON output
-        log_skip "telemetry files not created (CLIs may not support JSON output)"
-        ((TESTS_SKIPPED++)) || true
-        ((TESTS_RUN--)) || true
+        log_fail "telemetry files not created after reviewers completed"
     fi
 }
 
@@ -317,10 +412,12 @@ test_iteration_telemetry_accumulation() {
     review_dir=$(resolve_review_dir "$CLAUDE_SESSION_ID" "$REVIEW_GATE_TRANSCRIPT_PATH")
     local reviews_dir="$review_dir/reviews"
     
-    if ! wait_for_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
+    if ! wait_for_all_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
         log_fail "timeout waiting for first iteration reviewers"
         return
     fi
+    run_review_gate_check
+    save_iteration 1 "$review_dir"
     
     # Make a fix commit
     log_progress "Making fix commit..."
@@ -335,44 +432,43 @@ test_iteration_telemetry_accumulation() {
     unset REVIEW_GATE_RERUN
     
     # Wait for second iteration
-    if ! wait_for_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
+    if ! wait_for_all_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
         log_fail "timeout waiting for second iteration reviewers"
         return
     fi
-    
-    # Verify both iterations have telemetry
-    local iter0_exists=false
-    local iter1_exists=false
+    run_review_gate_check
     
     if [[ -d "$review_dir/iterations/0" ]]; then
-        iter0_exists=true
         log_progress "Iteration 0 directory exists"
+    else
+        log_fail "iteration 0 directory missing"
+        return
     fi
     
     if [[ -d "$review_dir/iterations/1" ]]; then
-        iter1_exists=true
         log_progress "Iteration 1 directory exists"
+    else
+        log_fail "iteration 1 directory missing"
+        return
     fi
     
     # Check run-telemetry.json for both iterations
     if [[ -f "$review_dir/run-telemetry.json" ]]; then
-        local iter_count
+        local iter_count iter0_agents iter1_agents
         iter_count=$(jq '.iterations | keys | length' "$review_dir/run-telemetry.json" 2>/dev/null || echo "0")
+        iter0_agents=$(jq -r '.iterations["0"].agents | keys | length' "$review_dir/run-telemetry.json" 2>/dev/null || echo "0")
+        iter1_agents=$(jq -r '.iterations["1"].agents | keys | length' "$review_dir/run-telemetry.json" 2>/dev/null || echo "0")
         log_progress "run-telemetry.json has $iter_count iterations"
+        log_progress "iteration 0 telemetry agents: $iter0_agents"
+        log_progress "iteration 1 telemetry agents: $iter1_agents"
         
-        if [[ "$iter_count" -ge 1 ]]; then
+        if [[ "$iter_count" -ge 2 && "$iter0_agents" -ge 1 && "$iter1_agents" -ge 1 ]]; then
             log_pass "multi-iteration telemetry accumulated ($iter_count iterations)"
             return
         fi
     fi
-    
-    if $iter0_exists || $iter1_exists; then
-        log_pass "iteration directories created (telemetry accumulation works)"
-    else
-        log_skip "iteration directories not created (telemetry may not be enabled)"
-        ((TESTS_SKIPPED++)) || true
-        ((TESTS_RUN--)) || true
-    fi
+
+    log_fail "run-telemetry.json was not populated for both iterations after reviewers completed"
 }
 
 # =============================================================================
@@ -390,8 +486,7 @@ test_telemetry_with_partial_failures() {
     git add file.txt
     git commit -q -m "partial failure test commit"
     
-    # Mock one CLI to fail by using a non-existent agent
-    # We'll just run normally and verify that partial results are handled
+    # Run normally with real CLIs and verify that partial results are handled.
     log_progress "Running spawn-code-review (some agents may fail)..."
     
     "$REVIEW_GATE" spawn-code-review --mode fast --max-rounds 0 --commit HEAD 2>&1 >/dev/null || true
@@ -400,10 +495,11 @@ test_telemetry_with_partial_failures() {
     review_dir=$(resolve_review_dir "$CLAUDE_SESSION_ID" "$REVIEW_GATE_TRANSCRIPT_PATH")
     local reviews_dir="$review_dir/reviews"
     
-    if ! wait_for_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
+    if ! wait_for_all_reviewers "$reviews_dir" "$TEST_TIMEOUT"; then
         log_fail "timeout waiting for reviewers"
         return
     fi
+    run_review_gate_check
     
     # Count successful and failed agents
     local success_count=0
