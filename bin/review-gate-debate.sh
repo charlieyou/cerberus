@@ -1778,13 +1778,13 @@ _rdc_aggregate_and_promote() {
     local -a _aap_promoted_temp_files=()
     local -a _aap_promoted_target_files=()
     local -a _aap_promoted_sentinels=()
-    local _aap_has_fail=0 _aap_has_needs=0 _aap_has_pass=0
-    local _aap_all_findings='[]'
     local _aap_strategies_json='{}'
+    local _aap_candidates_json='[]'
+    local _aap_verdicts_json='[]'
     local _aap_pid_suffix="$$"
 
-    local _r _upper _strategy_var _strategy _aug_path _augmented _verdict
-    local _final_json _findings_with_raised
+    local _r _upper _strategy_var _strategy _aug_path _augmented _verdict _oc
+    local _final_json _findings_with_reviewer
     for _r in "${active_reviewers[@]}"; do
         _upper=$(echo "$_r" | tr '[:lower:]' '[:upper:]')
         _strategy_var="STRATEGY_NAME_${_upper}"
@@ -1807,9 +1807,7 @@ _rdc_aggregate_and_promote() {
 
         _verdict=$(printf '%s' "$_augmented" | jq -r '.verdict // ""' 2>/dev/null)
         case "$_verdict" in
-            PASS) _aap_has_pass=$((_aap_has_pass + 1)) ;;
-            FAIL) _aap_has_fail=$((_aap_has_fail + 1)) ;;
-            NEEDS_WORK) _aap_has_needs=$((_aap_has_needs + 1)) ;;
+            PASS|FAIL|NEEDS_WORK) ;;
             *)
                 # Should be unreachable — _rdc_classify_round_outputs
                 # already gates verdict to {PASS, FAIL, NEEDS_WORK}.
@@ -1819,10 +1817,12 @@ _rdc_aggregate_and_promote() {
                 ;;
         esac
 
+        _oc=$(printf '%s' "$_augmented" | jq -r '.overall_confidence // 0.5' 2>/dev/null)
+
         # Stamp the per-reviewer JSON with the additive debate fields the
         # Stop-hook + downstream surfaces expect. peer_responses_seen is
-        # left as an empty array in the stub aggregator (T009/T010 will
-        # populate from the actual peer-block opaque IDs).
+        # left as an empty array if upstream did not set it; T011/T012 will
+        # populate from the actual peer-block opaque IDs.
         _final_json=$(printf '%s' "$_augmented" | jq \
             --arg strategy "$_strategy" \
             --argjson rnd "$rounds_consumed" \
@@ -1849,35 +1849,218 @@ _rdc_aggregate_and_promote() {
         _aap_promoted_target_files+=("$_target_path")
         _aap_promoted_sentinels+=("$_sentinel_path")
 
-        # Append findings to the cross-reviewer union (simple union with
-        # raised_by attribution; T009 replaces with confidence-weighted
-        # dedup).
-        _findings_with_raised=$(printf '%s' "$_final_json" | jq \
+        # Tag this reviewer's findings with `_reviewer` so the candidate
+        # pool for the dedup pass can pre-sort by `(priority asc,
+        # confidence desc, reviewer asc)` and pick a primary deterministically.
+        # Per-reviewer JSONs themselves are NOT cross-reviewer-deduped — the
+        # `_reviewer` tag is internal to the candidate pool only.
+        _findings_with_reviewer=$(printf '%s' "$_final_json" | jq \
             --arg name "$_r" \
-            '(.findings // []) | map(. + {raised_by: [$name]})' 2>/dev/null) || _findings_with_raised='[]'
-        _aap_all_findings=$(jq -c --argjson new "$_findings_with_raised" '. + $new' <<< "$_aap_all_findings") || {
+            '(.findings // []) | map(. + {_reviewer: $name})' 2>/dev/null) || _findings_with_reviewer='[]'
+        _aap_candidates_json=$(jq -c --argjson new "$_findings_with_reviewer" '. + $new' <<< "$_aap_candidates_json") || {
             echo "aggregator failed: jq merge findings for $_r" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
+            return 1
+        }
+
+        # Per-reviewer (verdict, overall_confidence) record for the
+        # aggregate-verdict computation below. Kept as JSON to preserve
+        # numeric `overall_confidence` through the pipeline.
+        _aap_verdicts_json=$(printf '%s' "$_aap_verdicts_json" | jq \
+            --arg r "$_r" \
+            --arg v "$_verdict" \
+            --argjson oc "$_oc" \
+            '. + [{reviewer: $r, verdict: $v, overall_confidence: $oc}]') || {
+            echo "aggregator failed: jq verdicts bookkeeping for $_r" >&2
             _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
             return 1
         }
     done
 
-    # Aggregate verdict (most-severe-wins; T009 replaces with the
-    # confidence-weighted tiebreak path).
-    local _aap_agg_verdict=""
-    if [[ $_aap_has_fail -gt 0 ]]; then
-        _aap_agg_verdict="FAIL"
-    elif [[ $_aap_has_needs -gt 0 ]]; then
-        _aap_agg_verdict="NEEDS_WORK"
-    elif [[ $_aap_has_pass -gt 0 ]]; then
-        _aap_agg_verdict="PASS"
-    else
+    # ----------------------------------------------------------------------
+    # Aggregate verdict (R6, spec L245+L275-L279):
+    #   (a) FAIL is blocking — any FAIL → aggregate.json.verdict = FAIL.
+    #   (b) Otherwise: consensus mode determines PASS/NEEDS_WORK.
+    #       majority — modal verdict wins; PASS/NEEDS_WORK tie broken by
+    #         overall_confidence (sum-of-confidences per verdict so a 1-1
+    #         split between two reviewers reduces to "higher single
+    #         confidence wins").
+    #       all      — any NEEDS_WORK → NEEDS_WORK; else PASS.
+    #       any      — any PASS → PASS; else NEEDS_WORK.
+    #   (c) `requires_decision` MUST NEVER appear here. The aggregate
+    #       verdict's value space is strictly {PASS|NEEDS_WORK|FAIL}.
+    # The Stop-hook's per-reviewer priority+consensus calculator (which
+    # writes gate-state.json.consensus.verdict — including
+    # `requires_decision` for P0/P1 priority gates) is a separate surface;
+    # the aggregator never produces `requires_decision`.
+    # ----------------------------------------------------------------------
+    local _aap_agg_verdict
+    if ! _aap_agg_verdict=$(printf '%s' "$_aap_verdicts_json" | jq -r --arg mode "$consensus_mode" '
+        if length == 0 then "ERROR_EMPTY"
+        elif any(.[]; .verdict == "FAIL") then "FAIL"
+        elif $mode == "all" then
+            (if any(.[]; .verdict == "NEEDS_WORK") then "NEEDS_WORK" else "PASS" end)
+        elif $mode == "any" then
+            (if any(.[]; .verdict == "PASS") then "PASS" else "NEEDS_WORK" end)
+        else
+            # majority: pick highest count; tiebreak by sum-of-confidence
+            # desc; final tiebreak by verdict name asc for byte-determinism.
+            (group_by(.verdict)
+             | map({verdict: .[0].verdict,
+                    count: length,
+                    conf_sum: ([.[] | .overall_confidence] | add)})
+             | sort_by([-(.count), -(.conf_sum), .verdict])
+             | .[0].verdict)
+        end
+    '); then
+        echo "aggregator failed: jq aggregate verdict computation" >&2
+        _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
+        return 1
+    fi
+    if [[ "$_aap_agg_verdict" == "ERROR_EMPTY" || -z "$_aap_agg_verdict" ]]; then
         echo "aggregator failed: no valid verdicts collected from final-round reviewers" >&2
         _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
         return 1
     fi
+    # Defensive: enforce the pinned three-value enum. The aggregator MUST
+    # never emit `requires_decision` (that surface lives in
+    # gate-state.json.consensus.verdict, not aggregate.json.verdict).
+    case "$_aap_agg_verdict" in
+        PASS|NEEDS_WORK|FAIL) ;;
+        *)
+            echo "aggregator failed: invalid aggregate verdict '$_aap_agg_verdict' (must be one of PASS|NEEDS_WORK|FAIL)" >&2
+            _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
+            return 1
+            ;;
+    esac
 
-    # Active reviewers list (canonical alphabetical order).
+    # ----------------------------------------------------------------------
+    # Confidence-weighted dedup pass (R6, spec L247-L255):
+    #
+    #   Predicate (4 conditions, ALL must hold):
+    #     1. A.priority == B.priority
+    #     2. file_path non-null on both AND equal (case-sensitive).
+    #     3. line_start non-null on both, line_end non-null on both,
+    #        integer ranges overlap.
+    #     4. lowercase(A.title) == lowercase(B.title) after stripping the
+    #        leading [Px] tag (POSIX ERE: ^[[:space:]]*\[P[0-3]\][[:space:]]*)
+    #        and trimming surrounding whitespace.
+    #
+    #   Canonical merge order:
+    #     (1) Global pre-sort over all candidates by composite key
+    #         (priority asc, confidence desc, reviewer canonical name asc).
+    #         claude < codex < gemini under standard lex order.
+    #     (2) Greedy fold: iterate sorted list. For each unmerged F, mark F
+    #         as a new primary; scan subsequent unmerged candidates and
+    #         merge any F'' that satisfies the predicate against F.
+    #
+    #   Merge rule:
+    #     - F's body is the primary body (highest confidence by pre-sort;
+    #       alphabetical reviewer-name tiebreak at equal confidence).
+    #     - Each F'' body is appended under one "Also raised by another
+    #       reviewer:" subsection of F's body, in fold-iteration order.
+    #     - Merged finding inherits F's priority, title, file_path,
+    #       line_start, line_end, confidence.
+    #     - `raised_by` is the set union (deduplicated) of canonical
+    #       reviewer names; present only on merged entries (≥2 reviewers).
+    # ----------------------------------------------------------------------
+    local _aap_findings_json
+    if ! _aap_findings_json=$(printf '%s' "$_aap_candidates_json" | jq -c '
+        def normalize_title:
+          (. // "")
+          | sub("^[[:space:]]*\\[P[0-3]\\][[:space:]]*"; "")
+          | sub("^[[:space:]]+"; "")
+          | sub("[[:space:]]+$"; "")
+          | ascii_downcase;
+        def pri_idx:
+          if . == "P0" then 0
+          elif . == "P1" then 1
+          elif . == "P2" then 2
+          elif . == "P3" then 3
+          else 99 end;
+        def is_dup(A; B):
+          (A.priority == B.priority)
+          and (A.file_path != null) and (B.file_path != null)
+          and (A.file_path == B.file_path)
+          and (A.line_start != null) and (A.line_end != null)
+          and (B.line_start != null) and (B.line_end != null)
+          and (A.line_start <= B.line_end) and (B.line_start <= A.line_end)
+          and ((A.title | normalize_title) == (B.title | normalize_title));
+        # (1) Global pre-sort. Stable composite key: priority asc,
+        # confidence desc, reviewer canonical name asc.
+        (. | sort_by([(.priority | pri_idx),
+                      -((.confidence // 0.5)),
+                      ._reviewer])) as $sorted
+        # (2) Greedy fold. Track primaries (in fold-iteration order) and a
+        # set of merged-into-something indices. The state at the start of
+        # iteration $i is read for the inner scan; new merges added during
+        # $i become visible to subsequent $i values. This single-pass fold
+        # is jq-iteration-order-independent because it operates only on the
+        # pre-sorted list.
+        | reduce range(0; ($sorted | length)) as $i (
+            {primaries: [], merged: {}};
+            if (.merged[($i|tostring)] // false) then .
+            else
+              . as $st
+              | $sorted[$i] as $p
+              | [ range($i+1; ($sorted | length)) as $j
+                  | select((($st.merged[($j|tostring)] // false) | not)
+                           and is_dup($p; $sorted[$j]))
+                  | {idx: $j, finding: $sorted[$j]} ] as $ms
+              | .primaries += [{primary: $p, merges: $ms}]
+              | reduce $ms[] as $m (.; .merged[($m.idx|tostring)] = true)
+            end
+          )
+        | .primaries
+        | map(
+            .primary as $p
+            | .merges as $ms
+            | if ($ms | length) == 0 then
+                # Single-reviewer finding — `raised_by` is absent (per
+                # spec: "absent on single-reviewer findings"). The
+                # internal `_reviewer` tag is dropped from the output.
+                {priority: $p.priority,
+                 title: $p.title,
+                 body: $p.body,
+                 file_path: $p.file_path,
+                 line_start: $p.line_start,
+                 line_end: $p.line_end,
+                 confidence: $p.confidence}
+              else
+                # Merged finding — append "Also raised by another reviewer:"
+                # subsection containing each F'' body in fold order;
+                # `raised_by` is the set union of canonical reviewer
+                # names, deduplicated and order-preserved (the union
+                # order matches fold-iteration order: primary first,
+                # then absorbed candidates in encounter order).
+                {priority: $p.priority,
+                 title: $p.title,
+                 body: (
+                   ($p.body // "")
+                   + "\n\nAlso raised by another reviewer:\n\n"
+                   + ([$ms[] | (.finding.body // "")] | join("\n\n"))
+                 ),
+                 file_path: $p.file_path,
+                 line_start: $p.line_start,
+                 line_end: $p.line_end,
+                 confidence: $p.confidence,
+                 raised_by: ([$p._reviewer] + [$ms[] | .finding._reviewer]
+                             | unique)
+                }
+              end
+          )
+    '); then
+        echo "aggregator failed: jq dedup pass" >&2
+        _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
+        return 1
+    fi
+
+    # ----------------------------------------------------------------------
+    # Active reviewers list (canonical alphabetical order). `strategies`
+    # is already keyed by reviewer name; we trust the upstream call (only
+    # active final-round reviewers in active_reviewers[]) to keep the
+    # `strategies` map limited to the `reviewers[]` set per spec.
+    # ----------------------------------------------------------------------
     local _aap_active_sorted
     _aap_active_sorted=$(printf '%s\n' "${active_reviewers[@]}" | LC_ALL=C sort)
     local _aap_active_json='[]'
@@ -1887,17 +2070,50 @@ _rdc_aggregate_and_promote() {
         _aap_active_json=$(printf '%s' "$_aap_active_json" | jq --arg n "$_aap_r" '. + [$n]')
     done <<< "$_aap_active_sorted"
 
+    # ----------------------------------------------------------------------
+    # Deterministic summary template (spec R6 + plan L213-L240):
+    #   "<verdict> from <N> active final-round reviewers (<csv>);
+    #    <findings_count> unique findings (P0:<n0> P1:<n1> P2:<n2> P3:<n3>);
+    #    avg overall_confidence <x.xx>."
+    # avg confidence is the arithmetic mean of per-reviewer
+    # overall_confidence rendered to two decimals.
+    # ----------------------------------------------------------------------
+    local _aap_csv
+    _aap_csv=$(printf '%s' "$_aap_active_sorted" | awk 'BEGIN{first=1} NF>0 { if (first) {printf "%s", $0; first=0} else {printf ", %s", $0} }')
+
+    local _aap_n="${#active_reviewers[@]}"
+    local _aap_findings_count _aap_p0 _aap_p1 _aap_p2 _aap_p3
+    _aap_findings_count=$(printf '%s' "$_aap_findings_json" | jq 'length' 2>/dev/null || echo "0")
+    _aap_p0=$(printf '%s' "$_aap_findings_json" | jq '[.[] | select(.priority == "P0")] | length' 2>/dev/null || echo "0")
+    _aap_p1=$(printf '%s' "$_aap_findings_json" | jq '[.[] | select(.priority == "P1")] | length' 2>/dev/null || echo "0")
+    _aap_p2=$(printf '%s' "$_aap_findings_json" | jq '[.[] | select(.priority == "P2")] | length' 2>/dev/null || echo "0")
+    _aap_p3=$(printf '%s' "$_aap_findings_json" | jq '[.[] | select(.priority == "P3")] | length' 2>/dev/null || echo "0")
+
+    local _aap_avg_raw
+    _aap_avg_raw=$(printf '%s' "$_aap_verdicts_json" | jq -r '
+        if length == 0 then 0
+        else (([.[] | .overall_confidence] | add) / length) end' 2>/dev/null)
+    local _aap_avg_oc
+    _aap_avg_oc=$(LC_ALL=C awk -v v="${_aap_avg_raw:-0}" 'BEGIN { printf "%.2f", v }')
+
+    local _aap_summary
+    _aap_summary=$(printf '%s from %d active final-round reviewers (%s); %d unique findings (P0:%d P1:%d P2:%d P3:%d); avg overall_confidence %s.' \
+        "$_aap_agg_verdict" "$_aap_n" "$_aap_csv" \
+        "$_aap_findings_count" "$_aap_p0" "$_aap_p1" "$_aap_p2" "$_aap_p3" \
+        "$_aap_avg_oc")
+
     local _aap_aggregate_tmp="$reviews_dir/.aggregate.json.staging.$_aap_pid_suffix"
     if ! jq -n \
         --arg verdict "$_aap_agg_verdict" \
-        --argjson findings "$_aap_all_findings" \
+        --arg summary "$_aap_summary" \
+        --argjson findings "$_aap_findings_json" \
         --arg consensus_mode "$consensus_mode" \
         --argjson rounds_consumed "$rounds_consumed" \
         --argjson reviewers "$_aap_active_json" \
         --argjson strategies "$_aap_strategies_json" \
         '{
             verdict: $verdict,
-            summary: "Phase E.2 stub aggregate (multi-round; T009 replaces with confidence-weighted dedup and the canonical jq summary template).",
+            summary: $summary,
             findings: $findings,
             consensus_mode: $consensus_mode,
             rounds_consumed: $rounds_consumed,

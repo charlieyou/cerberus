@@ -1,0 +1,30 @@
+{
+  "label": "consensus=any with any PASS → PASS regardless of confidence",
+  "consensus_mode": "any",
+  "active_reviewers": ["claude", "codex"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "PASS",
+      "summary": "claude r2",
+      "overall_confidence": 0.45,
+      "findings": []
+    },
+    "codex": {
+      "verdict": "NEEDS_WORK",
+      "summary": "codex r2",
+      "overall_confidence": 0.95,
+      "findings": []
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "PASS",
+    "summary": "PASS from 2 active final-round reviewers (claude, codex); 0 unique findings (P0:0 P1:0 P2:0 P3:0); avg overall_confidence 0.70.",
+    "findings": [],
+    "consensus_mode": "any",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first"}
+  }
+}

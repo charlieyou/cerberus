@@ -1,0 +1,61 @@
+{
+  "label": "Equal-confidence merge: claude and codex emit dup findings at confidence 0.7; primary is claude (alphabetical reviewer-name tiebreak: claude < codex)",
+  "consensus_mode": "majority",
+  "active_reviewers": ["claude", "codex"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "NEEDS_WORK",
+      "summary": "claude r2",
+      "overall_confidence": 0.7,
+      "findings": [
+        {
+          "priority": "P1",
+          "title": "Race condition in initializer",
+          "body": "Claude tied body.",
+          "file_path": "src/init.ts",
+          "line_start": 100,
+          "line_end": 120,
+          "confidence": 0.7
+        }
+      ]
+    },
+    "codex": {
+      "verdict": "NEEDS_WORK",
+      "summary": "codex r2",
+      "overall_confidence": 0.7,
+      "findings": [
+        {
+          "priority": "P1",
+          "title": "Race condition in initializer",
+          "body": "Codex tied body.",
+          "file_path": "src/init.ts",
+          "line_start": 105,
+          "line_end": 115,
+          "confidence": 0.7
+        }
+      ]
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "NEEDS_WORK",
+    "summary": "NEEDS_WORK from 2 active final-round reviewers (claude, codex); 1 unique findings (P0:0 P1:1 P2:0 P3:0); avg overall_confidence 0.70.",
+    "findings": [
+      {
+        "priority": "P1",
+        "title": "Race condition in initializer",
+        "body": "Claude tied body.\n\nAlso raised by another reviewer:\n\nCodex tied body.",
+        "file_path": "src/init.ts",
+        "line_start": 100,
+        "line_end": 120,
+        "confidence": 0.7,
+        "raised_by": ["claude", "codex"]
+      }
+    ],
+    "consensus_mode": "majority",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first"}
+  }
+}

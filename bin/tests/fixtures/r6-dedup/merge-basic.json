@@ -1,0 +1,61 @@
+{
+  "label": "Basic dedup: same priority + file_path + overlapping lines + identical case-folded title (after [P1] strip) → MERGED with claude (higher confidence) as primary",
+  "consensus_mode": "majority",
+  "active_reviewers": ["claude", "codex"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "PASS",
+      "summary": "claude r2",
+      "overall_confidence": 0.85,
+      "findings": [
+        {
+          "priority": "P1",
+          "title": "[P1] Missing null check",
+          "body": "Claude body.",
+          "file_path": "src/handler.ts",
+          "line_start": 42,
+          "line_end": 48,
+          "confidence": 0.85
+        }
+      ]
+    },
+    "codex": {
+      "verdict": "PASS",
+      "summary": "codex r2",
+      "overall_confidence": 0.55,
+      "findings": [
+        {
+          "priority": "P1",
+          "title": "missing null check",
+          "body": "Codex body.",
+          "file_path": "src/handler.ts",
+          "line_start": 45,
+          "line_end": 50,
+          "confidence": 0.55
+        }
+      ]
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "PASS",
+    "summary": "PASS from 2 active final-round reviewers (claude, codex); 1 unique findings (P0:0 P1:1 P2:0 P3:0); avg overall_confidence 0.70.",
+    "findings": [
+      {
+        "priority": "P1",
+        "title": "[P1] Missing null check",
+        "body": "Claude body.\n\nAlso raised by another reviewer:\n\nCodex body.",
+        "file_path": "src/handler.ts",
+        "line_start": 42,
+        "line_end": 48,
+        "confidence": 0.85,
+        "raised_by": ["claude", "codex"]
+      }
+    ],
+    "consensus_mode": "majority",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first"}
+  }
+}
