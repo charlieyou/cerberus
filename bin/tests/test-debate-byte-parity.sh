@@ -644,6 +644,221 @@ REGRESSION_ART
 fi
 
 # ---------------------------------------------------------------------------
+# T006 R9 schema-variant assertions
+#
+# The schema bytes written to `$REVIEWS_DIR/review-schema.json` (and the
+# fallback bytes returned by `default_review_schema()` for the repair path)
+# MUST be byte-identical to the pre-feature schema when --debate is absent
+# (covered by the byte-parity sweep above) AND MUST add the additive debate
+# fields (overall_confidence, strategy, round, peer_responses_seen at the top
+# level; confidence inside findings[*]) when --debate is set, while retaining
+# `additionalProperties: false` on both objects.
+#
+# These assertions are unit-style on the helper functions in
+# bin/review-gate-models.sh; the runtime end-to-end flow is covered separately
+# by bin/tests/test-debate-end-to-end.sh.
+# ---------------------------------------------------------------------------
+echo "" >&2
+
+SCHEMA_TEST_TMP="$(mktemp -d -t debate-schema-variant.XXXXXX)"
+schema_cleanup() { rm -rf "$SCHEMA_TEST_TMP"; }
+trap 'restore_fixtures; schema_cleanup' EXIT INT TERM
+
+# Source review-gate-models.sh into a subshell so default_review_schema /
+# _emit_review_schema are callable in the test. The library defines a
+# `die()` shim if needed; we do not invoke any code path that requires it.
+RG_MODELS_LIB="$PLUGIN_ROOT/bin/review-gate-models.sh"
+
+if [[ ! -f "$RG_MODELS_LIB" ]]; then
+    log_info "review-gate-models.sh missing; skipping R9 schema-variant assertions"
+else
+    # Capture the canonical pre-feature schema bytes from a committed fixture
+    # (the spawn-bare shape's review-schema.json is the canonical reference).
+    BASELINE_SCHEMA="$BACKUP_DIR/spawn-bare/reviews/review-schema.json"
+
+    if [[ ! -f "$BASELINE_SCHEMA" ]]; then
+        log_info "Pre-feature schema baseline missing under $BACKUP_DIR; skipping R9 schema-variant assertions"
+    else
+        log_test "R9 schema variant: default_review_schema() with no arg / no env emits pre-feature bytes"
+        non_debate_emit_a="$SCHEMA_TEST_TMP/non-debate-default.json"
+        (
+            unset REVIEW_GATE_DEBATE
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            default_review_schema
+        ) > "$non_debate_emit_a"
+        if cmp -s "$BASELINE_SCHEMA" "$non_debate_emit_a"; then
+            log_pass "default_review_schema() with no arg/env is byte-identical to baseline"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "default_review_schema() with no arg/env drifted from baseline"
+            diff -u "$BASELINE_SCHEMA" "$non_debate_emit_a" 2>/dev/null | head -40 >&2 || true
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test 'R9 schema variant: _emit_review_schema "false" is byte-identical to baseline'
+        non_debate_emit_b="$SCHEMA_TEST_TMP/non-debate-explicit.json"
+        (
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            _emit_review_schema "false"
+        ) > "$non_debate_emit_b"
+        if cmp -s "$BASELINE_SCHEMA" "$non_debate_emit_b"; then
+            log_pass '_emit_review_schema "false" byte-identical to baseline'
+            pass_count=$((pass_count + 1))
+        else
+            log_fail '_emit_review_schema "false" drifted from baseline'
+            diff -u "$BASELINE_SCHEMA" "$non_debate_emit_b" 2>/dev/null | head -40 >&2 || true
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test "R9 schema variant: REVIEW_GATE_DEBATE env override emits pre-feature bytes when set to 0"
+        non_debate_emit_c="$SCHEMA_TEST_TMP/non-debate-env-zero.json"
+        (
+            export REVIEW_GATE_DEBATE=0
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            default_review_schema
+        ) > "$non_debate_emit_c"
+        if cmp -s "$BASELINE_SCHEMA" "$non_debate_emit_c"; then
+            log_pass "default_review_schema() with REVIEW_GATE_DEBATE=0 is byte-identical to baseline"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "default_review_schema() with REVIEW_GATE_DEBATE=0 drifted from baseline"
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test 'R9 schema variant: _emit_review_schema "true" admits the additive debate fields'
+        debate_emit="$SCHEMA_TEST_TMP/debate-explicit.json"
+        (
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            _emit_review_schema "true"
+        ) > "$debate_emit"
+        if jq -e . "$debate_emit" >/dev/null 2>&1; then
+            debate_ok=1
+            # additionalProperties: false retained at top level + findings.items.
+            top_addl=$(jq -r '.additionalProperties' "$debate_emit")
+            findings_addl=$(jq -r '.properties.findings.items.additionalProperties' "$debate_emit")
+            if [[ "$top_addl" != "false" ]]; then
+                log_fail "debate variant top-level additionalProperties != false (got: $top_addl)"
+                debate_ok=0
+            fi
+            if [[ "$findings_addl" != "false" ]]; then
+                log_fail "debate variant findings[*] additionalProperties != false (got: $findings_addl)"
+                debate_ok=0
+            fi
+            # Top-level additive fields present (as optional, NOT required).
+            for f in overall_confidence strategy round peer_responses_seen; do
+                present=$(jq --arg n "$f" 'if .properties[$n] then "yes" else "no" end' "$debate_emit")
+                if [[ "$present" != '"yes"' ]]; then
+                    log_fail "debate variant missing top-level optional property: $f"
+                    debate_ok=0
+                fi
+                in_required=$(jq --arg n "$f" '(.required // []) | index($n) | if . == null then "no" else "yes" end' "$debate_emit")
+                if [[ "$in_required" != '"no"' ]]; then
+                    log_fail "debate variant: $f appears in required[] but should be optional"
+                    debate_ok=0
+                fi
+            done
+            # findings[*].confidence present as optional.
+            f_conf=$(jq 'if .properties.findings.items.properties.confidence then "yes" else "no" end' "$debate_emit")
+            if [[ "$f_conf" != '"yes"' ]]; then
+                log_fail "debate variant missing findings[*].confidence optional property"
+                debate_ok=0
+            fi
+            f_conf_required=$(jq '(.properties.findings.items.required // []) | index("confidence") | if . == null then "no" else "yes" end' "$debate_emit")
+            if [[ "$f_conf_required" != '"no"' ]]; then
+                log_fail "debate variant: findings[*].confidence appears in required[] but should be optional"
+                debate_ok=0
+            fi
+            # The three pre-feature required top-level keys are still required.
+            for f in verdict summary findings; do
+                in_required=$(jq --arg n "$f" '(.required // []) | index($n) | if . == null then "no" else "yes" end' "$debate_emit")
+                if [[ "$in_required" != '"yes"' ]]; then
+                    log_fail "debate variant: pre-feature required key '$f' is no longer required"
+                    debate_ok=0
+                fi
+            done
+            if [[ $debate_ok -eq 1 ]]; then
+                log_pass "debate variant has additive fields as optional, additionalProperties:false retained"
+                pass_count=$((pass_count + 1))
+            else
+                fail_count=$((fail_count + 1))
+            fi
+        else
+            log_fail "debate variant is not valid JSON"
+            cat "$debate_emit" >&2
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test "R9 schema variant: REVIEW_GATE_DEBATE=1 env causes default_review_schema() to emit debate variant"
+        debate_emit_env="$SCHEMA_TEST_TMP/debate-env.json"
+        (
+            export REVIEW_GATE_DEBATE=1
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            default_review_schema
+        ) > "$debate_emit_env"
+        # The two debate-variant emissions must be byte-identical.
+        if cmp -s "$debate_emit" "$debate_emit_env"; then
+            log_pass "REVIEW_GATE_DEBATE=1 emits the same debate variant as explicit arg"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "REVIEW_GATE_DEBATE=1 emission diverges from explicit \"true\" arg"
+            diff -u "$debate_emit" "$debate_emit_env" 2>/dev/null | head -40 >&2 || true
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test "R9 schema variant: debate variant is NOT byte-identical to baseline"
+        if cmp -s "$BASELINE_SCHEMA" "$debate_emit"; then
+            log_fail "debate variant matched baseline; expected divergence (additive fields should differ)"
+            fail_count=$((fail_count + 1))
+        else
+            log_pass "debate variant correctly differs from baseline"
+            pass_count=$((pass_count + 1))
+        fi
+
+        # Repair-prompt schema selection: the schema_text fed into the repair
+        # prompt builder MUST match the conditional. We exercise the source
+        # of truth (default_review_schema) the same way repair_review_output
+        # does when no schema_file is on disk.
+        log_test "R9 schema variant: repair-path fallback under REVIEW_GATE_DEBATE=1 picks debate variant"
+        repair_under_debate="$SCHEMA_TEST_TMP/repair-debate.json"
+        (
+            export REVIEW_GATE_DEBATE=1
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            # Mirrors repair_review_output's exact fallback: schema_text=$(default_review_schema)
+            default_review_schema
+        ) > "$repair_under_debate"
+        if cmp -s "$repair_under_debate" "$debate_emit"; then
+            log_pass "repair-path fallback emits debate variant under REVIEW_GATE_DEBATE=1"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "repair-path fallback diverges from debate variant under REVIEW_GATE_DEBATE=1"
+            fail_count=$((fail_count + 1))
+        fi
+
+        log_test "R9 schema variant: repair-path fallback under no debate env picks pre-feature schema"
+        repair_no_debate="$SCHEMA_TEST_TMP/repair-no-debate.json"
+        (
+            unset REVIEW_GATE_DEBATE
+            # shellcheck disable=SC1090
+            source "$RG_MODELS_LIB"
+            default_review_schema
+        ) > "$repair_no_debate"
+        if cmp -s "$repair_no_debate" "$BASELINE_SCHEMA"; then
+            log_pass "repair-path fallback emits pre-feature schema bytes when no debate env"
+            pass_count=$((pass_count + 1))
+        else
+            log_fail "repair-path fallback drifted from pre-feature baseline when no debate env"
+            fail_count=$((fail_count + 1))
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo "" >&2

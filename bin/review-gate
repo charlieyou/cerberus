@@ -3145,40 +3145,28 @@ PROMPT
         build_prompt "$artifact_path" "$REVIEW_TYPE" > "$prompt_file"
     fi
 
-    # Create JSON schema for structured output
+    # Create JSON schema for structured output. Delegates to
+    # `_emit_review_schema` (review-gate-models.sh) which owns the single
+    # debate-conditional branch: byte-identical pre-feature schema bytes when
+    # `--debate` is absent (R9 byte-parity), debate variant with the additive
+    # fields when `--debate` is set. The repair path
+    # (`repair_review_output()`) reads the same schema_file when present and
+    # falls back to `default_review_schema()` (which honors the
+    # `REVIEW_GATE_DEBATE` env var exported below) so the repair-prompt schema
+    # picks the matching variant.
     local schema_file="$REVIEWS_DIR/review-schema.json"
-    cat > "$schema_file" <<'SCHEMA'
-{
-  "type": "object",
-  "properties": {
-    "verdict": {
-      "type": "string",
-      "enum": ["PASS", "FAIL", "NEEDS_WORK"]
-    },
-    "summary": {
-      "type": "string"
-    },
-    "findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "title": {"type": "string"},
-          "body": {"type": "string"},
-          "priority": {"type": "integer", "minimum": 0, "maximum": 3},
-          "file_path": {"type": ["string", "null"]},
-          "line_start": {"type": ["integer", "null"]},
-          "line_end": {"type": ["integer", "null"]}
-        },
-        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
-        "additionalProperties": false
-      }
-    }
-  },
-  "required": ["verdict", "summary", "findings"],
-  "additionalProperties": false
-}
-SCHEMA
+    if [[ "$debate" == "true" ]]; then
+        # Export REVIEW_GATE_DEBATE so downstream callers of
+        # default_review_schema() (notably repair_review_output's fallback
+        # when no schema_file is on disk) emit the debate variant. The env
+        # var is scoped to this spawn invocation; non-debate runs never set
+        # it, preserving R9 byte-parity for the schema artifact and the
+        # repair-prompt schema text.
+        export REVIEW_GATE_DEBATE=1
+        _emit_review_schema "true" > "$schema_file"
+    else
+        _emit_review_schema "false" > "$schema_file"
+    fi
 
     # Initialize state
     local now
@@ -3272,6 +3260,31 @@ SCHEMA
             die "Failed to resolve default verification-first.md (required for prebuilt-prompt per-reviewer rendering)"
     fi
 
+    # ----------------------------------------------------------------------
+    # Debate-mode staging directory. Under --debate, spawn_reviewer writes
+    # per-reviewer outputs into the per-round staging dir
+    # `iterations/<iter>/round-1/` rather than the canonical $REVIEWS_DIR.
+    # The synchronous coordinator (run_debate_coordinator below) sync-waits
+    # for the staging sentinels, runs the Phase D stub aggregator, and
+    # atomically promotes per-reviewer JSONs into $REVIEWS_DIR with the
+    # additive debate fields. Non-debate runs leave _debate_staging_dir
+    # empty and spawn_reviewer falls back to $REVIEWS_DIR (R9 byte-parity
+    # is preserved since spawn_reviewer's 5th-arg default is REVIEWS_DIR).
+    # ----------------------------------------------------------------------
+    local _debate_staging_dir=""
+    if [[ "$debate" == "true" ]]; then
+        _debate_staging_dir="$REVIEW_DIR/iterations/$current_iter/round-1"
+        mkdir -p "$_debate_staging_dir"
+        # Defensive cleanup: a re-spawn under REVIEW_GATE_RERUN=1 in the
+        # same iteration must not see stale sentinels from a prior run
+        # (otherwise the coordinator's wait loop would short-circuit on
+        # stale .done files before reviewers have re-written outputs).
+        rm -f "$_debate_staging_dir"/*.done \
+              "$_debate_staging_dir"/*.failed \
+              "$_debate_staging_dir"/*.json \
+              "$_debate_staging_dir"/*.jsonl 2>/dev/null || true
+    fi
+
     for reviewer in "${agents_list[@]}"; do
         # Per-reviewer prompt rendering under --debate (T005). Two branches:
         #
@@ -3341,7 +3354,23 @@ with open(out_path, "wb") as f: f.write(out)
                 fi
             fi
         fi
-        if spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file"; then
+        # Under --debate, override spawn_reviewer's output_dir to the
+        # per-round staging dir so reviewer JSON/sentinels land there
+        # rather than the canonical $REVIEWS_DIR. Non-debate runs omit
+        # the 5th arg so spawn_reviewer's default ($REVIEWS_DIR) applies
+        # — keeping R9 byte-parity for non-debate invocations.
+        local _rdc_spawn_rc=0
+        if [[ "$debate" == "true" ]]; then
+            spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file" "$_debate_staging_dir" || _rdc_spawn_rc=$?
+        else
+            spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file" || _rdc_spawn_rc=$?
+        fi
+        if [[ $_rdc_spawn_rc -eq 0 ]]; then
+            # state_json.reviewers always points at the canonical
+            # $REVIEWS_DIR paths since the synchronous coordinator
+            # promotes per-reviewer JSONs there before returning. Stop-
+            # hook (today) reads $REVIEWS_DIR; the staging dir is an
+            # implementation detail not surfaced via state_json.
             reviewers_json=$(echo "$reviewers_json" | jq \
                 --arg name "$reviewer" \
                 --arg output "$REVIEWS_DIR/${reviewer}.json" \
@@ -3377,6 +3406,41 @@ with open(out_path, "wb") as f: f.write(out)
 
     echo "Review gate spawned: $spawned reviewers for $artifact_path" >&2
     echo "State file: $STATE_FILE" >&2
+
+    # ----------------------------------------------------------------------
+    # Debate-mode synchronous coordinator (Phase D scope: Round 1 + stub
+    # aggregate + atomic promotion).
+    #
+    # By this point under --debate, reviewer processes have been detached
+    # against the per-round staging dir ($_debate_staging_dir). The
+    # coordinator sync-waits for sentinels, runs the stub aggregator, and
+    # atomically promotes per-reviewer JSONs (with additive debate fields:
+    # overall_confidence, strategy, round=1, peer_responses_seen=[]) plus
+    # `aggregate.json` into the canonical $REVIEWS_DIR. By the time control
+    # returns from this call, $REVIEWS_DIR is populated exactly as the
+    # Stop-hook expects today.
+    #
+    # On any aggregator error: $REVIEWS_DIR is left UNTOUCHED (no
+    # per-reviewer JSONs, no sentinels, no aggregate.json). Staging is
+    # preserved under iterations/<iter>/round-1/ for inspection. The
+    # process exits non-zero so the failure is not silently swallowed
+    # (T012 will pin the exact reserved exit code; for now any non-zero
+    # exit is acceptable per the task spec).
+    # ----------------------------------------------------------------------
+    if [[ "$debate" == "true" ]]; then
+        local _rdc_timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
+        local _rdc_poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+        if ! run_debate_coordinator \
+                "$_debate_staging_dir" "$REVIEWS_DIR" \
+                "$consensus_mode" "$_rdc_timeout" "$_rdc_poll" \
+                "${agents_list[@]}"; then
+            echo "" >&2
+            echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
+            exit 1
+        fi
+        echo "Debate coordinator completed: aggregate.json + per-reviewer JSONs promoted to $REVIEWS_DIR" >&2
+    fi
+
     echo "" >&2
     echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
 }

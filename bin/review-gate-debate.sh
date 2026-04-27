@@ -313,3 +313,402 @@ resolve_strategy_path() {
     echo "error: strategy directive file not found: prompts/strategies/${strategy_name}.md" >&2
     return 1
 }
+
+# ---------------------------------------------------------------------------
+# Internal helper: best-effort `rm -f` over the listed paths. Used by
+# run_debate_coordinator's failure paths to clean up partially-staged temp
+# files inside $reviews_dir before returning non-zero. The function is
+# error-tolerant — a missing path or a permission failure is logged but does
+# not propagate up the call stack (the caller is already in a failure path
+# and the temp files have hidden `.staging.<pid>` names that will not be
+# read by the Stop-hook).
+_rdc_cleanup_temp_files() {
+    local _f
+    for _f in "$@"; do
+        [[ -z "$_f" ]] && continue
+        rm -f "$_f" 2>/dev/null || true
+    done
+}
+
+# ---------------------------------------------------------------------------
+# run_debate_coordinator — synchronous in-process coordinator (Phase D scope:
+# Round 1 only, stub aggregator, atomic promotion).
+# ---------------------------------------------------------------------------
+#
+# This function is the post-spawn finalize phase of the debate flow. By the
+# time it is called, `bin/review-gate` has already:
+#
+#   - Run the debate preflights (R10 type whitelist, <2 reviewers hard-error)
+#   - Run `assign_strategies` and exported per-reviewer
+#     STRATEGY_DIRECTIVE_PATH_<REVIEWER> + STRATEGY_NAME_<REVIEWER> +
+#     DEBATE_ARTIFACT_ID
+#   - Emitted the debate-conditional `review-schema.json` (via
+#     `_emit_review_schema "true"` from review-gate-models.sh)
+#   - Rendered per-reviewer prompts under --debate (T005 wires per-reviewer
+#     STRATEGY_NAME_<REVIEWER> bytes into each reviewer's prompt)
+#   - Detached each reviewer via `spawn_reviewer` with the staging dir
+#     ($staging_dir below) as the output directory, NOT the canonical
+#     $REVIEWS_DIR. Per-reviewer JSONs/sentinels currently land in staging.
+#
+# This function then:
+#
+#   1. Polls for `<reviewer>.done`/`<reviewer>.failed` sentinels under
+#      $staging_dir (mirrors the Stop-hook's polling pattern at
+#      bin/review-gate-hook.sh ~810-830).
+#   2. Phase D stub aggregator: parses each reviewer's JSON via the existing
+#      `extract_json` (which handles codex/claude/gemini wrappers + repair
+#      fallback), augments with per-reviewer additive fields
+#      (overall_confidence, strategy, round=1, peer_responses_seen=[]), and
+#      computes a single-round verdict via "most severe wins" semantics.
+#      T009 replaces this stub with the real confidence-weighted dedup.
+#   3. Atomic promotion: writes each augmented per-reviewer JSON to a temp
+#      path inside $reviews_dir, then `mv`s into the final
+#      $reviews_dir/<reviewer>.json position, then writes the
+#      $reviews_dir/<reviewer>.done sentinel. Stop-hook polls for the
+#      sentinel before reading the JSON, so writing the JSON BEFORE the
+#      sentinel avoids the half-written-JSON race.
+#   4. Writes $reviews_dir/aggregate.json after every per-reviewer JSON has
+#      been promoted. The Phase D stub shape:
+#        verdict, summary (placeholder; T009 replaces),
+#        findings[] (simple union with raised_by per-reviewer attribution),
+#        consensus_mode, rounds_consumed=1, reviewers[] (active set),
+#        strategies{}.
+#
+# Failure handling:
+#
+#   On any aggregator error (parse failure, .failed sentinel, missing
+#   output, jq crash), $reviews_dir is left UNTOUCHED — no per-reviewer
+#   JSONs, no .done sentinels, no aggregate.json. Any temp staging files
+#   under $reviews_dir created during the partial promotion are removed.
+#   The function returns non-zero. Staging ($staging_dir) is preserved
+#   for inspection. T012 will pin the exact exit codes (5 for aggregator
+#   failure, 130 for SIGINT, 6 for degraded-below-2); for now any
+#   non-zero return is surfaced to the caller.
+#
+# Args (positional):
+#   $1  staging_dir     Per-round staging directory (e.g.,
+#                       $REVIEW_DIR/iterations/<iter>/round-1/) where
+#                       spawn_reviewer wrote per-reviewer outputs.
+#   $2  reviews_dir     Canonical $REVIEWS_DIR (atomic-promotion target).
+#   $3  consensus_mode  One of majority|all|any. Recorded in
+#                       aggregate.json.consensus_mode for downstream
+#                       surfaces (gate report, telemetry).
+#   $4  timeout_sec     Max seconds to wait for all sentinels before
+#                       erroring out (REVIEW_GATE_MAX_WAIT_SECONDS default
+#                       is 1800 in `wait`; we use the same default here so
+#                       the synchronous coordinator's wait budget mirrors
+#                       the Stop-hook's existing budget).
+#   $5  poll_interval   Seconds between polls (>=1).
+#   $@  (6+)            Reviewer canonical names (active set).
+#
+# Returns 0 on success; non-zero on any aggregator error.
+run_debate_coordinator() {
+    local staging_dir="${1:-}"
+    local reviews_dir="${2:-}"
+    local consensus_mode="${3:-majority}"
+    local timeout_sec="${4:-1800}"
+    local poll_interval="${5:-3}"
+    if [[ $# -lt 6 ]]; then
+        echo "run_debate_coordinator: missing reviewer arguments (need at least 1)" >&2
+        return 1
+    fi
+    shift 5
+    local -a _rdc_reviewers=("$@")
+
+    if [[ -z "$staging_dir" || ! -d "$staging_dir" ]]; then
+        echo "run_debate_coordinator: staging directory missing or invalid: $staging_dir" >&2
+        return 1
+    fi
+    if [[ -z "$reviews_dir" ]]; then
+        echo "run_debate_coordinator: reviews directory unset" >&2
+        return 1
+    fi
+    if [[ ! -d "$reviews_dir" ]]; then
+        if ! mkdir -p "$reviews_dir"; then
+            echo "run_debate_coordinator: cannot create reviews directory: $reviews_dir" >&2
+            return 1
+        fi
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "run_debate_coordinator: jq not available" >&2
+        return 1
+    fi
+
+    # Sanitize numeric args (defensive against caller passing empty strings).
+    if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
+        timeout_sec=1800
+    fi
+    if ! [[ "$poll_interval" =~ ^[0-9]+$ ]] || [[ "$poll_interval" -lt 1 ]]; then
+        poll_interval=3
+    fi
+
+    # ----------------------------------------------------------------------
+    # Phase D step 4: sync-wait for all reviewer sentinels in $staging_dir.
+    # Mirrors the polling pattern at bin/review-gate-hook.sh:810-830 — wait
+    # until every reviewer has either a .done or .failed sentinel under
+    # $staging_dir, OR the timeout budget elapses.
+    # ----------------------------------------------------------------------
+    local _rdc_start_time _rdc_now _rdc_elapsed _rdc_reviewer
+    _rdc_start_time=$(date +%s)
+    while true; do
+        local _rdc_all_done="true"
+        for _rdc_reviewer in "${_rdc_reviewers[@]}"; do
+            if [[ ! -f "$staging_dir/${_rdc_reviewer}.done" ]] && \
+               [[ ! -f "$staging_dir/${_rdc_reviewer}.failed" ]]; then
+                _rdc_all_done="false"
+                break
+            fi
+        done
+        if [[ "$_rdc_all_done" == "true" ]]; then
+            break
+        fi
+        _rdc_now=$(date +%s)
+        _rdc_elapsed=$(( _rdc_now - _rdc_start_time ))
+        if [[ $_rdc_elapsed -ge $timeout_sec ]]; then
+            echo "aggregator failed: timeout waiting for round-1 reviewer sentinels under $staging_dir (elapsed ${_rdc_elapsed}s, budget ${timeout_sec}s)" >&2
+            return 1
+        fi
+        sleep "$poll_interval"
+    done
+
+    # ----------------------------------------------------------------------
+    # Phase D step 5+7: stub aggregator. Parse each reviewer's JSON,
+    # augment with debate additive fields, collect verdicts and findings.
+    # On any reviewer-level failure (failed sentinel, missing output,
+    # parse error, invalid verdict), abort BEFORE writing anything to
+    # $reviews_dir so the canonical state stays empty per the failure
+    # contract.
+    # ----------------------------------------------------------------------
+    local -a _rdc_promoted_temp_files=()
+    local -a _rdc_promoted_target_files=()
+    local -a _rdc_promoted_sentinels=()
+    local -a _rdc_active_reviewers=()
+    local _rdc_has_fail=0 _rdc_has_needs=0 _rdc_has_pass=0
+    local _rdc_all_findings='[]'
+    local _rdc_strategies_json='{}'
+    local _rdc_pid_suffix="$$"
+
+    for _rdc_reviewer in "${_rdc_reviewers[@]}"; do
+        # Per-reviewer strategy from the assign_strategies pass that
+        # bin/review-gate already ran before spawn. STRATEGY_NAME_<UPPER>
+        # was exported from there; default to verification-first as a
+        # defensive last resort (assign_strategies always exports a name
+        # under valid invocations, but bare-spawn fixtures may invoke
+        # this function directly with a synthetic env).
+        local _rdc_upper
+        _rdc_upper=$(echo "$_rdc_reviewer" | tr '[:lower:]' '[:upper:]')
+        local _rdc_strategy_var="STRATEGY_NAME_${_rdc_upper}"
+        local _rdc_strategy="${!_rdc_strategy_var:-verification-first}"
+        _rdc_strategies_json=$(printf '%s' "$_rdc_strategies_json" | jq \
+            --arg name "$_rdc_reviewer" --arg strategy "$_rdc_strategy" \
+            '.[$name] = $strategy') || {
+            echo "aggregator failed: jq strategies bookkeeping for reviewer $_rdc_reviewer" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        }
+
+        local _rdc_out_file="$staging_dir/${_rdc_reviewer}.json"
+        local _rdc_failed_file="$staging_dir/${_rdc_reviewer}.failed"
+
+        # Phase D stub: any .failed sentinel is a hard error. T008 will
+        # introduce Mode A abstain handling (terminal-abstention rule) and
+        # the degraded-below-2 mid-debate gate; for Phase D we surface
+        # the failure as an aggregator error so it is not silently
+        # swallowed.
+        if [[ -f "$_rdc_failed_file" ]]; then
+            echo "aggregator failed: reviewer $_rdc_reviewer wrote .failed sentinel under $staging_dir (T008 will wire Mode A abstention; Phase D treats this as a hard aggregator error)" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        fi
+
+        if [[ ! -s "$_rdc_out_file" ]]; then
+            echo "aggregator failed: reviewer $_rdc_reviewer output missing or empty: $_rdc_out_file" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        fi
+
+        # Parse + unwrap via the shared extract_json helper (handles
+        # codex/claude/gemini provider wrappers and the existing repair
+        # fallback). extract_json is defined in review-gate-models.sh,
+        # which bin/review-gate sources before sourcing this file.
+        local _rdc_parsed
+        if ! _rdc_parsed=$(extract_json "$_rdc_out_file" "$_rdc_reviewer" 2>/dev/null); then
+            echo "aggregator failed: cannot parse reviewer $_rdc_reviewer output ($_rdc_out_file)" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        fi
+
+        # Verdict — required for the stub aggregator's "most severe wins"
+        # rollup. Invalid verdict is an aggregator error in Phase D.
+        local _rdc_verdict
+        _rdc_verdict=$(printf '%s' "$_rdc_parsed" | jq -r '.verdict // ""' 2>/dev/null || echo "")
+        case "$_rdc_verdict" in
+            PASS) _rdc_has_pass=$((_rdc_has_pass + 1)) ;;
+            FAIL) _rdc_has_fail=$((_rdc_has_fail + 1)) ;;
+            NEEDS_WORK) _rdc_has_needs=$((_rdc_has_needs + 1)) ;;
+            *)
+                echo "aggregator failed: invalid verdict '$_rdc_verdict' for reviewer $_rdc_reviewer" >&2
+                _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+                return 1
+                ;;
+        esac
+
+        # overall_confidence: default 0.5 under Mode B (parseable JSON,
+        # missing/out-of-range confidence); clamp to [0,1]. T008+ extends
+        # this with per-finding confidence handling.
+        local _rdc_overall_conf
+        _rdc_overall_conf=$(printf '%s' "$_rdc_parsed" | jq -r '
+            (.overall_confidence // 0.5)
+            | if (type != "number") then 0.5
+              elif . < 0 then 0
+              elif . > 1 then 1
+              else .
+              end' 2>/dev/null || echo "0.5")
+
+        # Augment with per-reviewer additive fields (overall_confidence,
+        # strategy, round=1, peer_responses_seen=[]). Phase D: peer block
+        # is empty in Round 1 (no prior round → no peers presented).
+        local _rdc_augmented
+        _rdc_augmented=$(printf '%s' "$_rdc_parsed" | jq \
+            --arg strategy "$_rdc_strategy" \
+            --argjson conf "$_rdc_overall_conf" \
+            '. + {
+                overall_confidence: $conf,
+                strategy: $strategy,
+                round: 1,
+                peer_responses_seen: []
+            }') || {
+            echo "aggregator failed: jq augment for reviewer $_rdc_reviewer" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        }
+
+        # Stage the promoted JSON to a hidden temp inside $reviews_dir.
+        # Using a `.staging.<pid>` suffix so a partial promotion never
+        # leaves a JSON the Stop-hook would mistakenly read (the Stop-hook
+        # globs on `$REVIEWS_DIR/<reviewer>.json`).
+        local _rdc_tmp_path="$reviews_dir/.${_rdc_reviewer}.json.staging.$_rdc_pid_suffix"
+        local _rdc_target_path="$reviews_dir/${_rdc_reviewer}.json"
+        local _rdc_sentinel_path="$reviews_dir/${_rdc_reviewer}.done"
+
+        if ! printf '%s\n' "$_rdc_augmented" > "$_rdc_tmp_path"; then
+            echo "aggregator failed: cannot stage augmented JSON for $_rdc_reviewer at $_rdc_tmp_path" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_tmp_path"
+            return 1
+        fi
+
+        _rdc_promoted_temp_files+=("$_rdc_tmp_path")
+        _rdc_promoted_target_files+=("$_rdc_target_path")
+        _rdc_promoted_sentinels+=("$_rdc_sentinel_path")
+        _rdc_active_reviewers+=("$_rdc_reviewer")
+
+        # Append findings (simple union per Phase D scope; T009 replaces
+        # with confidence-weighted dedup + canonical merge order). Each
+        # finding gets a `raised_by` array pinning the source reviewer so
+        # downstream surfaces (gate report, T009 dedup, telemetry) can
+        # attribute findings.
+        local _rdc_rev_findings
+        _rdc_rev_findings=$(printf '%s' "$_rdc_augmented" | jq \
+            --arg name "$_rdc_reviewer" \
+            '(.findings // []) | map(. + {raised_by: [$name]})' 2>/dev/null) || _rdc_rev_findings='[]'
+        _rdc_all_findings=$(jq -c --argjson new "$_rdc_rev_findings" '. + $new' <<< "$_rdc_all_findings") || {
+            echo "aggregator failed: jq merge findings for $_rdc_reviewer" >&2
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+            return 1
+        }
+    done
+
+    # ----------------------------------------------------------------------
+    # Stub aggregate verdict — "most severe wins" matches today's
+    # `wait_for_consensus`/`review_gate_wait` rollup at
+    # bin/review-gate:3855-3895 so the Phase D shape is internally
+    # consistent. T009 replaces with the real confidence-weighted
+    # tiebreak path.
+    # ----------------------------------------------------------------------
+    local _rdc_agg_verdict=""
+    if [[ $_rdc_has_fail -gt 0 ]]; then
+        _rdc_agg_verdict="FAIL"
+    elif [[ $_rdc_has_needs -gt 0 ]]; then
+        _rdc_agg_verdict="NEEDS_WORK"
+    elif [[ $_rdc_has_pass -gt 0 ]]; then
+        _rdc_agg_verdict="PASS"
+    else
+        echo "aggregator failed: no valid verdicts collected from round-1 reviewers" >&2
+        _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"}
+        return 1
+    fi
+
+    # Active reviewers list (canonical alphabetical order). The
+    # aggregate.json shape pins reviewers[] as the set of reviewers active
+    # in the final round; for Phase D that is just the Round-1 set.
+    local _rdc_active_sorted
+    _rdc_active_sorted=$(printf '%s\n' "${_rdc_active_reviewers[@]}" | LC_ALL=C sort)
+    local _rdc_active_json='[]'
+    local _rdc_r
+    while IFS= read -r _rdc_r; do
+        [[ -z "$_rdc_r" ]] && continue
+        _rdc_active_json=$(printf '%s' "$_rdc_active_json" | jq --arg n "$_rdc_r" '. + [$n]')
+    done <<< "$_rdc_active_sorted"
+
+    local _rdc_aggregate_tmp="$reviews_dir/.aggregate.json.staging.$_rdc_pid_suffix"
+    if ! jq -n \
+        --arg verdict "$_rdc_agg_verdict" \
+        --argjson findings "$_rdc_all_findings" \
+        --arg consensus_mode "$consensus_mode" \
+        --argjson reviewers "$_rdc_active_json" \
+        --argjson strategies "$_rdc_strategies_json" \
+        '{
+            verdict: $verdict,
+            summary: "Phase D stub aggregate (single-round, no dedup; T009 replaces with confidence-weighted dedup and the canonical jq summary template).",
+            findings: $findings,
+            consensus_mode: $consensus_mode,
+            rounds_consumed: 1,
+            reviewers: $reviewers,
+            strategies: $strategies
+        }' > "$_rdc_aggregate_tmp"; then
+        echo "aggregator failed: jq could not produce aggregate.json" >&2
+        _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_aggregate_tmp"
+        return 1
+    fi
+
+    # ----------------------------------------------------------------------
+    # Phase D step 6: atomic promotion. mv each reviewer temp into the
+    # canonical target, then write the .done sentinel (sentinel last so a
+    # Stop-hook poll never reads a half-written reviewer JSON). aggregate
+    # last so a partial-promotion failure leaves no aggregate.json.
+    # ----------------------------------------------------------------------
+    local _rdc_i=0
+    while [[ $_rdc_i -lt ${#_rdc_promoted_temp_files[@]} ]]; do
+        if ! mv -f "${_rdc_promoted_temp_files[$_rdc_i]}" "${_rdc_promoted_target_files[$_rdc_i]}"; then
+            echo "aggregator failed: cannot promote ${_rdc_promoted_temp_files[$_rdc_i]} -> ${_rdc_promoted_target_files[$_rdc_i]}" >&2
+            # Best-effort cleanup: remove any sentinels/JSONs we already
+            # promoted so $reviews_dir does not surface a half-promoted
+            # state to the Stop-hook.
+            local _rdc_j=0
+            while [[ $_rdc_j -lt ${#_rdc_promoted_target_files[@]} ]]; do
+                rm -f "${_rdc_promoted_target_files[$_rdc_j]}" "${_rdc_promoted_sentinels[$_rdc_j]}" 2>/dev/null || true
+                _rdc_j=$((_rdc_j + 1))
+            done
+            _rdc_cleanup_temp_files ${_rdc_promoted_temp_files[@]+"${_rdc_promoted_temp_files[@]}"} "$_rdc_aggregate_tmp"
+            return 1
+        fi
+        # Sentinel last (empty file; Stop-hook only checks existence).
+        : > "${_rdc_promoted_sentinels[$_rdc_i]}"
+        _rdc_i=$((_rdc_i + 1))
+    done
+
+    if ! mv -f "$_rdc_aggregate_tmp" "$reviews_dir/aggregate.json"; then
+        echo "aggregator failed: cannot promote aggregate.json into $reviews_dir" >&2
+        # Roll back per-reviewer promotions to keep $reviews_dir clean.
+        local _rdc_k=0
+        while [[ $_rdc_k -lt ${#_rdc_promoted_target_files[@]} ]]; do
+            rm -f "${_rdc_promoted_target_files[$_rdc_k]}" "${_rdc_promoted_sentinels[$_rdc_k]}" 2>/dev/null || true
+            _rdc_k=$((_rdc_k + 1))
+        done
+        rm -f "$_rdc_aggregate_tmp" 2>/dev/null || true
+        return 1
+    fi
+
+    return 0
+}
