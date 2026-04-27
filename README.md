@@ -259,15 +259,27 @@ abstentions or per-reviewer timeouts drop the active reviewer count below 2 in
 the final peer round; in that case the gate transitions to `awaiting_decision`
 with `consensus.verdict = "requires_decision"` so a human resolves it.
 
-Distinct exit codes for debate-specific outcomes (in addition to the existing
-`wait --json` codes 0–4):
+Distinct exit codes the debate coordinator emits for its named failure paths
+(in addition to the existing `wait --json` codes 0–4):
 
 | Code | Meaning |
 |------|---------|
-| `5` | Aggregator failure (e.g., malformed reviewer JSON survived repair). `reviews/` left empty; `gate-state.json.status="pending"` so re-spawn under `REVIEW_GATE_RERUN=1` recovers. |
+| `5` | Aggregator failure raised by the coordinator's aggregator-fail helper (e.g., malformed reviewer JSON survived repair). `reviews/` left empty; the coordinator does not transition the status, so `gate-state.json.status` stays at the `"pending"` value the spawn wrote on entry, and re-spawn under `REVIEW_GATE_RERUN=1` recovers. |
 | `6` (preflight) | Fewer than 2 reviewers available before any model invocation. The coordinator has not yet touched `gate-state.json`, so no active gate is created; recovery is to re-invoke with `--agents` covering ≥2 available reviewers (or install the missing CLIs). `bin/review-gate resolve` does not apply because no gate was created. |
-| `6` (mid-debate) | Active reviewer count dropped below 2 during the run (abstentions / per-reviewer timeouts). `gate-state.json.status="awaiting_decision"` with `consensus.verdict="requires_decision"`; resolve via `bin/review-gate resolve` or re-spawn under `REVIEW_GATE_RERUN=1`. |
-| `130` | SIGINT / Ctrl-C cancellation during a debate run. The currently-running round is allowed to complete naturally; `reviews/` is left empty and `gate-state.json.status="pending"`. |
+| `6` (mid-debate) | Active reviewer count dropped below 2 during the run (abstentions / per-reviewer timeouts). The coordinator's degraded helper writes `gate-state.json.status="awaiting_decision"` with `consensus.verdict="requires_decision"` before exiting; resolve via `bin/review-gate resolve` or re-spawn under `REVIEW_GATE_RERUN=1`. |
+| `130` | SIGINT / Ctrl-C cancellation during a debate run. The coordinator's SIGINT handler defers exit so the in-flight round runs to completion (or hits per-reviewer timeout) before partial telemetry is written; `reviews/` is left empty and the coordinator does not transition status, so `gate-state.json.status` stays at the `"pending"` value the spawn wrote on entry. |
+
+The four codes above are the canonical exits from the named coordinator
+helpers (`_rdc_aggregator_fail_exit`, `_rdc_pre_round_degraded_exit`,
+`_rdc_degraded_exit`, `_rdc_cancel_exit`). If the coordinator instead returns
+a non-zero status from its own argument-validation paths (rather than calling
+one of those exit helpers), `bin/review-gate` falls back to exit code `1`,
+calls a defensive `_debate_mark_state_failed` helper that transitions
+`gate-state.json.status` to `"resolved"` with `consensus.verdict="ERROR"` and
+`decision.action="manual_resolve"`, and prints the recovery hint.
+`bin/review-gate resolve` is idempotent on a `"resolved"` state, and the
+active-gate guard treats `"resolved"` as not-active so a fresh re-spawn does
+not require `REVIEW_GATE_RERUN=1`.
 
 ### Bare-spawn Whitelist
 
