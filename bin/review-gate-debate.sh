@@ -912,13 +912,32 @@ _rdc_wait_round_sentinels() {
 # eligibility threshold).
 _rdc_classify_round_outputs() {
     local staging_dir="$1"; shift
-    local r out_file failed_file parsed verdict augmented aug_path guard
+    local r out_file done_file failed_file parsed verdict augmented aug_path guard integrity
 
     for r in "$@"; do
         out_file="$staging_dir/${r}.json"
+        done_file="$staging_dir/${r}.done"
         failed_file="$staging_dir/${r}.failed"
 
         if [[ -f "$failed_file" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+        # Per-reviewer timeout detection (Mode A). A reviewer that never
+        # wrote a `.done` (and is not in the `.failed` branch above) means
+        # the wait-for-sentinels loop hit its budget while this reviewer
+        # was still in flight. This also covers the corner case where the
+        # reviewer's CLI wrote a complete `<reviewer>.json` and then hung
+        # before its wrapper could `touch $REVIEW_DONE` — we MUST classify
+        # that reviewer as Mode A timeout abstain rather than `active`,
+        # otherwise a hung reviewer's stale Round-1 JSON would carry into
+        # Round 2 / final aggregation. Distinct from the `.failed` branch
+        # (which is Mode A crash) and from the missing-JSON branch below
+        # (which catches reviewers that died before writing any output);
+        # the existence of a `.done` sentinel is the canonical proof that
+        # the spawn wrapper observed the reviewer's exit-zero condition.
+        if [[ ! -f "$done_file" ]]; then
+            echo "warning: Mode A timeout abstain for reviewer $r — no .done sentinel observed (spawn either hung or never completed)" >&2
             printf '%s abstained\n' "$r"
             continue
         fi
@@ -955,6 +974,22 @@ _rdc_classify_round_outputs() {
                 continue
                 ;;
         esac
+
+        # Mode B integrity check (per spec R2 alternate flow): emit a
+        # stderr warning whenever the reviewer's parseable JSON is missing
+        # or has out-of-range overall_confidence OR per-finding confidence,
+        # so operators / fixture tests can audit Mode B activations. The
+        # warning fires before the augmentation jq pass below applies the
+        # 0.5 default + [0,1] clamp; the reviewer remains active either way.
+        integrity=$(printf '%s' "$parsed" | jq -r '
+            def numok: (type == "number") and (. >= 0) and (. <= 1);
+            (if has("overall_confidence") then (.overall_confidence | numok) else false end) as $oc_ok
+            | ((.findings // []) | all(if has("confidence") then (.confidence | numok) else false end)) as $f_ok
+            | if $oc_ok and $f_ok then "ok" else "warn" end
+        ' 2>/dev/null || echo "warn")
+        if [[ "$integrity" != "ok" ]]; then
+            echo "warning: Mode B confidence defaults applied for reviewer $r — overall_confidence and/or per-finding confidence missing or outside [0, 1]; defaulting to 0.5 / clamping to range. Reviewer remains active." >&2
+        fi
 
         # Mode B confidence defaulting + clamping. Missing per-finding
         # `confidence` defaults to 0.5; missing `overall_confidence` defaults
@@ -1008,45 +1043,59 @@ _rdc_classify_round_outputs() {
 # active-peer skeleton's empty-findings collapse rule for visual symmetry).
 _rdc_render_prior_round_self_block() {
     local rj="$1"
-    local verdict overall_conf findings_count i title body conf
-    verdict=$(printf '%s' "$rj" | jq -r '.verdict // ""' 2>/dev/null)
-    overall_conf=$(printf '%s' "$rj" | jq -r '
-        (.overall_confidence // 0.5)
-        | if (type == "number") then
-            if . < 0 then 0 elif . > 1 then 1 else . end
-          else 0.5 end
-        | tostring' 2>/dev/null)
-    findings_count=$(printf '%s' "$rj" | jq -r '(.findings // []) | length' 2>/dev/null)
-
-    printf 'Verdict: %s\n' "$verdict"
-    printf 'Overall confidence: %s\n' "$overall_conf"
-    printf '\n'
-
-    if [[ -z "$findings_count" || "$findings_count" == "0" ]]; then
-        printf 'Findings: (none)\n'
-        return 0
-    fi
-
-    printf 'Findings:\n'
-    i=0
-    while [[ $i -lt $findings_count ]]; do
-        title=$(printf '%s' "$rj" | jq -r --argjson i "$i" '.findings[$i].title // ""' 2>/dev/null)
-        body=$(printf '%s' "$rj" | jq -r --argjson i "$i" '.findings[$i].body // ""' 2>/dev/null)
-        conf=$(printf '%s' "$rj" | jq -r --argjson i "$i" '
-            (.findings[$i].confidence // 0.5)
-            | if (type == "number") then
+    # Render the entire self-block via a single jq invocation. For reviews
+    # with N findings the prior implementation did 3*N + 3 jq calls (one
+    # per field per finding, plus three top-level field reads); collapsing
+    # to one call eliminates fork+exec overhead and the per-jq JSON parse
+    # cost. The jq program below mirrors the same shape:
+    #
+    #   Verdict: <verdict>
+    #   Overall confidence: <overall_confidence — 0.5 default, clamped>
+    #
+    #   Findings: (none)             [empty findings collapse]
+    # OR
+    #   Findings:
+    #   - **<title>** (confidence: <c>)
+    #     <body>                    [body indented two spaces per line]
+    #   ...
+    #
+    # Mode B confidence defaults (missing → 0.5, out-of-range → clamp to
+    # [0, 1]) are applied both to overall_confidence and per-finding
+    # confidence here. The body indentation uses jq's `split("\n")` +
+    # `map("  " + .)` + `join("\n")` so multi-line bodies get the two-
+    # space indent on every continuation line.
+    printf '%s' "$rj" | jq -r '
+        def numclamp:
+            if (type == "number") then
                 if . < 0 then 0 elif . > 1 then 1 else . end
-              else 0.5 end
-            | tostring' 2>/dev/null)
-        printf -- '- **%s** (confidence: %s)\n' "$title" "$conf"
-        if [[ -n "$body" ]]; then
-            # Indent each body line two spaces, mirroring the active-peer
-            # skeleton body indent (presentation-only; the JSON underneath
-            # is unchanged).
-            printf '%s\n' "$body" | sed 's/^/  /'
-        fi
-        i=$((i + 1))
-    done
+            else 0.5 end;
+        def render_body($b):
+            ($b | split("\n") | map("  " + .) | join("\n"));
+
+        (.verdict // "") as $verdict
+        | (.overall_confidence | numclamp) as $oc
+        | (.findings // []) as $findings
+        |
+        "Verdict: " + $verdict + "\n"
+        + "Overall confidence: " + ($oc | tostring) + "\n"
+        + "\n"
+        + (if ($findings | length) == 0 then
+              "Findings: (none)"
+          else
+              "Findings:\n"
+              + (
+                  $findings
+                  | map(
+                      "- **" + (.title // "") + "** (confidence: "
+                      + ((.confidence | numclamp) | tostring) + ")"
+                      + (if (.body // "") == "" then ""
+                         else "\n" + render_body(.body // "")
+                         end)
+                  )
+                  | join("\n")
+              )
+          end)
+    ' 2>/dev/null
 }
 
 # _rdc_build_round2_prompt — build reviewer R's Round-2 prompt by inserting
