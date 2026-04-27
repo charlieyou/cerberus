@@ -1180,12 +1180,23 @@ _rdc_build_round2_prompt() {
         return 1
     }
 
-    # Find the line number of the `## Output Format` header so we can
-    # split the Round-1 prompt into "before" and "from-output-format-on"
-    # halves and inject the Round-2 sections in between. `grep -n` numbers
-    # lines from 1; head/tail indices below match this convention.
+    # Find the line number of the reviewer-prompt's `## Output Format`
+    # header so we can split the Round-1 prompt into "before" and
+    # "from-output-format-on" halves and inject the Round-2 sections in
+    # between. `build_prompt` inlines the artifact body inside a fenced
+    # markdown block earlier in the prompt, and an artifact body that
+    # legitimately contains a `## Output Format` markdown line (e.g., a
+    # diff that touches a markdown doc, a spec template that documents
+    # output format) would collide with a naive first-match grep. The
+    # reviewer-prompt's own `## Output Format` section is always the
+    # LAST `## Output Format` line in the rendered prompt because
+    # `build_prompt` emits it after every artifact-derived content (see
+    # the heredoc structure in bin/review-gate's build_prompt). awk's
+    # last-match pattern walks the file once and remembers the most
+    # recent matching line number, which is portable across BSD/GNU and
+    # cheap on Bash 3.2.
     local outfmt_line
-    outfmt_line=$(grep -n '^## Output Format' "$round1_prompt" 2>/dev/null | head -1 | cut -d: -f1)
+    outfmt_line=$(awk '/^## Output Format/ { last=NR } END { if (last) print last }' "$round1_prompt")
 
     local out_path="$round2_dir/review.${reviewer}.prompt"
     if [[ -z "$outfmt_line" ]]; then
@@ -1247,6 +1258,66 @@ _rdc_build_round2_prompt() {
 # error on top of the coordinator's already-fatal degraded-below-2 path.
 # T012 will refine the failure-shape contract; the canonical fields above
 # match the spec text and are stable across T012's expected revisions.
+# _rdc_prune_state_reviewers — remove the named reviewers from the
+# `gate-state.json.reviewers` map.
+#
+# Why this is needed (Stop-hook contract): `bin/review-gate spawn` writes
+# every successfully-spawned reviewer into `state.reviewers` BEFORE the
+# coordinator runs, with paths pointing into the canonical $REVIEWS_DIR.
+# The Stop-hook (`bin/review-gate-hook.sh`) then iterates the state's
+# reviewers map and waits for each reviewer's `<r>.done` / `<r>.failed`
+# sentinel under $REVIEWS_DIR. Under the terminal-abstention rule
+# (Round-1 abstainers are not invoked in Round 2) and final-round Option B
+# (Round-2 abstainers are excluded from final aggregation), the
+# coordinator NEVER promotes a sentinel for the abstained reviewer. Left
+# as-is, the Stop-hook would block waiting for a sentinel that will never
+# be written, timing out the entire iteration.
+#
+# Pruning the abstained reviewer from the state's reviewers map is the
+# spec-aligned fix: the reviewer is excluded from the final-round set
+# (per Section 2 step 7 + R6), and the Stop-hook's per-reviewer
+# consensus calculator should not see them at all. Their earlier-round
+# output remains in iterations/<iter>/round-N/ telemetry; this prune
+# only affects the canonical decision surface.
+#
+# Args: reviewer canonical names to remove from `state.reviewers`. Empty
+# arg list is a no-op (the function just returns 0).
+#
+# Best-effort: silently no-ops when STATE_FILE is unset / the file is
+# missing / jq fails; the coordinator's overall failure path doesn't
+# depend on state-file mutation succeeding.
+_rdc_prune_state_reviewers() {
+    local state_file="${STATE_FILE:-}"
+    if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+        return 0
+    fi
+    if [[ $# -eq 0 ]]; then
+        return 0
+    fi
+
+    # Build a JSON array of names to delete (jq's `--argjson` accepts
+    # arbitrarily-shaped JSON; building via successive `+ [$n]` calls
+    # avoids any embedded-quote escaping risk a flat string-concat would
+    # carry).
+    local removed_json='[]'
+    local r
+    for r in "$@"; do
+        removed_json=$(printf '%s' "$removed_json" | jq --arg n "$r" '. + [$n]') || return 0
+    done
+
+    local state_tmp="$state_file.prune.tmp.$$"
+    if jq --argjson remove "$removed_json" '
+        .reviewers = (
+            (.reviewers // {})
+            | with_entries(select(.key as $k | ($remove | index($k)) | not))
+        )
+    ' "$state_file" > "$state_tmp" 2>/dev/null; then
+        mv -f "$state_tmp" "$state_file"
+    else
+        rm -f "$state_tmp" 2>/dev/null || true
+    fi
+}
+
 _rdc_mark_state_degraded() {
     local state_file="${STATE_FILE:-}"
     if [[ -z "$state_file" || ! -f "$state_file" ]]; then
@@ -1431,6 +1502,7 @@ run_debate_coordinator() {
     fi
 
     local -a _rdc_round1_active=()
+    local -a _rdc_round1_abstained=()
     local _line _r _status
     while IFS= read -r _line; do
         [[ -z "$_line" ]] && continue
@@ -1438,8 +1510,20 @@ run_debate_coordinator() {
         _status="${_line##* }"
         if [[ "$_status" == "active" ]]; then
             _rdc_round1_active+=("$_r")
+        else
+            _rdc_round1_abstained+=("$_r")
         fi
     done < <(_rdc_classify_round_outputs "$round1_dir" "${_rdc_initial_reviewers[@]}")
+
+    # Prune Round-1 abstainers from gate-state.json's reviewers map: the
+    # terminal-abstention rule says they will not be invoked in Round 2,
+    # so no canonical $REVIEWS_DIR/<r>.done sentinel will ever appear for
+    # them; without pruning, the Stop-hook would block waiting for one.
+    # The prune is a no-op on empty input and best-effort if STATE_FILE
+    # is unset / jq fails.
+    if [[ ${#_rdc_round1_abstained[@]} -gt 0 ]]; then
+        _rdc_prune_state_reviewers "${_rdc_round1_abstained[@]}"
+    fi
 
     # ======================================================================
     # Mid-debate eligibility check (degraded-below-2 — pinned spec R6).
@@ -1586,14 +1670,26 @@ run_debate_coordinator() {
     # A). Active reviewers get an augmented JSON with confidence defaults
     # applied (Mode B).
     local -a _rdc_round2_active=()
+    local -a _rdc_round2_abstained=()
     while IFS= read -r _line; do
         [[ -z "$_line" ]] && continue
         _r="${_line%% *}"
         _status="${_line##* }"
         if [[ "$_status" == "active" ]]; then
             _rdc_round2_active+=("$_r")
+        else
+            _rdc_round2_abstained+=("$_r")
         fi
     done < <(_rdc_classify_round_outputs "$_rdc_round2_dir" "${_rdc_round2_spawned[@]}")
+
+    # Prune Round-2 abstainers from gate-state.json's reviewers map: under
+    # final-round Option B they are excluded from the final aggregation
+    # entirely (no per-reviewer JSON or sentinel promoted to $REVIEWS_DIR);
+    # without pruning, the Stop-hook would block waiting for the absent
+    # sentinel.
+    if [[ ${#_rdc_round2_abstained[@]} -gt 0 ]]; then
+        _rdc_prune_state_reviewers "${_rdc_round2_abstained[@]}"
+    fi
 
     # ======================================================================
     # Final-round Option B exclusion (spec R6): a reviewer that abstains in

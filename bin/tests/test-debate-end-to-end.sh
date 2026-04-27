@@ -583,11 +583,17 @@ GEMINI_FAIL
        && grep -F "(peer abstained)" "$round2_dir/review.claude.prompt" >/dev/null; then
         saw_abstained=$((saw_abstained + 1))
     fi
-    if [[ $saw_abstained -ge 1 ]]; then
-        log_grn "$scenario: gemini's slot surfaces as '(peer abstained)' in active peers' Round-2 prompts ($saw_abstained/2 prompts)"
+    # Spec R1: an abstained Round-1 reviewer's slot MUST surface as
+    # `(peer abstained)` in BOTH active peers' Round-2 prompts (every
+    # recipient sees every Round-1 peer in their per-recipient block).
+    # A `>= 1` guard would silently accept a regression in
+    # debate_build_peer_blocks that emitted the peer block for only one
+    # of the two recipients, so we tighten to `eq 2`.
+    if [[ $saw_abstained -eq 2 ]]; then
+        log_grn "$scenario: gemini's slot surfaces as '(peer abstained)' in BOTH active peers' Round-2 prompts (2/2)"
         green_count=$((green_count + 1))
     else
-        log_red "$scenario: '(peer abstained)' marker absent from active peers' Round-2 prompts"
+        log_red "$scenario: '(peer abstained)' marker present in only $saw_abstained/2 active peers' Round-2 prompts (expected 2)"
         red_count=$((red_count + 1))
     fi
 
