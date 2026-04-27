@@ -51,6 +51,8 @@ If the hook feedback says review rounds are exhausted or tells you not to retry 
 STATUS: NEEDS_HUMAN T### — exhausted review rounds
 ```
 
+After you send `STATUS: NEEDS_HUMAN`, end your turn and do not send periodic availability updates. Cerberus implementer teammates are single-use; the lead will classify the task from your message, task state, and hook markers.
+
 ## Hard Rules
 
 - Never run `git push`.

@@ -15,6 +15,7 @@ Run a strictly serial agent-team implementation loop from a `*-team-tasks.md` fi
 - The lead never invokes `/cerberus:review-code` directly. Code review fires automatically from the `TaskCompleted` hook.
 - Scheduling is strictly serial: run at most one implementer teammate at a time.
 - Every implementer teammate spawned with `Agent` MUST request `model: "opus"`; do not omit the model or spawn lower-tier teammates.
+- Implementer teammates are single-use. The plugin's `TeammateIdle` hook allows the first idle signal through for classification, then terminates repeat idle firings for that teammate so parked implementers do not spam the lead.
 
 ## Phase 0: Preflight
 
@@ -41,6 +42,12 @@ Abort with a clear error if any hard gate fails.
 4. **Default branch warning**. Detect the repo default branch and current branch. If they differ, warn but do not abort.
 
 5. **Review-gate keying available**. Confirm `${CLAUDE_PLUGIN_ROOT}/bin/review-gate` exists and that `spawn-code-review` supports `REVIEW_GATE_SESSION_KEY` while `wait` supports `--session-key`. If not, abort with the missing capability.
+
+6. **Required JSON tooling**. Confirm `jq` is available on `PATH`. If not, abort:
+
+   ```text
+   /cerberus:run-team requires jq for task state, hook input parsing, and duplicate idle suppression. Install jq, then retry.
+   ```
 
 ## Phase 1: Load Team Tasks
 
@@ -189,7 +196,7 @@ Agent({
 })
 ```
 
-Wait for the teammate to go idle. On every `TeammateIdle`, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, and messages from the teammate.
+Wait for the teammate to go idle. On the first `TeammateIdle`, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, and messages from the teammate. Do not wait for additional idle notifications from the same teammate; Cerberus implementers are never reused, and the plugin's `TeammateIdle` hook terminates duplicate idle firings after the first notification.
 
 ## Phase 4: Outcome Classification
 
@@ -256,4 +263,4 @@ Report:
 - For failures: baseline SHA, retained state directory, raw `last_error` if present, and manual recovery options such as `git reset --hard <baseline_sha>` or `git revert <commit_range>`.
 - Epic verification verdict and findings, or why it was skipped.
 - Retry note: rerunning `/cerberus:run-team` is safe after fixing the root cause because each invocation gets a fresh `team_hash`; stale state dirs remain only for debugging.
-- Cleanup note: successful task state dirs are deleted automatically; failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done.
+- Cleanup note: successful task state dirs are deleted automatically; failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done. If a teammate parks at `needs-human`, do not rely on `shutdown_request` to quiet repeated idle pings; the installed `TeammateIdle` hook handles duplicate-idle suppression for Cerberus implementers.

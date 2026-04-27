@@ -31,6 +31,17 @@
           }
         ]
       }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerberus-teammate-idle-hook",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Suppress duplicate idle notifications from single-use Cerberus implementers.
+
+set -euo pipefail
+
+hook_input="$(cat)"
+
+# This hook is global. Fail open until an event is proven to belong to a
+# Cerberus team implementer, so unrelated agent teams are unaffected.
+if ! command -v jq >/dev/null 2>&1; then
+    exit 0
+fi
+
+json_get() {
+    local filter="$1"
+    printf '%s' "$hook_input" | jq -r "$filter" 2>/dev/null || printf ''
+}
+
+stop_teammate() {
+    local reason="$1"
+    jq -cn --arg reason "$reason" '{continue:false, stopReason:$reason}'
+    exit 0
+}
+
+event_name="$(json_get '.hook_event_name // ""')"
+if [[ "$event_name" != "TeammateIdle" ]]; then
+    exit 0
+fi
+
+team_name="$(json_get '
+[
+  .team_name?,
+  (if (.team? | type) == "object" then .team.name?
+   elif (.team? | type) == "string" then .team?
+   else empty end)
+]
+| map(select(type == "string" and . != ""))
+| first // ""
+')"
+teammate_name="$(json_get '
+[
+  .teammate_name?,
+  (if (.teammate? | type) == "object" then .teammate.name?
+   elif (.teammate? | type) == "string" then .teammate?
+   else empty end),
+  .from?,
+  .sender?,
+  .agent_name?
+]
+| map(select(type == "string" and . != ""))
+| first // ""
+')"
+
+if [[ ! "$team_name" =~ ^cerberus-impl-([A-Za-z0-9_-]+)$ ]]; then
+    exit 0
+fi
+team_hash="${BASH_REMATCH[1]}"
+
+if [[ ! "$teammate_name" =~ ^impl-(T[0-9]+)$ ]]; then
+    exit 0
+fi
+
+state_root="${TMPDIR:-/tmp}/cerberus-task-completed-hook/${team_hash}"
+marker_root="${state_root}/.teammate-idle"
+marker="${marker_root}/${teammate_name}.seen"
+
+mkdir -p "$marker_root" 2>/dev/null || exit 0
+
+if mkdir "$marker" 2>/dev/null; then
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "${marker}/first_seen_at" 2>/dev/null || true
+    printf '%s\n' "$hook_input" > "${marker}/first_event.json" 2>/dev/null || true
+    exit 0
+fi
+
+stop_teammate "Suppressing repeated idle notifications from ${teammate_name} in ${team_name}; Cerberus implementers are single-use."
