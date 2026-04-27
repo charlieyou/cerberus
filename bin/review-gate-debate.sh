@@ -1237,6 +1237,120 @@ _rdc_build_round2_prompt() {
     } > "$out_path"
 }
 
+# _rdc_build_round3_prompt — build reviewer R's Round-3 prompt under
+# `--mode max`. Mirrors `_rdc_build_round2_prompt` but with three pinned
+# behavioral differences from spec R2 / Section 2:
+#
+#   1. The directive header is `## Round 3 of debate-mode review` and the
+#      directive text references "Round 3" explicitly. The reviewer is
+#      told this is the final peer round under --mode max.
+#   2. The prior-round-self block contains R's Round-2 output ONLY — NOT a
+#      concatenation of Rounds 1 and 2. Per spec R2: "the prior-round-self
+#      block presented to reviewer R in Round N contains R's Round-(N-1)
+#      output exclusively". The Round-1 output is preserved in
+#      iterations/<iter>/round-1/ telemetry for inspection but is NOT
+#      injected into the Round-3 prompt.
+#   3. The anonymized peer block source is Round-2 outputs (not Round-1).
+#      The coordinator's Round-3 launch path runs T007's
+#      debate_build_peer_blocks over Round-2 augmented JSONs to populate
+#      `PEER_BLOCK_<UPPER>` env vars before this builder runs; per-recipient
+#      peer ordering is reshuffled per T007's seeded/production rules.
+#
+# Args:
+#   $1  reviewer            canonical reviewer name
+#   $2  reviews_dir         canonical $REVIEWS_DIR (source of Round-1 prompt;
+#                           used as the prompt scaffold so anchor + strategy
+#                           directive remain the same as Rounds 1 and 2)
+#   $3  round2_dir          iterations/<iter>/round-2/ (source of R's
+#                           Round-2 augmented JSON for the self block)
+#   $4  round3_dir          iterations/<iter>/round-3/ (target staging dir)
+#
+# Returns 0 on success; non-zero (with stderr message) on any input-missing
+# error so the coordinator can surface a hard failure rather than spawn a
+# reviewer with a malformed Round-3 prompt.
+_rdc_build_round3_prompt() {
+    local reviewer="$1"
+    local reviews_dir="$2"
+    local round2_dir="$3"
+    local round3_dir="$4"
+
+    local round1_prompt="$reviews_dir/review.${reviewer}.prompt"
+    # Prefer the Round-2 augmented JSON (Mode B defaults applied) so the
+    # rendered self-block reflects the same `confidence` values the
+    # aggregator sees; fall back to raw .json (defensive — should not
+    # happen for an active reviewer).
+    local self_json_path="$round2_dir/${reviewer}.augmented.json"
+    if [[ ! -s "$self_json_path" ]]; then
+        self_json_path="$round2_dir/${reviewer}.json"
+    fi
+
+    local upper peer_block_var peer_block
+    upper=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
+    peer_block_var="PEER_BLOCK_${upper}"
+    peer_block="${!peer_block_var:-}"
+
+    if [[ ! -s "$round1_prompt" ]]; then
+        echo "_rdc_build_round3_prompt: missing Round-1 prompt for $reviewer at $round1_prompt" >&2
+        return 1
+    fi
+    if [[ ! -s "$self_json_path" ]]; then
+        echo "_rdc_build_round3_prompt: missing Round-2 output for active reviewer $reviewer at $self_json_path" >&2
+        return 1
+    fi
+    if [[ -z "$peer_block" ]]; then
+        echo "_rdc_build_round3_prompt: missing peer block for $reviewer (env var $peer_block_var unset or empty)" >&2
+        return 1
+    fi
+
+    local self_block
+    self_block=$(_rdc_render_prior_round_self_block "$(cat "$self_json_path")") || {
+        echo "_rdc_build_round3_prompt: failed to render prior-round-self block for $reviewer" >&2
+        return 1
+    }
+
+    # Find the last `## Output Format` line in the Round-1 prompt (same
+    # last-match rule as Round 2 — see _rdc_build_round2_prompt for the
+    # rationale on artifact-bodies that legitimately contain markdown
+    # headers). The Round-1 prompt is the scaffold for ALL subsequent
+    # rounds because it carries the anchor + strategy directive bytes
+    # already substituted by build_prompt at Round-1 render time, with no
+    # prior-round content interleaved (using the Round-2 prompt as
+    # scaffold would re-inject Round-1 content into the Round-3 prompt,
+    # violating spec R2).
+    local outfmt_line
+    outfmt_line=$(awk '/^## Output Format/ { last=NR } END { if (last) print last }' "$round1_prompt")
+
+    local out_path="$round3_dir/review.${reviewer}.prompt"
+    if [[ -z "$outfmt_line" ]]; then
+        echo "warning: _rdc_build_round3_prompt: '## Output Format' header not found in Round-1 prompt for $reviewer; appending Round-3 sections at the end (output-format adherence may degrade)" >&2
+        {
+            cat "$round1_prompt"
+            printf '\n\n'
+            printf '## Round 3 of debate-mode review\n\n'
+            printf 'This is Round 3, the final peer round under --mode max. Your Round 2 output and the freshly-anonymized peer outputs from your fellow reviewers are reproduced below. Continue the confidence-conditioned-update protocol: lower-confidence prior findings yield more readily to high-confidence peer dissent; high-confidence prior findings resist sycophantic peer pressure. Review your Round-2 position, weigh peer evidence, and emit a fresh JSON review for Round 3 in the same schema as Round 2 — including per-finding confidence and overall_confidence.\n\n'
+            printf '### Your Round 2 output:\n\n'
+            printf '%s\n' "$self_block"
+            printf '\n'
+            printf '### Anonymized peer outputs:\n\n'
+            printf '%s\n' "$peer_block"
+        } > "$out_path"
+        return 0
+    fi
+
+    {
+        head -n $((outfmt_line - 1)) "$round1_prompt"
+        printf '## Round 3 of debate-mode review\n\n'
+        printf 'This is Round 3, the final peer round under --mode max. Your Round 2 output and the freshly-anonymized peer outputs from your fellow reviewers are reproduced below. Continue the confidence-conditioned-update protocol: lower-confidence prior findings yield more readily to high-confidence peer dissent; high-confidence prior findings resist sycophantic peer pressure. Review your Round-2 position, weigh peer evidence, and emit a fresh JSON review for Round 3 in the same schema as Round 2 — including per-finding confidence and overall_confidence.\n\n'
+        printf '### Your Round 2 output:\n\n'
+        printf '%s\n' "$self_block"
+        printf '\n'
+        printf '### Anonymized peer outputs:\n\n'
+        printf '%s\n' "$peer_block"
+        printf '\n'
+        tail -n +"$outfmt_line" "$round1_prompt"
+    } > "$out_path"
+}
+
 # _rdc_mark_state_degraded — write the canonical degraded-below-2 on-disk
 # shape into $STATE_FILE per spec R6 / plan L202:
 #
@@ -1475,14 +1589,14 @@ run_debate_coordinator() {
     _rdc_iter_dir=$(dirname "$round1_dir")
 
     # Determine how many rounds to drive. T008 caps at 2 rounds always
-    # (fast/smart/max all run 2 rounds); T010 lifts the cap to 3 under
-    # `--mode max` once Round 3 is wired. Mode is propagated via env
-    # var REVIEW_GATE_DEBATE_MODE which `bin/review-gate` sets before
-    # invoking the coordinator.
+    # (fast/smart all run 2 rounds); T010 lifts the cap to 3 under
+    # `--mode max`. Mode is propagated via env var REVIEW_GATE_DEBATE_MODE
+    # which `bin/review-gate` sets before invoking the coordinator. Any
+    # value other than "max" (including unset) keeps the 2-round flow.
     local _rdc_max_rounds=2
-    # NOTE: T010 will switch this to 3 when REVIEW_GATE_DEBATE_MODE == "max".
-    # For T008 we deliberately keep the cap at 2 rounds so debate runs
-    # remain a Round 1 + Round 2 flow under every mode.
+    if [[ "${REVIEW_GATE_DEBATE_MODE:-}" == "max" ]]; then
+        _rdc_max_rounds=3
+    fi
 
     # ======================================================================
     # Round 1: wait for sentinels, classify outputs, terminal-abstention.
@@ -1722,19 +1836,166 @@ run_debate_coordinator() {
     fi
 
     # ======================================================================
-    # Final aggregation over Round-2 outputs (active final-round reviewers
-    # only — Option B). Stub aggregator preserves the Phase-D shape: simple
-    # union of findings + most-severe-wins verdict + canonical reviewers
-    # array + per-reviewer strategies map. T009 replaces this with the
-    # confidence-weighted dedup + canonical merge order.
+    # Round 3 (only under `--mode max`). Spec R6 + Section 2: Round 3 is the
+    # final peer round under max mode. Eligibility check: Round-2 active
+    # count >= 2 (already enforced by the Final-round Option B check above).
+    # That count is exactly the spec's "≥2 reviewers non-abstained across
+    # Round 1 AND Round 2" — Round-1 abstainers were pruned from Round-2
+    # spawn (terminal-abstention rule), and Round-2 abstainers are already
+    # excluded from `_rdc_round2_active`. Hard-error on degraded-below-2
+    # fires BEFORE any model invocation: spawn budget is preserved.
+    #
+    # Wiring map (per spec R2 / Section 2):
+    #   - Round-2 outputs (in iterations/<iter>/round-2/) →
+    #       T007 anonymization pass with reshuffled per-recipient
+    #       ordering → PEER_BLOCK_<recipient> for Round 3
+    #   - Reviewer R's Round-2 output → PRIOR_ROUND_SELF_BLOCK for Round 3
+    #     (Round-1 output NOT injected — most recent prior round only)
+    #   - Round 3 outputs → final aggregator → aggregate.json
     # ======================================================================
-    local _rdc_final_dir="$_rdc_round2_dir"
-    local _rdc_rounds_consumed=2
+    local -a _rdc_final_active=()
+    local _rdc_final_dir
+    local _rdc_rounds_consumed
+    if [[ $_rdc_max_rounds -ge 3 ]]; then
+        local _rdc_round3_dir="$_rdc_iter_dir/round-3"
+        mkdir -p "$_rdc_round3_dir"
+        # Defensive cleanup: stale sentinels/JSONs from a prior re-spawn
+        # in the same iteration directory would short-circuit the Round-3
+        # wait loop. Mirrors the Round-2 cleanup above.
+        rm -f "$_rdc_round3_dir"/*.done \
+              "$_rdc_round3_dir"/*.failed \
+              "$_rdc_round3_dir"/*.json \
+              "$_rdc_round3_dir"/*.jsonl 2>/dev/null || true
 
+        # Stage active Round-2 augmented JSONs as `<reviewer>.json` for
+        # debate_build_peer_blocks's per-reviewer file convention. Same
+        # rationale as the round-1-clean stage above (avoid wrapping +
+        # Mode-A-on-crash ambiguity from the raw round-2 staging dir).
+        local _rdc_round2_clean="$_rdc_iter_dir/round-2-clean"
+        mkdir -p "$_rdc_round2_clean"
+        rm -f "$_rdc_round2_clean"/*.json 2>/dev/null || true
+        local _r_active2
+        for _r_active2 in "${_rdc_round2_active[@]}"; do
+            local _src2="$_rdc_round2_dir/${_r_active2}.augmented.json"
+            local _dst2="$_rdc_round2_clean/${_r_active2}.json"
+            if ! cp "$_src2" "$_dst2" 2>/dev/null; then
+                echo "aggregator failed: cannot stage augmented Round-2 JSON for $_r_active2 at $_dst2" >&2
+                return 1
+            fi
+        done
+
+        # Build per-recipient anonymized peer blocks for Round 3 over the
+        # Round-2-active set (Round-2 abstainers are Option-B-excluded and
+        # do not appear in the Round-3 peer block — there is no terminal-
+        # abstention placeholder for them in Round 3 because they are no
+        # longer in the active reviewer set). Per-recipient ordering is
+        # reshuffled per T007's seeded/production rules.
+        if ! debate_build_peer_blocks \
+                "$_rdc_round3_dir" "$_rdc_round2_clean" "${REVIEW_GATE_DEBATE_SEED:-}" \
+                "${_rdc_round2_active[@]}"; then
+            echo "aggregator failed: debate_build_peer_blocks failed for round 3" >&2
+            return 1
+        fi
+
+        # Build per-recipient Round-3 prompts (Round-2-output self block +
+        # fresh peer block; same anchor + strategy directive as Rounds 1/2).
+        local _rev3
+        for _rev3 in "${_rdc_round2_active[@]}"; do
+            if ! _rdc_build_round3_prompt "$_rev3" "$reviews_dir" "$_rdc_round2_dir" "$_rdc_round3_dir"; then
+                echo "aggregator failed: could not build Round-3 prompt for $_rev3" >&2
+                return 1
+            fi
+        done
+
+        # Spawn Round-3 reviewers with output_dir = round-3 staging.
+        local _rdc_schema_file3="$reviews_dir/review-schema.json"
+        local -a _rdc_round3_spawned=()
+        for _rev3 in "${_rdc_round2_active[@]}"; do
+            local _r3_prompt="$_rdc_round3_dir/review.${_rev3}.prompt"
+            if spawn_reviewer "$_rev3" "$_rev3" "$_r3_prompt" "$_rdc_schema_file3" "$_rdc_round3_dir"; then
+                _rdc_round3_spawned+=("$_rev3")
+            else
+                echo "warning: spawn_reviewer failed for $_rev3 in round 3 (no Round-3 sentinel will appear; reviewer treated as abstained)" >&2
+            fi
+        done
+
+        if [[ ${#_rdc_round3_spawned[@]} -lt 2 ]]; then
+            echo "debate degraded below 2 active reviewers in the final peer round" >&2
+            echo "  Round-3 spawn attempts succeeded for: ${_rdc_round3_spawned[*]:-(none)}" >&2
+            _rdc_mark_state_degraded
+            return 6
+        fi
+
+        # Wait for Round-3 sentinels. Same budget-as-Mode-A semantics as
+        # earlier rounds: a reviewer that hangs past the round budget is
+        # classified as Mode A abstain (Option B exclusion from final
+        # aggregation).
+        if ! _rdc_wait_round_sentinels "$_rdc_round3_dir" "$timeout_sec" "$poll_interval" "${_rdc_round3_spawned[@]}"; then
+            echo "warning: round-3 sentinel wait budget elapsed (${timeout_sec}s); reviewers without sentinels will be classified as Mode A abstain (Option B exclusion from final aggregation)" >&2
+        fi
+
+        # Classify Round-3 outputs.
+        local -a _rdc_round3_active=()
+        local -a _rdc_round3_abstained=()
+        while IFS= read -r _line; do
+            [[ -z "$_line" ]] && continue
+            _r="${_line%% *}"
+            _status="${_line##* }"
+            if [[ "$_status" == "active" ]]; then
+                _rdc_round3_active+=("$_r")
+            else
+                _rdc_round3_abstained+=("$_r")
+            fi
+        done < <(_rdc_classify_round_outputs "$_rdc_round3_dir" "${_rdc_round3_spawned[@]}")
+
+        if [[ ${#_rdc_round3_abstained[@]} -gt 0 ]]; then
+            _rdc_prune_state_reviewers "${_rdc_round3_abstained[@]}"
+        fi
+
+        # Final-round Option B (Round 3 is the final peer round under
+        # --mode max): Round-3 abstainers are excluded entirely from the
+        # final aggregation. If the active count drops below 2, the run
+        # is degraded-below-2 in the final peer round.
+        if [[ ${#_rdc_round3_active[@]} -lt 2 ]]; then
+            echo "debate degraded below 2 active reviewers in the final peer round" >&2
+            echo "  Round-3 active: ${_rdc_round3_active[*]:-(none)}" >&2
+            echo "  Round-3 abstained (Option B exclusion): " >&2
+            local _r_check3
+            for _r_check3 in "${_rdc_round3_spawned[@]}"; do
+                local _is_active3=0
+                local _ar3
+                for _ar3 in ${_rdc_round3_active[@]+"${_rdc_round3_active[@]}"}; do
+                    if [[ "$_ar3" == "$_r_check3" ]]; then
+                        _is_active3=1
+                        break
+                    fi
+                done
+                if [[ $_is_active3 -eq 0 ]]; then
+                    echo "    - $_r_check3" >&2
+                fi
+            done
+            _rdc_mark_state_degraded
+            return 6
+        fi
+
+        _rdc_final_dir="$_rdc_round3_dir"
+        _rdc_rounds_consumed=3
+        _rdc_final_active=("${_rdc_round3_active[@]}")
+    else
+        _rdc_final_dir="$_rdc_round2_dir"
+        _rdc_rounds_consumed=2
+        _rdc_final_active=("${_rdc_round2_active[@]}")
+    fi
+
+    # ======================================================================
+    # Final aggregation over the final-round outputs (active final-round
+    # reviewers only — Option B). T009's confidence-weighted dedup +
+    # canonical merge order pass runs inside _rdc_aggregate_and_promote.
+    # ======================================================================
     if ! _rdc_aggregate_and_promote \
             "$_rdc_final_dir" "$reviews_dir" \
             "$consensus_mode" "$_rdc_rounds_consumed" \
-            "${_rdc_round2_active[@]}"; then
+            "${_rdc_final_active[@]}"; then
         return 1
     fi
 

@@ -1,0 +1,8 @@
+{
+  "file_path": "service.py",
+  "line_start": 12,
+  "line_end": 18,
+  "priority": "P1",
+  "title_hint": "Hardcoded credential in login()",
+  "rationale": "The login function compares username/password against fixed string literals; any committed credential constitutes a P1 security defect."
+}
