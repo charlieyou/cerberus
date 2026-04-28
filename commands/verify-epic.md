@@ -1,6 +1,6 @@
 ---
 description: Verify epic acceptance criteria against the codebase with multi-model consensus
-argument-hint: <epic-file-or-criteria> [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
+argument-hint: [--debate] <epic-file-or-criteria> [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>]
 ---
 
 # Epic Verification (Iterative)

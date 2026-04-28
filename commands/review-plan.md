@@ -1,6 +1,6 @@
 ---
 description: Iterative plan review with external reviewers
-argument-hint: [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [path/to/plan.md] ["<focus area>"]
+argument-hint: [--debate] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [path/to/plan.md] ["<focus area>"]
 ---
 
 # Plan Review (Iterative)

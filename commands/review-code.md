@@ -1,6 +1,6 @@
 ---
 description: Iterative code review with external reviewers
-argument-hint: [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]
+argument-hint: [--debate] [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]
 ---
 
 # Code Review (Iterative)

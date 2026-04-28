@@ -1,6 +1,6 @@
 ---
 description: Iterative spec review with external reviewers
-argument-hint: [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] <path/to/spec.md>
+argument-hint: [--debate] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] <path/to/spec.md>
 ---
 
 # Spec Review (Iterative)
