@@ -652,6 +652,39 @@ GEMINI_FAIL
         log_red "$scenario: aggregate.json absent — coordinator did not produce the final aggregate"
         red_count=$((red_count + 1))
     fi
+
+    # Assertion 4: coordinator-stamped peer_responses_seen includes the
+    # abstained peer's opaque ID (spec AC-1 / AC-R1.7 / AC-R9.5).
+    #
+    # With 3 reviewers (claude, codex, gemini) sorted alphabetically:
+    #   claude=Peer-A, codex=Peer-B, gemini=Peer-C
+    # Round-2 peer_responses_seen must be:
+    #   codex  → [Peer-A, Peer-C]  (claude + abstained gemini)
+    #   claude → [Peer-B, Peer-C]  (codex  + abstained gemini)
+    # Both must include Peer-C (gemini's abstained slot); the ordering
+    # within the array is non-deterministic (no --debate-seed used here),
+    # so we assert sorted membership.
+    local codex_prs claude_prs
+    codex_prs=$(jq -r '.peer_responses_seen | sort | join(",")' \
+        "$review_dir/reviews/codex.json" 2>/dev/null || echo "")
+    claude_prs=$(jq -r '.peer_responses_seen | sort | join(",")' \
+        "$review_dir/reviews/claude.json" 2>/dev/null || echo "")
+
+    if [[ "$codex_prs" == "Peer-A,Peer-C" ]]; then
+        log_grn "$scenario: codex.json peer_responses_seen == [Peer-A, Peer-C] (includes abstained gemini slot Peer-C)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: codex.json peer_responses_seen='$codex_prs' (expected 'Peer-A,Peer-C' — coordinator must stamp including abstained-peer slot IDs)"
+        red_count=$((red_count + 1))
+    fi
+
+    if [[ "$claude_prs" == "Peer-B,Peer-C" ]]; then
+        log_grn "$scenario: claude.json peer_responses_seen == [Peer-B, Peer-C] (includes abstained gemini slot Peer-C)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: claude.json peer_responses_seen='$claude_prs' (expected 'Peer-B,Peer-C' — coordinator must stamp including abstained-peer slot IDs)"
+        red_count=$((red_count + 1))
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1815,10 +1848,10 @@ JSON
     : > "$sa_dir/reviews/claude.done"
 
     cat > "$sb_dir/reviews/codex.json" <<'JSON'
-{"verdict":"PASS","summary":"Looks good.","overall_confidence":0.6,"findings":[],"strategy":"verification-first","round":2,"peer_responses_seen":["Peer-A"]}
+{"verdict":"PASS","summary":"Looks good.","overall_confidence":0.6,"findings":[],"strategy":"verification-first","round":2,"peer_responses_seen":[]}
 JSON
     cat > "$sb_dir/reviews/claude.json" <<'JSON'
-{"verdict":"NEEDS_WORK","summary":"P2 advisory.","overall_confidence":0.85,"findings":[{"priority":2,"title":"Minor","body":"Cosmetic.","confidence":0.85}],"strategy":"falsification-first","round":2,"peer_responses_seen":["Peer-B"]}
+{"verdict":"NEEDS_WORK","summary":"P2 advisory.","overall_confidence":0.85,"findings":[{"priority":2,"title":"Minor","body":"Cosmetic.","confidence":0.85}],"strategy":"falsification-first","round":2,"peer_responses_seen":[]}
 JSON
     : > "$sb_dir/reviews/codex.done"
     : > "$sb_dir/reviews/claude.done"
@@ -1936,11 +1969,15 @@ test_string_priority_p1_triggers_requires_decision() {
     # PASS-majority scenario (with a single string-P1 NEEDS_WORK
     # reviewer) would auto-approve instead of triggering requires_decision.
     #
-    # This scenario constructs that exact situation: 2 reviewers, codex
-    # PASS with no findings, claude NEEDS_WORK with a string `"P1"`
-    # finding at low confidence (0.3) — the priority gate MUST fire
-    # before the majority-mode tiebreak runs, so the calculator's
-    # observable output MUST be requires_decision.
+    # This scenario constructs the PASS-majority case: 3 reviewers,
+    # codex+gemini PASS with no findings, claude NEEDS_WORK with a
+    # string `"P1"` finding at low confidence (0.3). Under majority mode
+    # without a working priority gate, this would auto-approve through
+    # the "P2/P3 advisory + 2+ PASS" tiebreak (max_priority stuck at 99
+    # satisfies `>= 2`). The priority gate MUST recognize string `"P1"`
+    # and short-circuit to requires_decision before the consensus mode
+    # logic runs, so the calculator's observable output MUST be
+    # requires_decision.
 
     local session="$scenario"
     local trans_dir="$scenario_home/.claude/projects/-test-debate-string-pri"
@@ -1953,10 +1990,14 @@ test_string_priority_p1_triggers_requires_decision() {
     cat > "$sdir/reviews/codex.json" <<'JSON'
 {"verdict":"PASS","summary":"Looks good.","findings":[]}
 JSON
+    cat > "$sdir/reviews/gemini.json" <<'JSON'
+{"verdict":"PASS","summary":"Looks good.","findings":[]}
+JSON
     cat > "$sdir/reviews/claude.json" <<'JSON'
 {"verdict":"NEEDS_WORK","summary":"Suspected race at low confidence.","overall_confidence":0.5,"findings":[{"priority":"P1","title":"Suspected race","body":"Low-confidence P1 — must still block per spec R6.","file_path":"src/handler.ts","line_start":200,"line_end":205,"confidence":0.3}]}
 JSON
     : > "$sdir/reviews/codex.done"
+    : > "$sdir/reviews/gemini.done"
     : > "$sdir/reviews/claude.done"
 
     local now_iso
@@ -1966,7 +2007,7 @@ JSON
   "status":"pending",
   "config":{"consensus_mode":"majority"},
   "mode":{"type":"plan","plan_path":"$SAMPLE_PLAN"},
-  "reviewers":{"codex":{},"claude":{}},
+  "reviewers":{"codex":{},"claude":{},"gemini":{}},
   "consensus":null,
   "decision":null,
   "trigger_source":"plan",
@@ -1990,7 +2031,7 @@ JSON
     fi
 
     if [[ "$class" == "requires_decision" ]]; then
-        log_grn "$scenario: string priority \"P1\" at confidence 0.3 in 1-1 PASS/NEEDS_WORK split triggers requires_decision (spec L212 R6 priority gate is form-agnostic)"
+        log_grn "$scenario: string priority \"P1\" at confidence 0.3 under PASS-majority (2 PASS, 1 NEEDS_WORK) triggers requires_decision (spec L212 R6 priority gate is form-agnostic)"
         green_count=$((green_count + 1))
     else
         log_red "$scenario: string priority \"P1\" was silently downgraded — calculator returned '$class' instead of requires_decision (spec L212 R6 priority gate violation: confidence MUST NOT downgrade a P1 regardless of priority form)"
@@ -2531,7 +2572,24 @@ test_aggregator_failure_partial_telemetry() {
     local iter_dir="$scenario_work/iterations/0"
     local round_dir="$iter_dir/round-2"
     local reviews_dir="$scenario_work/reviews"
+    local state_file="$scenario_work/gate-state.json"
     mkdir -p "$round_dir" "$reviews_dir"
+
+    # Pre-populate gate-state.json in the pending state so we can assert
+    # that the aggregator failure path leaves it untouched (per spec
+    # AC-7: aggregator failure mirrors Cancellation on-disk shape —
+    # status stays "pending", no .debate block, no consensus/decision
+    # mutation).
+    cat > "$state_file" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "reviewers":{"claude":{},"codex":{}},
+  "consensus":null,
+  "decision":null,
+  "iteration":0
+}
+JSON
 
     # Malformed augmented JSON (no closing brace + invalid escape) for claude.
     printf '{"verdict":"PASS","summary":"oops",' > "$round_dir/claude.augmented.json"
@@ -2542,6 +2600,10 @@ test_aggregator_failure_partial_telemetry() {
 
     # Run _rdc_aggregate_and_promote in a subshell so its `exit 5` does
     # not terminate the parent test script. Capture stderr + exit code.
+    # STATE_FILE is exported into the subshell so any state-mutation
+    # helper invoked on the failure path (e.g., _rdc_prune_state_reviewers)
+    # would target it; the spec contract is that NO mutation reaches
+    # status / consensus / decision / .debate on the aggregator path.
     local stderr_f="$scenario_work/stderr"
     local rc
     set +e
@@ -2562,6 +2624,7 @@ test_aggregator_failure_partial_telemetry() {
         _RDC_ROUNDS_JSON='[]'
         _RDC_ROUNDS_COMPLETED=0
         _RDC_AGGREGATOR_NOTES_JSON='[]'
+        STATE_FILE="$state_file"
 
         _rdc_aggregate_and_promote \
             "$round_dir" "$reviews_dir" "majority" 2 \
@@ -2615,6 +2678,269 @@ test_aggregator_failure_partial_telemetry() {
         green_count=$((green_count + 1))
     else
         log_red "$scenario: canonical reviews/ has $canonical_count decision artifact(s) on aggregator failure"
+        red_count=$((red_count + 1))
+    fi
+
+    # AC-7 on-disk-shape assertions: aggregator failure MUST mirror the
+    # Cancellation shape exactly. status stays "pending"; no .debate
+    # block; consensus/decision NOT mutated to terminal values
+    # ("resolved" / "ERROR" / "manual_resolve" / "debate_aggregator_failed"
+    # are the symptoms of the prior bug where _debate_mark_state_failed
+    # was called on this path).
+    if [[ -f "$state_file" ]]; then
+        local _status
+        _status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_status" == "pending" ]]; then
+            log_grn "$scenario: gate-state.json.status stays at 'pending' after aggregator failure (AC-7 shape mirrors Cancellation)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.status = '$_status' after aggregator failure (expected 'pending' per AC-7)"
+            red_count=$((red_count + 1))
+        fi
+
+        local _has_debate_key
+        _has_debate_key=$(jq -r 'has("debate")' "$state_file" 2>/dev/null || echo "true")
+        if [[ "$_has_debate_key" == "false" ]]; then
+            log_grn "$scenario: gate-state.json has NO .debate top-level key after aggregator failure (success-only block)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json unexpectedly has .debate key after aggregator failure"
+            red_count=$((red_count + 1))
+        fi
+
+        local _consensus _decision
+        _consensus=$(jq -r '.consensus' "$state_file" 2>/dev/null || echo "")
+        _decision=$(jq -r '.decision' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_consensus" == "null" && "$_decision" == "null" ]]; then
+            log_grn "$scenario: gate-state.json.consensus + .decision stay null after aggregator failure (no terminal mutation)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.consensus='$_consensus' decision='$_decision' (expected both null per AC-7 — Cancellation shape)"
+            red_count=$((red_count + 1))
+        fi
+
+        # Defensive: explicitly assert the prior-bug symptom strings are
+        # absent. If a regression re-introduces _debate_mark_state_failed
+        # on the rc=5 path, these would all fire green.
+        local _verdict _action _reason
+        _verdict=$(jq -r '.consensus.verdict // ""' "$state_file" 2>/dev/null || echo "")
+        _action=$(jq -r '.decision.action // ""' "$state_file" 2>/dev/null || echo "")
+        _reason=$(jq -r '.decision.reason // ""' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_verdict" != "ERROR" && "$_action" != "manual_resolve" && "$_reason" != "debate_aggregator_failed" ]]; then
+            log_grn "$scenario: gate-state.json contains no terminal-resolved markers (verdict!=ERROR, action!=manual_resolve, reason!=debate_aggregator_failed)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json has terminal-resolved markers after aggregator failure (verdict='$_verdict' action='$_action' reason='$_reason') — AC-7 regression"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json missing after aggregator failure"
+        red_count=$((red_count + 1))
+    fi
+}
+
+# AC-7 bin/review-gate case-statement test (unit-style).
+#
+# The aggregator-failure path through bin/review-gate currently exits 5
+# from inside _rdc_aggregator_fail_exit (via `exit 5` from a shell
+# function). In bash, `exit` from a function aborts the entire script,
+# bypassing the `run_debate_coordinator || _rdc_rc=$?` || handler — so
+# the case statement in bin/review-gate is dead code on the actual
+# aggregator path today. However, the spec-AC-7 contract pins the
+# SOURCE-LEVEL intent: if anyone refactors `exit 5` to `return 5` (for
+# testability), the case statement must already do the right thing.
+#
+# This test exercises the case statement by stubbing run_debate_coordinator
+# with a function that `return 5`s. We verify:
+#   - exit code 5 is propagated unchanged (NOT remapped to 1)
+#   - gate-state.json.status stays "pending"
+#   - no .debate block written
+#   - consensus / decision NOT mutated to terminal "resolved" / "ERROR" /
+#     "manual_resolve" / "debate_aggregator_failed"
+#   - canonical reviews/ stays empty
+#
+# Direct extraction of the case-statement logic is the simplest way to
+# exercise this (sourcing bin/review-gate and invoking review_gate_spawn
+# would require building the full per-reviewer spawn fixture set, which
+# is out of scope for an AC-7 unit test).
+test_aggregator_failure_case_statement_ac7() {
+    local scenario="aggregator-failure-case-statement-ac7"
+    local scenario_work="$WORK_DIR/scenario-$scenario"
+    mkdir -p "$scenario_work"
+
+    local iter_dir="$scenario_work/iterations/0"
+    local reviews_dir="$scenario_work/reviews"
+    local state_file="$scenario_work/gate-state.json"
+    local staging_dir="$iter_dir/round-1"
+    mkdir -p "$iter_dir" "$reviews_dir" "$staging_dir"
+
+    # Pre-populate gate-state.json in the pending state — same shape
+    # bin/review-gate's spawn flow writes before invoking the coordinator.
+    cat > "$state_file" <<JSON
+{
+  "status":"pending",
+  "config":{"consensus_mode":"majority"},
+  "reviewers":{"claude":{},"codex":{}},
+  "consensus":null,
+  "decision":null,
+  "iteration":0
+}
+JSON
+
+    # Child script that mirrors the bin/review-gate case-statement logic
+    # verbatim, with run_debate_coordinator stubbed to return 5 (the
+    # aggregator-failure exit code) so the case arms are exercised. The
+    # `_debate_mark_state_failed` helper is the same as bin/review-gate's
+    # local definition (status="resolved" / verdict="ERROR" /
+    # action="manual_resolve" / reason="debate_aggregator_failed"). The
+    # AC-7 contract is that this helper MUST NOT fire on rc=5.
+    local case_script="$scenario_work/case_statement.sh"
+    cat > "$case_script" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+
+STATE_FILE="$state_file"
+REVIEWS_DIR="$reviews_dir"
+CLI_CMD="bin/review-gate"
+_debate_staging_dir="$staging_dir"
+
+# Mirror bin/review-gate's _debate_mark_state_failed helper exactly
+# (the prior-bug surface — status="resolved" + verdict="ERROR" + ...).
+_debate_mark_state_failed() {
+    if [[ -f "\$STATE_FILE" ]]; then
+        local _state_tmp="\$STATE_FILE.coord-fail.tmp.\$\$"
+        local _now_ts
+        _now_ts=\$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+        if jq --arg now "\$_now_ts" \\
+              --arg reason "debate_aggregator_failed" \\
+           '.reviewers = {}
+            | .status = "resolved"
+            | .consensus = {verdict: "ERROR", iteration: (.iteration // 0), reason: \$reason}
+            | .decision = {action: "manual_resolve", decided_at: \$now, reason: \$reason}' \\
+           "\$STATE_FILE" > "\$_state_tmp" 2>/dev/null; then
+            mv -f "\$_state_tmp" "\$STATE_FILE"
+        else
+            rm -f "\$_state_tmp" 2>/dev/null || true
+        fi
+    fi
+}
+
+# Stub run_debate_coordinator: return rc=5 so the case statement runs
+# (exercising the AC-7 aggregator-failure arm rather than the unreachable
+# exit-5 fast-path).
+run_debate_coordinator() {
+    return 5
+}
+
+local _rdc_rc=0
+run_debate_coordinator stub_args || _rdc_rc=\$?
+
+# Verbatim copy of bin/review-gate's case statement (the code under test).
+case "\$_rdc_rc" in
+    0) ;;
+    5)
+        echo "" >&2
+        echo "Debate coordinator: aggregator failed; reviews/ left empty, gate-state status remains 'pending' (staging preserved at \$_debate_staging_dir)." >&2
+        echo "Recovery: re-spawn with REVIEW_GATE_RERUN=1 (or '\${CLI_CMD} resolve' for cleanup); identical to Cancellation recovery." >&2
+        exit 5
+        ;;
+    6)
+        echo "" >&2
+        echo "Debate coordinator: degraded below 2 active reviewers in the final peer round." >&2
+        exit 1
+        ;;
+    *)
+        echo "" >&2
+        echo "Debate coordinator failed unexpectedly (rc=\$_rdc_rc)." >&2
+        _debate_mark_state_failed
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+    chmod +x "$case_script"
+
+    set +e
+    bash "$case_script" >"$scenario_work/stdout" 2>"$scenario_work/stderr"
+    local rc=$?
+    set -e
+
+    # Assertion: exit code 5 is propagated (NOT remapped to 1 by `*` arm).
+    if [[ "$rc" -eq 5 ]]; then
+        log_grn "$scenario: bin/review-gate case statement propagates exit 5 unchanged (AC-7 reserved exit code)"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: case statement exit code = $rc (expected 5). Stderr: $(head -3 "$scenario_work/stderr" 2>/dev/null | tr '\n' ';')"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion: gate-state.json.status stays at 'pending'.
+    if [[ -f "$state_file" ]]; then
+        local _status
+        _status=$(jq -r '.status' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_status" == "pending" ]]; then
+            log_grn "$scenario: gate-state.json.status stays at 'pending' on rc=5 (AC-7: mirrors Cancellation shape)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.status = '$_status' on rc=5 (expected 'pending' — _debate_mark_state_failed must not fire on AC-7 path)"
+            red_count=$((red_count + 1))
+        fi
+
+        # No .debate top-level key (success-only block).
+        local _has_debate_key
+        _has_debate_key=$(jq -r 'has("debate")' "$state_file" 2>/dev/null || echo "true")
+        if [[ "$_has_debate_key" == "false" ]]; then
+            log_grn "$scenario: gate-state.json has NO .debate top-level key on rc=5 aggregator failure"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json unexpectedly has .debate key on rc=5"
+            red_count=$((red_count + 1))
+        fi
+
+        # consensus + decision stay null.
+        local _consensus _decision
+        _consensus=$(jq -r '.consensus' "$state_file" 2>/dev/null || echo "")
+        _decision=$(jq -r '.decision' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_consensus" == "null" && "$_decision" == "null" ]]; then
+            log_grn "$scenario: gate-state.json.consensus + .decision stay null on rc=5 (no terminal mutation)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.consensus='$_consensus' decision='$_decision' (expected both null per AC-7)"
+            red_count=$((red_count + 1))
+        fi
+
+        # Defensive: prior-bug terminal markers are absent.
+        local _verdict _action _reason
+        _verdict=$(jq -r '.consensus.verdict // ""' "$state_file" 2>/dev/null || echo "")
+        _action=$(jq -r '.decision.action // ""' "$state_file" 2>/dev/null || echo "")
+        _reason=$(jq -r '.decision.reason // ""' "$state_file" 2>/dev/null || echo "")
+        if [[ "$_verdict" != "ERROR" && "$_action" != "manual_resolve" && "$_reason" != "debate_aggregator_failed" ]]; then
+            log_grn "$scenario: gate-state.json contains no _debate_mark_state_failed markers on rc=5 (verdict, decision.action, decision.reason all clean)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json has _debate_mark_state_failed markers on rc=5 (verdict='$_verdict' action='$_action' reason='$_reason') — AC-7 regression"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json missing after rc=5"
+        red_count=$((red_count + 1))
+    fi
+
+    # Reviews dir empty.
+    local _canonical_count=0
+    local _f
+    for _f in "$reviews_dir"/claude.json "$reviews_dir"/codex.json \
+              "$reviews_dir"/aggregate.json \
+              "$reviews_dir"/claude.done "$reviews_dir"/codex.done; do
+        if [[ -e "$_f" ]]; then
+            _canonical_count=$((_canonical_count + 1))
+        fi
+    done
+    if [[ "$_canonical_count" == "0" ]]; then
+        log_grn "$scenario: canonical reviews/ left empty on rc=5 case-statement path"
+        green_count=$((green_count + 1))
+    else
+        log_red "$scenario: canonical reviews/ has $_canonical_count decision artifact(s) on rc=5"
         red_count=$((red_count + 1))
     fi
 }
@@ -3013,6 +3339,7 @@ test_debate_block_survives_stop_hook
 test_aggregate_verdict_never_requires_decision
 test_degraded_below_2_partial_telemetry
 test_aggregator_failure_partial_telemetry
+test_aggregator_failure_case_statement_ac7
 test_cancellation_sigint
 test_pre_round_spawn_failure_degraded
 

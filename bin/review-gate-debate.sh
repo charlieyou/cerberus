@@ -819,6 +819,16 @@ ${rendered}"
         recipient_upper=$(echo "$recipient" | tr '[:lower:]' '[:upper:]')
         printf '%s\n' "$block" > "$staging_dir/peer-block.${recipient}.txt"
         export "PEER_BLOCK_${recipient_upper}=$block"
+
+        # 4. Persist the coordinator-populated ordered peer ID list (one ID
+        #    per line) for this recipient. `_rdc_classify_round_outputs` reads
+        #    this file when augmenting the reviewer's JSON so it can stamp the
+        #    authoritative `peer_responses_seen` value — the coordinator's
+        #    input contract — rather than relying on any reviewer self-report.
+        #    Including abstained-peer slot IDs satisfies R9.5 / AC-R1.7: the
+        #    array must reflect every slot the coordinator presented, not just
+        #    the slots of active peers.
+        printf '%s\n' "$ordered" > "$staging_dir/peer-ids.${recipient}.txt"
     done
 
     return 0
@@ -1024,6 +1034,37 @@ _rdc_classify_round_outputs() {
             | .overall_confidence = $oc
             | .findings = $f
         ' 2>/dev/null)
+        if [[ -z "$augmented" ]]; then
+            printf '%s abstained\n' "$r"
+            continue
+        fi
+
+        # Coordinator-populated peer_responses_seen: stamp the authoritative
+        # value from `peer-ids.<reviewer>.txt` written by
+        # `debate_build_peer_blocks` when this round's peer block was
+        # constructed. This overrides any reviewer self-report, which is
+        # required by spec R9 (the field is a coordinator input contract,
+        # not a reviewer self-report claim).
+        #
+        # Round 1: no `peer-ids.<reviewer>.txt` exists (no peer block was
+        # presented) → stamp `peer_responses_seen: []`.
+        # Rounds 2/3: the file lists every opaque peer slot ID (including
+        # abstained-peer slot IDs) that the coordinator placed in the
+        # reviewer's anonymized peer block for this round.
+        local _peer_ids_file="$staging_dir/peer-ids.${r}.txt"
+        local _prs_json="[]"
+        if [[ -s "$_peer_ids_file" ]]; then
+            # Build a jq-compatible JSON array from the one-ID-per-line file.
+            # Use jq's @json with --raw-input / --slurp so special characters
+            # in ID strings are safely escaped (IDs are Peer-A/Peer-B/...
+            # in practice, but this is defensive).
+            _prs_json=$(grep -v '^$' "$_peer_ids_file" \
+                | jq -R . | jq -s . 2>/dev/null || echo "[]")
+            [[ -z "$_prs_json" ]] && _prs_json="[]"
+        fi
+        augmented=$(printf '%s' "$augmented" | jq \
+            --argjson prs "$_prs_json" \
+            '.peer_responses_seen = $prs' 2>/dev/null)
         if [[ -z "$augmented" ]]; then
             printf '%s abstained\n' "$r"
             continue
@@ -2662,9 +2703,12 @@ _rdc_aggregate_and_promote() {
         _oc=$(printf '%s' "$_augmented" | jq -r '.overall_confidence // 0.5' 2>/dev/null)
 
         # Stamp the per-reviewer JSON with the additive debate fields the
-        # Stop-hook + downstream surfaces expect. peer_responses_seen is
-        # left as an empty array if upstream did not set it; T011/T012 will
-        # populate from the actual peer-block opaque IDs.
+        # Stop-hook + downstream surfaces expect.  peer_responses_seen was
+        # already injected by _rdc_classify_round_outputs from the
+        # coordinator-written peer-ids.<reviewer>.txt file; the `.// []`
+        # here is purely defensive (the augmented JSON always has the field
+        # stamped by that path, so this fallback is never reached in
+        # normal operation).
         _final_json=$(printf '%s' "$_augmented" | jq \
             --arg strategy "$_strategy" \
             --argjson rnd "$rounds_consumed" \
