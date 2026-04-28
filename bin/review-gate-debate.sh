@@ -1011,6 +1011,15 @@ _rdc_classify_round_outputs() {
         ' 2>/dev/null || echo "warn")
         if [[ "$integrity" != "ok" ]]; then
             echo "warning: Mode B confidence defaults applied for reviewer $r — overall_confidence and/or per-finding confidence missing or outside [0, 1]; defaulting to 0.5 / clamping to range. Reviewer remains active." >&2
+            # Write a side file so the aggregator (which runs after this
+            # process-substitution subshell exits) can pick up the clamp note
+            # and append it to _RDC_AGGREGATOR_NOTES_JSON. The file contains
+            # the canonical note string, one per line. Multiple Mode B
+            # activations for the same reviewer in the same round append
+            # additional lines, but in practice the integrity check fires once
+            # per reviewer per round.
+            printf 'reviewer %s clamped out-of-range confidence\n' "$r" \
+                >> "${staging_dir}/${r}.clamp-note.txt" 2>/dev/null || true
         fi
 
         # Mode B confidence defaulting + clamping. Missing per-finding
@@ -1559,7 +1568,9 @@ _rdc_mark_state_degraded() {
 #   _RDC_ROUNDS_JSON           — `[]` array of per-round telemetry entries.
 #   _RDC_ROUNDS_COMPLETED      — count of rounds whose `.done`/.failed
 #                                 sentinels were observed and classified.
-#   _RDC_AGGREGATOR_NOTES_JSON — `[]` array; placeholder for future notes.
+#   _RDC_AGGREGATOR_NOTES_JSON — `[]` array of human-readable aggregator notes
+#                                (near-duplicate merges, tiebreaks, Mode B
+#                                 clamps). Populated during aggregation.
 #
 # Reset to fresh empties at the top of run_debate_coordinator so a second
 # invocation in the same shell (e.g., test harness re-entering the
@@ -1580,6 +1591,17 @@ _rdc_now_ms() {
     local s
     s=$(date +%s 2>/dev/null || echo 0)
     printf '%d\n' "$(( s * 1000 ))"
+}
+
+# _rdc_append_aggregator_note — append one human-readable string to
+# $_RDC_AGGREGATOR_NOTES_JSON. Consumers MUST NOT pattern-match against
+# the exact wording (spec §4 line 355).
+#
+# Args:
+#   $1  note string
+_rdc_append_aggregator_note() {
+    _RDC_AGGREGATOR_NOTES_JSON=$(printf '%s' "$_RDC_AGGREGATOR_NOTES_JSON" \
+        | jq --arg n "$1" '. + [$n]' 2>/dev/null) || true
 }
 
 # _rdc_record_round — append one entry to $_RDC_ROUNDS_JSON describing a
@@ -2677,6 +2699,19 @@ _rdc_aggregate_and_promote() {
         fi
         _augmented=$(cat "$_aug_path")
 
+        # Collect any Mode B clamp notes written by _rdc_classify_round_outputs
+        # (which ran in a process-substitution subshell and cannot mutate
+        # _RDC_AGGREGATOR_NOTES_JSON directly). The side file contains one
+        # note string per line; append each to the global notes array.
+        local _clamp_note_file="$final_dir/${_r}.clamp-note.txt"
+        if [[ -s "$_clamp_note_file" ]]; then
+            local _clamp_line
+            while IFS= read -r _clamp_line; do
+                [[ -z "$_clamp_line" ]] && continue
+                _rdc_append_aggregator_note "$_clamp_line"
+            done < "$_clamp_note_file"
+        fi
+
         # Detect malformed augmented JSON early and surface a canonical
         # `aggregator failed: jq parse error on reviews/<r>.json` message.
         # This is the primary aggregator-failure mode pinned in the spec
@@ -2819,6 +2854,27 @@ _rdc_aggregate_and_promote() {
             _rdc_aggregator_fail_exit
             ;;
     esac
+
+    # Detect majority-mode confidence tiebreak: when the two leading
+    # verdict groups have equal counts, the winner was chosen by
+    # confidence sum rather than plurality. Emit a note so consumers
+    # can see that a tiebreak resolved the verdict.
+    if [[ "$consensus_mode" == "majority" ]]; then
+        local _aap_tiebreak
+        _aap_tiebreak=$(printf '%s' "$_aap_verdicts_json" | jq -r '
+            if any(.[]; .verdict == "FAIL") then "no"
+            else
+                (group_by(.verdict)
+                 | map({verdict: .[0].verdict, count: length})
+                 | sort_by(-.count)
+                 | if (length >= 2) and (.[0].count == .[1].count) then "yes"
+                   else "no" end)
+            end
+        ' 2>/dev/null || echo "no")
+        if [[ "$_aap_tiebreak" == "yes" ]]; then
+            _rdc_append_aggregator_note "tiebreak by confidence"
+        fi
+    fi
 
     # ----------------------------------------------------------------------
     # Confidence-weighted dedup pass (R6, spec L247-L255):
@@ -2983,6 +3039,26 @@ _rdc_aggregate_and_promote() {
         echo "aggregator failed: jq dedup pass" >&2
         _rdc_cleanup_temp_files ${_aap_promoted_temp_files[@]+"${_aap_promoted_temp_files[@]}"}
         _rdc_aggregator_fail_exit
+    fi
+
+    # Emit one aggregator note per merged (near-duplicate) finding — i.e.,
+    # any finding whose `raised_by` array has length ≥ 2. The note format is:
+    #   "near-duplicate merged: <priority> <title> (<reviewers joined by +>)"
+    # Wording is intentionally human-readable; consumers MUST NOT pattern-match
+    # on exact text (spec §4 line 355).
+    local _aap_merge_notes
+    _aap_merge_notes=$(printf '%s' "$_aap_findings_json" | jq -r '
+        .[]
+        | select((.raised_by // []) | length >= 2)
+        | "near-duplicate merged: " + (.priority // "?") + " " + (.title // "") +
+          " (" + ((.raised_by // []) | sort | join("+")) + ")"
+    ' 2>/dev/null || true)
+    if [[ -n "$_aap_merge_notes" ]]; then
+        local _merge_note_line
+        while IFS= read -r _merge_note_line; do
+            [[ -z "$_merge_note_line" ]] && continue
+            _rdc_append_aggregator_note "$_merge_note_line"
+        done <<< "$_aap_merge_notes"
     fi
 
     # ----------------------------------------------------------------------

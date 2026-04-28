@@ -1708,6 +1708,29 @@ CLAUDE_PLANTED
         log_red "$scenario: gate report missing side-by-side aggregate-vs-Stop-hook verdict line (expected 'Aggregate verdict: NEEDS_WORK | Stop-hook verdict (authoritative): requires_decision')"
         red_count=$((red_count + 1))
     fi
+
+    # Assertion 5 (AC-INS-03): aggregator_notes array is non-empty when a
+    # near-duplicate merge occurred. All three reviewers raised the same
+    # finding, so the aggregator MUST have emitted at least one merge note.
+    # Per spec §4 line 355 consumers MUST NOT pattern-match exact wording;
+    # we only check that the array is non-empty and that at least one note
+    # contains "merged" (loose substring match).
+    local state_file_cards="$review_dir/gate-state.json"
+    if [[ -f "$state_file_cards" ]]; then
+        local notes_len_cards notes_merged_cards
+        notes_len_cards=$(jq -r '.debate.aggregator_notes | length' "$state_file_cards" 2>/dev/null || echo "0")
+        notes_merged_cards=$(jq -r '.debate.aggregator_notes | map(select(test("merged"; "i"))) | length' "$state_file_cards" 2>/dev/null || echo "0")
+        if [[ "$notes_len_cards" -gt 0 ]] && [[ "$notes_merged_cards" -gt 0 ]]; then
+            log_grn "$scenario: gate-state.json.debate.aggregator_notes is non-empty with merge note (AC-INS-03)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.debate.aggregator_notes is empty or missing merge note (AC-INS-03): notes_len=$notes_len_cards merged_count=$notes_merged_cards"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json absent for AC-INS-03 aggregator_notes assertion"
+        red_count=$((red_count + 1))
+    fi
 }
 
 test_verdict_divergence_rendering() {
@@ -1825,6 +1848,26 @@ CLAUDE_DIV
         green_count=$((green_count + 1))
     else
         log_red "$scenario: gate report missing the side-by-side verdict line (expected 'Aggregate verdict: NEEDS_WORK | Stop-hook verdict (authoritative): requires_decision')"
+        red_count=$((red_count + 1))
+    fi
+
+    # Assertion 3 (AC-INS-03): aggregator_notes contains a tiebreak note.
+    # codex=PASS@0.6 vs claude=NEEDS_WORK@0.85 is a 1-1 count tie, so the
+    # majority-mode tiebreak fires and MUST produce a "tiebreak" note. Per
+    # spec §4 line 355 exact wording is not stable; check for substring only.
+    local state_file_div="$review_dir/gate-state.json"
+    if [[ -f "$state_file_div" ]]; then
+        local notes_tiebreak
+        notes_tiebreak=$(jq -r '.debate.aggregator_notes | map(select(test("tiebreak"; "i"))) | length' "$state_file_div" 2>/dev/null || echo "0")
+        if [[ "$notes_tiebreak" -gt 0 ]]; then
+            log_grn "$scenario: gate-state.json.debate.aggregator_notes contains tiebreak note (AC-INS-03)"
+            green_count=$((green_count + 1))
+        else
+            log_red "$scenario: gate-state.json.debate.aggregator_notes missing tiebreak note (AC-INS-03); notes=$(jq -c '.debate.aggregator_notes' "$state_file_div" 2>/dev/null)"
+            red_count=$((red_count + 1))
+        fi
+    else
+        log_red "$scenario: gate-state.json absent for AC-INS-03 tiebreak note assertion"
         red_count=$((red_count + 1))
     fi
 }
