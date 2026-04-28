@@ -1368,8 +1368,13 @@ CLAUDE_PLANTED
     local round1_dir="$iter_root/$latest_iter/round-1"
 
     # Clause 1: at least one reviewer's Round-1 output contains a P1
-    # finding at the planted location.
+    # finding F at the planted location. Capture F's exact range (broadest
+    # across all matching findings: min line_start, max line_end) so that
+    # Clause 2 can check F' overlaps F itself, not merely the planted
+    # metadata range.  Using the broadest range gives the largest acceptance
+    # window for Clause 2 (most permissive while still anchoring to F).
     local clause1_pass=0
+    local f_file_path="" f_line_start="" f_line_end=""
     local rev
     for rev in codex gemini claude; do
         local r1json="$round1_dir/${rev}.augmented.json"
@@ -1379,11 +1384,12 @@ CLAUDE_PLANTED
         if [[ ! -s "$r1json" ]]; then
             continue
         fi
-        # priority 1 OR "P1" + file_path match + line range overlap.
-        local match
-        match=$(jq -r --arg fp "$planted_file" \
-                       --argjson ls "$planted_lstart" \
-                       --argjson le "$planted_lend" '
+        # priority 1 OR "P1" + file_path match + line range overlap with planted range.
+        # Extract the broadest range across all matching findings in this reviewer's output.
+        local rev_range
+        rev_range=$(jq -r --arg fp "$planted_file" \
+                           --argjson ls "$planted_lstart" \
+                           --argjson le "$planted_lend" '
             (.findings // [])
             | map(select(
                 ((.priority == 1) or (.priority == "P1"))
@@ -1391,15 +1397,33 @@ CLAUDE_PLANTED
                 and (.line_start != null) and (.line_end != null)
                 and (.line_start <= $le) and ($ls <= .line_end)
             ))
-            | length' "$r1json" 2>/dev/null || echo "0")
-        if [[ "$match" -ge 1 ]]; then
+            | if length == 0 then empty
+              else {file_path: .[0].file_path,
+                    line_start: (map(.line_start) | min),
+                    line_end:   (map(.line_end)   | max)}
+              end
+            | "\(.file_path)\t\(.line_start)\t\(.line_end)"' \
+            "$r1json" 2>/dev/null || true)
+        if [[ -n "$rev_range" ]]; then
             clause1_pass=1
-            break
+            local rev_fp rev_ls rev_le
+            rev_fp=$(printf '%s' "$rev_range" | cut -f1)
+            rev_ls=$(printf '%s' "$rev_range" | cut -f2)
+            rev_le=$(printf '%s' "$rev_range" | cut -f3)
+            # Accumulate the broadest range across all reviewers that raised F.
+            if [[ -z "$f_file_path" ]]; then
+                f_file_path="$rev_fp"
+                f_line_start="$rev_ls"
+                f_line_end="$rev_le"
+            else
+                [[ "$rev_ls" -lt "$f_line_start" ]] && f_line_start="$rev_ls"
+                [[ "$rev_le" -gt "$f_line_end"   ]] && f_line_end="$rev_le"
+            fi
         fi
     done
 
     if [[ $clause1_pass -eq 1 ]]; then
-        log_grn "$scenario: Clause 1 — at least one reviewer's Round-1 output contains a P1 finding at the planted location"
+        log_grn "$scenario: Clause 1 — at least one reviewer's Round-1 output contains a P1 finding at the planted location (F: $f_file_path lines $f_line_start..$f_line_end)"
         green_count=$((green_count + 1))
     else
         log_red "$scenario: Clause 1 FAILED — no reviewer's Round-1 output contains a P1 finding at the planted file_path/line range. Tune the fixture or reviewer prompts/strategies until Clause 1 passes."
@@ -1407,15 +1431,17 @@ CLAUDE_PLANTED
     fi
 
     # Clause 2: aggregate.json.findings[] contains a P1 finding F' with
-    # confidence >= 0.7, file_path matching, and line range overlapping
-    # the planted range. Title match NOT required.
+    # confidence >= 0.7, file_path exactly matching F.file_path, and line
+    # range overlapping F's captured range (not the planted metadata range).
+    # This closes the pathological-pass loophole where F' overlaps the planted
+    # range but not F itself.  Title match NOT required.
     local aggregate="$review_dir/reviews/aggregate.json"
     local clause2_pass=0
-    if [[ -f "$aggregate" ]]; then
+    if [[ -f "$aggregate" && $clause1_pass -eq 1 ]]; then
         local match
-        match=$(jq -r --arg fp "$planted_file" \
-                       --argjson ls "$planted_lstart" \
-                       --argjson le "$planted_lend" '
+        match=$(jq -r --arg fp "$f_file_path" \
+                       --argjson ls "$f_line_start" \
+                       --argjson le "$f_line_end" '
             (.findings // [])
             | map(select(
                 (.priority == "P1")
@@ -1431,13 +1457,15 @@ CLAUDE_PLANTED
     fi
 
     if [[ $clause2_pass -eq 1 ]]; then
-        log_grn "$scenario: Clause 2 — aggregate.json.findings[] retains a P1 finding (confidence>=0.7) at the planted location"
+        log_grn "$scenario: Clause 2 — aggregate.json.findings[] retains a P1 finding (confidence>=0.7) overlapping F ($f_file_path lines $f_line_start..$f_line_end)"
         green_count=$((green_count + 1))
     else
         if [[ ! -f "$aggregate" ]]; then
             log_red "$scenario: Clause 2 FAILED — aggregate.json absent (coordinator did not produce the final aggregate)"
+        elif [[ $clause1_pass -eq 0 ]]; then
+            log_red "$scenario: Clause 2 SKIPPED (Clause 1 failed — no F captured)"
         else
-            log_red "$scenario: Clause 2 FAILED — aggregate.json.findings[] does not contain a P1 finding (confidence>=0.7) at planted file_path='$planted_file' overlapping lines $planted_lstart..$planted_lend. The Round-2 / final aggregator dropped the planted P1 — falsifiable-acceptance is failing."
+            log_red "$scenario: Clause 2 FAILED — aggregate.json.findings[] does not contain a P1 finding (confidence>=0.7) with file_path='$f_file_path' overlapping F's lines $f_line_start..$f_line_end. The Round-2 / final aggregator dropped the planted P1 — falsifiable-acceptance is failing."
         fi
         red_count=$((red_count + 1))
     fi
