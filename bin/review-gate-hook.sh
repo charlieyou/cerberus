@@ -356,9 +356,18 @@ review_gate_check() {
         # caller explicitly requested.
         local debate_flag debate_seed_value
         debate_flag=$(jq -r '.config.debate // empty' "$STATE_FILE" 2>/dev/null || echo "")
-        debate_seed_value=$(jq -r '.config.debate_seed // empty' "$STATE_FILE" 2>/dev/null || echo "")
+        # Only preserve --debate-seed when debate is enabled. Per R9 (AC-5),
+        # --debate-seed is a no-op when --debate is absent and MUST NOT be
+        # observable in any byte-parity-protected artifact (including the
+        # Stop-hook's auto-respawn command line). Guarding the read here
+        # ensures the seed never reaches the rebuilt spawn_cmd on a
+        # non-debate run, even if a stale .config.debate_seed somehow
+        # appeared in gate-state.json.
         if [[ "$debate_flag" == "true" ]]; then
+            debate_seed_value=$(jq -r '.config.debate_seed // empty' "$STATE_FILE" 2>/dev/null || echo "")
             log "review-gate: preserving --debate on auto-respawn"
+        else
+            debate_seed_value=""
         fi
 
         # For code, re-fetch the diff from current args
@@ -1029,9 +1038,34 @@ review_gate_check() {
                 verdict="UNCLEAR"
             fi
 
-            # Extract highest priority from findings
+            # Extract highest priority from findings.
+            #
+            # Normalize both numeric `0..3` and string `"P0".."P3"` to a
+            # canonical numeric form before computing `min`, then surface
+            # the numeric integer the rest of the calculator expects.
+            # Spec L212 (R6 priority gate): any P0/P1 in any active
+            # final-round reviewer's output, at any confidence,
+            # MUST trigger requires_decision regardless of consensus
+            # mode. Reviewers may emit either form (the schema permits
+            # both today, and debate.sh's aggregate normalization
+            # explicitly does NOT mutate per-reviewer JSONs at L2863-L2866),
+            # so the priority gate has to recognize both at the hook
+            # boundary or string `"P1"` is silently downgraded to "no
+            # P0/P1 present" and the gate may auto-approve.
             local highest_priority
-            highest_priority=$(echo "$result" | jq -r '[.findings[]?.priority // 99] | min // 99' 2>/dev/null || echo "99")
+            highest_priority=$(echo "$result" | jq -r '
+                def to_pri_num:
+                    if type == "number" then
+                        (if . == 0 or . == 1 or . == 2 or . == 3 then . else 99 end)
+                    elif type == "string" then
+                        (if . == "P0" then 0
+                         elif . == "P1" then 1
+                         elif . == "P2" then 2
+                         elif . == "P3" then 3
+                         else 99 end)
+                    else 99 end;
+                [.findings[]?.priority | to_pri_num] | min // 99
+            ' 2>/dev/null || echo "99")
             if [[ "$highest_priority" =~ ^[0-9]+$ ]] && [[ "$highest_priority" -lt "$max_priority" ]]; then
                 max_priority="$highest_priority"
             fi
@@ -1389,7 +1423,28 @@ review_gate_check() {
                 if [[ "$verdict" == "PASS" ]]; then
                     # For PASS verdicts, only include if there are P2/P3 findings
                     local p2p3_findings
-                    p2p3_findings=$(echo "$result" | jq -r '.findings // [] | map(select(.priority >= 2)) | .[] | "[P\(.priority)] " + (.title // "No title") + ": " + (.body // "")' 2>/dev/null || echo "")
+                    # Normalize priority across numeric `0..3` and string `"P0".."P3"`
+                    # forms before filtering / rendering, per spec L212 R6 priority
+                    # gate (reviewer outputs may use either form; the schema permits
+                    # both and aggregate normalization does NOT mutate per-reviewer
+                    # JSONs at debate.sh L2863-L2866).
+                    p2p3_findings=$(echo "$result" | jq -r '
+                        def to_pri_num:
+                            if type == "number" then
+                                (if . == 0 or . == 1 or . == 2 or . == 3 then . else null end)
+                            elif type == "string" then
+                                (if . == "P0" then 0
+                                 elif . == "P1" then 1
+                                 elif . == "P2" then 2
+                                 elif . == "P3" then 3
+                                 else null end)
+                            else null end;
+                        .findings // []
+                        | map(. + {_pn: (.priority | to_pri_num)})
+                        | map(select(._pn != null and ._pn >= 2))
+                        | .[]
+                        | "[P\(._pn)] " + (.title // "No title") + ": " + (.body // "")
+                    ' 2>/dev/null || echo "")
                     if [[ -n "$p2p3_findings" ]]; then
                         all_issues+=$'### '"$reviewer ($verdict - minor issues)"$'\n'
                         while IFS= read -r finding; do
@@ -1452,7 +1507,22 @@ review_gate_check() {
                 fi
 
                 local findings
+                # Normalize priority across numeric `0..3` and string
+                # `"P0".."P3"` forms (spec L212 R6) before selecting blocking
+                # findings, so the priority gate, the select() filter, and
+                # the title-prefix all see a consistent numeric value
+                # regardless of which form the reviewer emitted.
                 findings=$(echo "$result" | jq -r '
+                    def to_pri_num:
+                        if type == "number" then
+                            (if . == 0 or . == 1 or . == 2 or . == 3 then . else null end)
+                        elif type == "string" then
+                            (if . == "P0" then 0
+                             elif . == "P1" then 1
+                             elif . == "P2" then 2
+                             elif . == "P3" then 3
+                             else null end)
+                        else null end;
                     def normalize_title($t; $p):
                       if ($t // "") == "" then
                         if $p != null then "[P" + ($p|tostring) + "]" else "Finding" end
@@ -1462,14 +1532,15 @@ review_gate_check() {
                         else $t
                         end
                       end;
-                    .findings // [] |
-                    map(select(
-                      if .priority != null then (.priority | tonumber) <= 1
-                      else ((.title // "") | test("\\[P[01]\\]"))
-                      end
-                    )) |
-                    .[] |
-                    normalize_title(.title; .priority) + ": " + (.body // "")
+                    .findings // []
+                    | map(. + {_pn: (.priority | to_pri_num)})
+                    | map(select(
+                        if ._pn != null then ._pn <= 1
+                        else ((.title // "") | test("\\[P[01]\\]"))
+                        end
+                      ))
+                    | .[]
+                    | normalize_title(.title; ._pn) + ": " + (.body // "")
                 ' 2>/dev/null || echo "")
 
                 if [[ -n "$findings" ]]; then
@@ -1518,7 +1589,21 @@ review_gate_check() {
                 fi
 
                 local findings
+                # Normalize priority across numeric `0..3` and string
+                # `"P0".."P3"` forms (spec L212 R6) for the same reason as
+                # collect_blocking_issues — string priorities must not be
+                # silently routed to the wrong bucket.
                 findings=$(echo "$result" | jq -r '
+                    def to_pri_num:
+                        if type == "number" then
+                            (if . == 0 or . == 1 or . == 2 or . == 3 then . else null end)
+                        elif type == "string" then
+                            (if . == "P0" then 0
+                             elif . == "P1" then 1
+                             elif . == "P2" then 2
+                             elif . == "P3" then 3
+                             else null end)
+                        else null end;
                     def normalize_title($t; $p):
                       if ($t // "") == "" then
                         if $p != null then "[P" + ($p|tostring) + "]" else "Finding" end
@@ -1528,14 +1613,15 @@ review_gate_check() {
                         else $t
                         end
                       end;
-                    .findings // [] |
-                    map(select(
-                      if .priority != null then (.priority | tonumber) >= 2
-                      else ((.title // "") | test("\\[P[23]\\]"))
-                      end
-                    )) |
-                    .[] |
-                    normalize_title(.title; .priority) + ": " + (.body // "")
+                    .findings // []
+                    | map(. + {_pn: (.priority | to_pri_num)})
+                    | map(select(
+                        if ._pn != null then ._pn >= 2
+                        else ((.title // "") | test("\\[P[23]\\]"))
+                        end
+                      ))
+                    | .[]
+                    | normalize_title(.title; ._pn) + ": " + (.body // "")
                 ' 2>/dev/null || echo "")
 
                 if [[ -n "$findings" ]]; then
