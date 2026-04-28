@@ -233,6 +233,45 @@ review_gate_check() {
         fi
     }
 
+    extract_ask_prompt_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            jq -r '.mode.ask_prompt // empty' "$STATE_FILE" 2>/dev/null || echo ""
+        fi
+    }
+
+    extract_ask_context_from_state() {
+        if [[ -f "$STATE_FILE" ]]; then
+            jq -r '.mode.ask_context // empty' "$STATE_FILE" 2>/dev/null || echo ""
+        fi
+    }
+
+    extract_ask_artifact_section() {
+        local heading="$1"
+        [[ -f "$ARTIFACT_FILE" ]] || return 0
+
+        awk -v heading="$heading" '
+            function strip_fence_indent(s,    i) {
+                i = 0
+                while (i < 3 && substr(s, 1, 1) == " ") {
+                    s = substr(s, 2)
+                    i++
+                }
+                return s
+            }
+            $0 == heading { seen=1; next }
+            seen && !in_block {
+                stripped = strip_fence_indent($0)
+                if (stripped !~ /^```/) next
+                match(stripped, /^`+/)
+                fence = substr(stripped, 1, RLENGTH)
+                in_block=1
+                next
+            }
+            seen && in_block && strip_fence_indent($0) == fence { exit }
+            seen && in_block { print }
+        ' "$ARTIFACT_FILE"
+    }
+
     # --- Helper: Extract agents list from artifact frontmatter ---
     extract_agents() {
         if [[ -f "$ARTIFACT_FILE" ]]; then
@@ -588,6 +627,86 @@ review_gate_check() {
                 fi
             else
                 log "review-gate: epic-verify missing epic_path, falling back to artifact"
+                local -a spawn_cmd=("$0" "spawn")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
+                fi
+                spawn_cmd+=("$ARTIFACT_FILE")
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   REVIEW_TYPE="$detected_type" \
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+            fi
+        elif [[ "$detected_type" == "ask" ]]; then
+            local ask_prompt ask_context ask_prompt_file ask_context_file
+            ask_prompt=$(extract_ask_prompt_from_state)
+            ask_context=$(extract_ask_context_from_state)
+            if [[ -z "$ask_prompt" || "$ask_prompt" == "null" ]]; then
+                ask_prompt=$(extract_ask_artifact_section "## Prompt")
+            fi
+            if [[ -z "$ask_context" || "$ask_context" == "null" ]]; then
+                ask_context=$(extract_ask_artifact_section "## Context")
+            fi
+
+            if [[ -n "$ask_prompt" ]]; then
+                ask_prompt_file=$(mktemp -t review-gate-ask-prompt.XXXXXX)
+                printf '%s' "$ask_prompt" > "$ask_prompt_file"
+                local -a spawn_cmd=("$0" "spawn-ask" --prompt-file "$ask_prompt_file")
+                if [[ -n "$agents_csv" ]]; then
+                    spawn_cmd+=(--agents "$agents_csv")
+                fi
+                if [[ -n "$max_rounds" ]]; then
+                    spawn_cmd+=(--max-rounds "$max_rounds")
+                fi
+                if [[ -n "$mode" ]]; then
+                    spawn_cmd+=(--mode "$mode")
+                fi
+                if [[ -n "$consensus_mode" && "$consensus_mode" != "null" ]]; then
+                    spawn_cmd+=(--consensus "$consensus_mode")
+                fi
+                if [[ "$debate_flag" == "true" ]]; then
+                    spawn_cmd+=(--debate)
+                fi
+                if [[ -n "$debate_seed_value" ]]; then
+                    spawn_cmd+=(--debate-seed "$debate_seed_value")
+                fi
+                if [[ -n "$ask_context" ]]; then
+                    ask_context_file=$(mktemp -t review-gate-ask-context.XXXXXX)
+                    printf '%s' "$ask_context" > "$ask_context_file"
+                    spawn_cmd+=(--context-file "$ask_context_file")
+                else
+                    ask_context_file=""
+                fi
+
+                if REVIEW_GATE_SESSION_KEY="$SESSION_KEY" \
+                   REVIEW_GATE_SESSION_SOURCE="$SESSION_SOURCE" \
+                   CLAUDE_SESSION_ID="$SESSION_ID" \
+                   REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+                   "${spawn_cmd[@]}" >/dev/null 2>&1; then
+                    spawn_success=true
+                fi
+                rm -f "$ask_prompt_file" "${ask_context_file:-}" 2>/dev/null || true
+            else
+                log "review-gate: ask prompt missing, falling back to artifact"
                 local -a spawn_cmd=("$0" "spawn")
                 if [[ -n "$agents_csv" ]]; then
                     spawn_cmd+=(--agents "$agents_csv")
@@ -1725,7 +1844,7 @@ INFO
         local trigger="$1"
         local mode_type="$2"
         case "$trigger" in
-            code|plan|spec|epic-verify)
+            code|plan|spec|epic-verify|ask)
                 echo "$trigger"
                 ;;
             healthcheck|architecture-review|create-tasks)
@@ -1800,6 +1919,13 @@ INFO
                 template=$(resolve_revision_template "epic-verify") || { log "review-gate: FATAL: epic-verify revision template not found"; return 1; }
                 result=$(substitute_template "$template" '${ISSUES}' "$issues")
                 echo "$result"
+                ;;
+            ask)
+                cat <<ASK_REVISION
+The model panel could not fully converge on the answer.
+
+Review the panel feedback above, answer the user's original prompt as well as possible, and call out any caveats that materially affect the recommendation. If the prompt needs clarification, ask the user directly or re-run /cerberus:ask with a narrower prompt.
+ASK_REVISION
                 ;;
         esac
     }

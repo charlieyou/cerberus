@@ -8,6 +8,7 @@
 #   resolve        Resolve gate and allow stop
 #   artifact-path  Print session-scoped artifact path
 #   author-context Set or clear author context injected into prompts
+#   spawn-ask      Send an arbitrary prompt to the reviewer/debate panel
 
 set -euo pipefail
 
@@ -75,6 +76,10 @@ Commands:
     Reviewers explore the code themselves to verify criteria are met.
     Claude fixes code until all criteria pass consensus verification.
 
+  spawn-ask [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--prompt-file <path>] [--debate] [--] <prompt>
+    Send an arbitrary prompt to the reviewer panel. With --debate, routes the
+    prompt through the debate coordinator (requires >=2 available reviewers).
+
   wait --json [--finalize] [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
@@ -135,6 +140,61 @@ read_context_file() {
         die "Context file is empty: $path"
     fi
     printf '%s' "$content"
+}
+
+resolve_realpath() {
+    local p="${1:-}"
+    if [[ -z "$p" ]]; then
+        return 1
+    fi
+
+    local resolved=""
+    if command -v realpath >/dev/null 2>&1; then
+        if resolved=$(realpath -- "$p" 2>/dev/null); then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+        if resolved=$(realpath "$p" 2>/dev/null); then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$p"
+        return $?
+    fi
+
+    if [[ -d "$p" ]]; then
+        ( cd -- "$p" && pwd -P )
+    elif [[ -f "$p" ]]; then
+        local d b
+        d=$(dirname -- "$p")
+        b=$(basename -- "$p")
+        ( cd -- "$d" && printf '%s/%s\n' "$(pwd -P)" "$b" )
+    else
+        return 1
+    fi
+}
+
+markdown_fence_for_content() {
+    local content="$1"
+    awk '
+        BEGIN { max = 2 }
+        {
+            line = $0
+            i = 0
+            while (i < 3 && substr(line, 1, 1) == " ") {
+                line = substr(line, 2)
+                i++
+            }
+            if (match(line, /^`+/) && RLENGTH > max) max = RLENGTH
+        }
+        END {
+            for (i = 0; i < max + 1; i++) printf "`"
+            printf "\n"
+        }
+    ' <<< "$content"
 }
 
 # Resolve author context with precedence: context file > env override > stored state.
@@ -207,8 +267,8 @@ inject_context_block() {
 
 # normalize_mode and validate_mode are provided by review-gate-models.sh
 
-# Substitute the four debate-mode reviewer template placeholders:
-#   ${CONFIDENCE_ANCHORS}, ${STRATEGY_DIRECTIVE}, ${PEER_BLOCK}, ${PRIOR_ROUND_SELF_BLOCK}
+# Substitute debate-mode reviewer template placeholders:
+#   ${CONFIDENCE_ANCHORS}, ${STRATEGY_DIRECTIVE}, ${PEER_BLOCK}, ${PRIOR_ROUND_SELF_BLOCK}, ${DEBATE_OUTPUT_SHAPE}
 #
 # Reads prompt content from stdin, writes the substituted content to stdout.
 #
@@ -1350,7 +1410,7 @@ USAGE
         die "Plan file not found: $plan_path"
     fi
 
-    plan_path=$(realpath "$plan_path")
+    plan_path=$(resolve_realpath "$plan_path")
 
     # Resolve transcript and session ID if not provided
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
@@ -1699,7 +1759,7 @@ USAGE
         die "Spec file not found: $spec_path"
     fi
 
-    spec_path=$(realpath "$spec_path")
+    spec_path=$(resolve_realpath "$spec_path")
 
     # Resolve transcript and session ID if not provided
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
@@ -2051,10 +2111,10 @@ USAGE
     
     # Check if it's a file (try both as-is and relative to project root)
     if [[ -f "$epic_path" ]]; then
-        epic_context=$(realpath "$epic_path")
+        epic_context=$(resolve_realpath "$epic_path")
         is_file=true
     elif [[ -f "$project_root/$epic_path" ]]; then
-        epic_context=$(realpath "$project_root/$epic_path")
+        epic_context=$(resolve_realpath "$project_root/$epic_path")
         is_file=true
     elif [[ "$epic_path" == */* ]] || [[ "$epic_path" == *.md ]]; then
         # Looks like a path but doesn't exist - likely a typo
@@ -2282,6 +2342,320 @@ USAGE
     echo "Epic verification spawned for: $epic_path" >&2
     echo "" >&2
     echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
+}
+
+review_gate_spawn_ask() {
+    local ask_content=""
+    local prompt_file_arg=""
+    local agents_csv=""
+    local max_rounds=""
+    local mode=""
+    local context_file=""
+    local context_content=""
+    local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
+    local artifact_only="false"
+    local -a positionals=()
+
+    local session_id="${CLAUDE_SESSION_ID:-}"
+    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --artifact-only)
+                artifact_only="true"
+                shift
+                ;;
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
+            --agents=*)
+                agents_csv="${1#*=}"
+                shift
+                ;;
+            --agents)
+                agents_csv="${2:-}"
+                shift 2
+                ;;
+            --max-rounds=*)
+                max_rounds="${1#*=}"
+                shift
+                ;;
+            --max-rounds)
+                max_rounds="${2:-}"
+                shift 2
+                ;;
+            --mode=*)
+                mode="${1#*=}"
+                shift
+                ;;
+            --mode)
+                mode="${2:-}"
+                shift 2
+                ;;
+            --context-file=*)
+                context_file="${1#*=}"
+                shift
+                ;;
+            --context-file)
+                context_file="${2:-}"
+                shift 2
+                ;;
+            --prompt-file=*)
+                prompt_file_arg="${1#*=}"
+                shift
+                ;;
+            --prompt-file)
+                prompt_file_arg="${2:-}"
+                shift 2
+                ;;
+            --consensus=*)
+                consensus_mode="${1#*=}"
+                shift
+                ;;
+            --consensus)
+                consensus_mode="${2:-}"
+                shift 2
+                ;;
+            --session-id)
+                session_id="${2:-}"
+                shift 2
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<USAGE
+Usage: ${CLI_CMD} spawn-ask [options] [--] <prompt>
+
+Send an arbitrary prompt to the reviewer panel. Use --debate to run the prompt
+through the multi-round debate coordinator.
+
+Options:
+  --agents <list>           Comma-separated subset of agents: codex,gemini,claude
+  --max-rounds <n>          Maximum review iterations before manual resolution (default: 0 for ask)
+  --mode <level>            Intelligence mode: fast, smart, max
+  --context-file <path>     Add background context to the prompt
+  --prompt-file <path>      Read the prompt body from a file
+  --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode answering (requires >=2 available reviewers)
+  --session-id <id>         Session ID for scoping
+  --transcript-path <path>  Path to transcript file
+  [--] <prompt>             Prompt text. Use -- before text that starts with '-'.
+
+Examples:
+  ${CLI_CMD} spawn-ask --debate "Should we ship this design?"
+  ${CLI_CMD} spawn-ask --prompt-file /tmp/question.md --debate
+USAGE
+                return 0
+                ;;
+            --)
+                shift
+                if [[ $# -gt 0 ]]; then
+                    positionals+=("$@")
+                fi
+                break
+                ;;
+            -*)
+                die "Unknown option '$1'"
+                ;;
+            *)
+                positionals+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -n "$prompt_file_arg" ]]; then
+        if [[ ${#positionals[@]} -gt 0 ]]; then
+            die "Prompt provided both via --prompt-file and positional arguments"
+        fi
+        if [[ ! -f "$prompt_file_arg" ]]; then
+            die "Prompt file not found: $prompt_file_arg"
+        fi
+        ask_content=$(cat "$prompt_file_arg")
+    elif [[ ${#positionals[@]} -gt 0 ]]; then
+        ask_content="${positionals[*]}"
+    fi
+
+    if [[ -z "$ask_content" ]]; then
+        die "Ask prompt is required. Provide prompt text or --prompt-file <path>."
+    fi
+
+    if [[ -n "$context_file" ]]; then
+        context_content=$(read_context_file "$context_file")
+    fi
+
+    mode=$(normalize_mode "$mode")
+    if [[ -z "$mode" ]]; then
+        mode="smart"
+    fi
+    validate_mode "$mode"
+    resolve_intelligence_mode "$mode"
+
+    if [[ -z "$max_rounds" ]]; then
+        max_rounds="${REVIEW_GATE_MAX_ROUNDS:-0}"
+    fi
+    validate_max_rounds "$max_rounds"
+
+    if [[ -z "$consensus_mode" ]]; then
+        consensus_mode="${REVIEW_GATE_CONSENSUS:-majority}"
+    fi
+    validate_consensus_mode "$consensus_mode"
+
+    if [[ -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+    fi
+
+    local review_dir
+    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    mkdir -p "$review_dir"
+
+    local reviews_dir="$review_dir/reviews"
+    local iteration_file="$review_dir/iteration.txt"
+    local iter=0
+    if [[ -f "$iteration_file" ]]; then
+        iter=$(cat "$iteration_file" 2>/dev/null || echo "0")
+    fi
+    archive_reviews "$review_dir" "$reviews_dir" "$iter" >/dev/null 2>&1 || true
+
+    local artifact_path="$review_dir/latest.md"
+    local ask_fence
+    ask_fence=$(markdown_fence_for_content "$ask_content")
+    {
+        echo "<!-- review-type: ask -->"
+        if [[ -n "$max_rounds" ]]; then
+            echo "<!-- max-rounds: $max_rounds -->"
+        fi
+        if [[ -n "$agents_csv" ]]; then
+            echo "<!-- agents: $agents_csv -->"
+        fi
+        echo "<!-- mode: $mode -->"
+        echo ""
+        echo "# Ask"
+        echo ""
+        echo "## Prompt"
+        echo ""
+        echo "${ask_fence}text"
+        printf '%s\n' "$ask_content"
+        echo "$ask_fence"
+        if [[ -n "$context_content" ]]; then
+            local context_fence
+            context_fence=$(markdown_fence_for_content "$context_content")
+            echo ""
+            echo "## Context"
+            echo ""
+            echo "${context_fence}text"
+            printf '%s\n' "$context_content"
+            echo "$context_fence"
+        fi
+    } > "$artifact_path"
+
+    echo "Artifact written: $artifact_path" >&2
+
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    local prompt_template_path=""
+    local path
+    for path in "$project_root/prompts/reviewers/ask.md" "$SCRIPT_DIR/../prompts/reviewers/ask.md"; do
+        if [[ -f "$path" ]]; then
+            prompt_template_path="$path"
+            break
+        fi
+    done
+
+    if [[ -z "$prompt_template_path" ]]; then
+        die "Ask prompt template not found in project or built-in locations"
+    fi
+
+    local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+    substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+        < "$prompt_template_path" > "$template_substituted_tmp"
+
+    local ask_tmp="${review_dir}/ask_content.tmp"
+    local context_tmp="${review_dir}/ask_context.tmp"
+    printf '%s' "$ask_content" > "$ask_tmp"
+    printf '%s' "${context_content:-No additional context provided.}" > "$context_tmp"
+
+    local prompt_content
+    prompt_content=$(awk -v ask_file="$ask_tmp" -v context_file="$context_tmp" '
+        BEGIN {
+            while ((getline line < ask_file) > 0) ask = ask (ask ? "\n" : "") line; close(ask_file)
+            while ((getline line < context_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(context_file)
+        }
+        {
+            while (match($0, /\$\{ASK_CONTENT\}/)) {
+                printf "%s", substr($0, 1, RSTART-1)
+                printf "%s", ask
+                $0 = substr($0, RSTART+RLENGTH)
+            }
+            while (match($0, /\$\{CONTEXT\}/)) {
+                printf "%s", substr($0, 1, RSTART-1)
+                printf "%s", ctx
+                $0 = substr($0, RSTART+RLENGTH)
+            }
+            print
+        }
+    ' "$template_substituted_tmp")
+    rm -f "$ask_tmp" "$context_tmp" "$template_substituted_tmp"
+
+    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
+        prompt_content=$'ultrathink\n\n'"$prompt_content"
+    fi
+
+    mkdir -p "$reviews_dir"
+    local prompt_file="$reviews_dir/review.prompt"
+    echo "$prompt_content" > "$prompt_file"
+
+    if [[ "$artifact_only" == "true" ]]; then
+        return 0
+    fi
+
+    local -a spawn_cmd=("$0" "spawn" "--type=ask")
+    if [[ -n "$agents_csv" ]]; then
+        spawn_cmd+=(--agents "$agents_csv")
+    fi
+    if [[ -n "$max_rounds" ]]; then
+        spawn_cmd+=(--max-rounds "$max_rounds")
+    fi
+    if [[ -n "$mode" ]]; then
+        spawn_cmd+=(--mode "$mode")
+    fi
+    if [[ -n "$consensus_mode" ]]; then
+        spawn_cmd+=(--consensus "$consensus_mode")
+    fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
+    spawn_cmd+=("$artifact_path")
+
+    CLAUDE_SESSION_ID="$session_id" \
+    REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
+    REVIEW_TYPE="ask" \
+    REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_ASK_CONTENT="$ask_content" \
+    REVIEW_GATE_ASK_CONTEXT="$context_content" \
+    "${spawn_cmd[@]}"
+
+    echo "Ask spawned" >&2
 }
 
 review_gate_artifact_path() {
@@ -2529,8 +2903,8 @@ review_gate_spawn() {
 Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] [--session-id <id>] [--transcript-path <path>] [artifact-path]
 
 Options:
-  --debate              Opt in to debate-mode review (judging review types only:
-                        code, plan, spec, epic-verify; requires >=2 reviewers).
+  --debate              Opt in to debate-mode review/answering (supported types:
+                        code, plan, spec, epic-verify, ask; requires >=2 reviewers).
 USAGE
                 return 0
                 ;;
@@ -2613,9 +2987,9 @@ USAGE
         local arg="${1:-}"
 
         if [[ -n "$arg" && -f "$arg" ]]; then
-            realpath "$arg"
+            resolve_realpath "$arg"
         elif [[ -f "$REVIEW_DIR/latest.md" ]]; then
-            realpath "$REVIEW_DIR/latest.md"
+            resolve_realpath "$REVIEW_DIR/latest.md"
         else
             echo "No artifact found. Provide path as argument." >&2
             exit 2
@@ -2710,6 +3084,34 @@ USAGE
 DEFAULT
     }
 
+    extract_ask_artifact_section() {
+        local path="$1"
+        local heading="$2"
+        [[ -f "$path" ]] || return 0
+
+        awk -v heading="$heading" '
+            function strip_fence_indent(s,    i) {
+                i = 0
+                while (i < 3 && substr(s, 1, 1) == " ") {
+                    s = substr(s, 2)
+                    i++
+                }
+                return s
+            }
+            $0 == heading { seen=1; next }
+            seen && !in_block {
+                stripped = strip_fence_indent($0)
+                if (stripped !~ /^```/) next
+                match(stripped, /^`+/)
+                fence = substr(stripped, 1, RLENGTH)
+                in_block=1
+                next
+            }
+            seen && in_block && strip_fence_indent($0) == fence { exit }
+            seen && in_block { print }
+        ' "$path"
+    }
+
     # --- Get previous reviews if available ---
     get_previous_reviews() {
         # Find the most recent archived reviews directory
@@ -2795,7 +3197,7 @@ DEFAULT
         local content
         content=$(cat "$artifact_path")
 
-        # Substitute the four debate-mode placeholders on the TEMPLATE only,
+        # Substitute debate-mode placeholders on the TEMPLATE only,
         # before it is concatenated with the artifact content. This prevents
         # artifact bytes that happen to contain literal `${CONFIDENCE_ANCHORS}`
         # etc. (e.g., a diff that touches these very templates) from being
@@ -2804,6 +3206,49 @@ DEFAULT
         local criteria
         criteria=$(resolve_template "$review_type" \
             | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
+
+        if [[ "$review_type" == "ask" ]]; then
+            local ask_source="${REVIEW_GATE_ASK_CONTENT:-}"
+            local context_source="${REVIEW_GATE_ASK_CONTEXT:-}"
+            if [[ -z "$ask_source" ]]; then
+                ask_source=$(extract_ask_artifact_section "$artifact_path" "## Prompt")
+            fi
+            if [[ -z "$ask_source" ]]; then
+                ask_source="$content"
+            fi
+            if [[ -z "$context_source" ]]; then
+                context_source=$(extract_ask_artifact_section "$artifact_path" "## Context")
+            fi
+            if [[ -z "$context_source" ]]; then
+                context_source="No additional context provided."
+            fi
+
+            local ask_tmp context_tmp
+            ask_tmp=$(mktemp -t review-gate-ask-content.XXXXXX)
+            context_tmp=$(mktemp -t review-gate-ask-context.XXXXXX)
+            printf '%s' "$ask_source" > "$ask_tmp"
+            printf '%s' "$context_source" > "$context_tmp"
+            criteria=$(awk -v ask_file="$ask_tmp" -v context_file="$context_tmp" '
+                BEGIN {
+                    while ((getline line < ask_file) > 0) ask = ask (ask ? "\n" : "") line; close(ask_file)
+                    while ((getline line < context_file) > 0) ctx = ctx (ctx ? "\n" : "") line; close(context_file)
+                }
+                {
+                    while (match($0, /\$\{ASK_CONTENT\}/)) {
+                        printf "%s", substr($0, 1, RSTART-1)
+                        printf "%s", ask
+                        $0 = substr($0, RSTART+RLENGTH)
+                    }
+                    while (match($0, /\$\{CONTEXT\}/)) {
+                        printf "%s", substr($0, 1, RSTART-1)
+                        printf "%s", ctx
+                        $0 = substr($0, RSTART+RLENGTH)
+                    }
+                    print
+                }
+            ' <<< "$criteria")
+            rm -f "$ask_tmp" "$context_tmp"
+        fi
 
         local previous_reviews
         previous_reviews=$(get_previous_reviews)
@@ -2817,6 +3262,8 @@ DEFAULT
         local intro_text
         if [[ "$review_type" == "architecture-review" ]]; then
             intro_text="You are verifying an architecture review artifact. Your task is to check whether the claims in the artifact are accurate by examining the actual codebase. Use tools to read files and search code to verify each finding."
+        elif [[ "$review_type" == "ask" ]]; then
+            intro_text="You are answering an arbitrary user prompt as part of a multi-model panel."
         else
             intro_text="You are reviewing an artifact for quality and correctness."
         fi
@@ -2938,26 +3385,26 @@ PROMPT
     # --debate is misused. Per spec R9/R10 these errors are an explicit
     # exception to the byte-parity guarantee for valid invocations.
     if [[ "$debate" == "true" ]]; then
-        # R10 whitelist: --debate is judging-only. The four allowed --type values
-        # match the canonical REVIEW_TYPE values used end-to-end (see spec R10).
-        # Empty / auto-detected types are rejected because debate requires an
-        # explicit judging type to select the right reviewer/revision template.
+        # R10 whitelist: --debate is restricted to review/ask flows that have
+        # debate-aware reviewer templates. Empty / auto-detected types are
+        # rejected because debate requires an explicit type to select the right
+        # reviewer template.
         case "$REVIEW_TYPE" in
-            code|plan|spec|epic-verify)
+            code|plan|spec|epic-verify|ask)
                 ;;
             "")
                 {
-                    echo "Error: --debate requires an explicit judging --type (got: <auto-detected>)."
-                    echo "       Allowed --type values: code, plan, spec, epic-verify"
-                    echo "       --debate is judging-only; pass --type=<value> or use a spawn-*-review subcommand."
+                    echo "Error: --debate requires an explicit --type (got: <auto-detected>)."
+                    echo "       Allowed --type values: code, plan, spec, epic-verify, ask"
+                    echo "       Pass --type=<value> or use a spawn-* subcommand."
                 } >&2
                 exit 2
                 ;;
             *)
                 {
                     echo "Error: --debate is not supported for --type=$REVIEW_TYPE (rejected at preflight)."
-                    echo "       Allowed --type values: code, plan, spec, epic-verify"
-                    echo "       --debate is judging-only and is rejected for non-judging types"
+                    echo "       Allowed --type values: code, plan, spec, epic-verify, ask"
+                    echo "       --debate is rejected for unsupported types"
                     echo "       (healthcheck, architecture-review, create-tasks, manual, auto, etc.)."
                 } >&2
                 exit 2
@@ -3010,8 +3457,8 @@ PROMPT
         # shellcheck source=review-gate-debate.sh
         source "$SCRIPT_DIR/review-gate-debate.sh"
 
-        # Compute the canonical <artifact_id> per review type. The four
-        # judging review types use the input pinned by spec R3, with a
+        # Compute the canonical <artifact_id> per review type. Debate-capable
+        # review types use the input pinned by spec R3, with a
         # three-level fallback ladder for stability across sessions:
         #
         #   1. Wrapper-exported env var (canonical source). spawn-*-review
@@ -3022,6 +3469,7 @@ PROMPT
         #        spec        → REVIEW_GATE_DEBATE_SPEC_PATH
         #        code        → REVIEW_GATE_DIFF_ARGS
         #        epic-verify → REVIEW_GATE_EPIC_CONTEXT
+        #        ask         → REVIEW_GATE_ASK_CONTENT
         #
         #   2. Artifact frontmatter parse. The wrappers also embed the
         #      canonical source in artifact frontmatter; this is the
@@ -3040,6 +3488,7 @@ PROMPT
         #                      input regardless of whether it would be
         #                      truncated in frontmatter; the frontmatter
         #                      truncation is presentational only.")
+        #        ask         → artifact body bytes when env var is absent.
         #
         #   3. Resolved artifact realpath. Last-ditch fallback for ad-hoc
         #      bare-spawn invocations on stub/minimal artifacts. Different
@@ -3131,6 +3580,21 @@ PROMPT
                 _debate_artifact_id=$(compute_artifact_id epic-verify "$_epic_source") || \
                     die "compute_artifact_id epic-verify failed"
                 ;;
+            ask)
+                local _ask_source="${REVIEW_GATE_ASK_CONTENT:-}"
+                if [[ -z "$_ask_source" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _ask_source=$(extract_ask_artifact_section "$_resolved_artifact_path" "## Prompt")
+                    if [[ -z "$_ask_source" ]]; then
+                        echo "Note: --debate ask without REVIEW_GATE_ASK_CONTENT or structured ## Prompt block; using artifact bytes as prompt content for artifact_id." >&2
+                        _ask_source=$(cat "$_resolved_artifact_path")
+                    fi
+                fi
+                if [[ -z "$_ask_source" ]]; then
+                    die "--debate ask: cannot determine ask prompt content for artifact_id (no env var and no readable artifact)"
+                fi
+                _debate_artifact_id=$(compute_artifact_id ask "$_ask_source") || \
+                    die "compute_artifact_id ask failed"
+                ;;
         esac
 
         # Assign per-(artifact_id, reviewer) strategies via SHA-256 + canonical
@@ -3219,7 +3683,7 @@ PROMPT
         echo "$prebuilt_prompt_content" > "$prompt_file"
     else
         # The bare-spawn path uses build_prompt, which substitutes the
-        # four debate-mode placeholders on the template via
+        # debate-mode placeholders on the template via
         # substitute_debate_placeholders BEFORE merging artifact content.
         # That ordering keeps artifact bytes (which may contain literal
         # `${CONFIDENCE_ANCHORS}` etc., e.g., a diff that touches these
@@ -3272,6 +3736,9 @@ PROMPT
             mode_type="plan"
             mode_plan_path="$artifact_path"
             ;;
+        ask)
+            mode_type="ask"
+            ;;
     esac
 
     local state_json
@@ -3291,6 +3758,8 @@ PROMPT
         --arg mode_type "$mode_type" \
         --arg mode_diff_args "$mode_diff_args" \
         --arg mode_plan_path "$mode_plan_path" \
+        --arg ask_prompt "${REVIEW_GATE_ASK_CONTENT:-}" \
+        --arg ask_context "${REVIEW_GATE_ASK_CONTEXT:-}" \
         --arg mode "$mode" \
         --arg max_rounds "$max_rounds" \
         --arg consensus_mode "$consensus_mode" \
@@ -3305,6 +3774,8 @@ PROMPT
                 {type: $mode_type}
                 | (if $mode_diff_args != "" then .diff_args = $mode_diff_args else . end)
                 | (if $mode_plan_path != "" then .plan_path = $mode_plan_path else . end)
+                | (if $mode_type == "ask" and $ask_prompt != "" then .ask_prompt = $ask_prompt else . end)
+                | (if $mode_type == "ask" and $ask_context != "" then .ask_context = $ask_context else . end)
             ),
             config: (
                 {}
@@ -3677,7 +4148,7 @@ with open(out_path, "wb") as f: f.write(out)
                 echo "Debate coordinator: degraded below 2 active reviewers in the final peer round." >&2
                 echo "Reviews/ left empty; partial outputs preserved under $_debate_staging_dir (and round-2 staging if reached)." >&2
                 echo "Recovery: '${CLI_CMD} resolve --reason \"...\"' or re-spawn under REVIEW_GATE_RERUN=1." >&2
-                exit 1
+                exit 6
                 ;;
             *)
                 # Unexpected coordinator failure (NOT one of the spec-
@@ -4315,6 +4786,10 @@ main() {
         spawn-epic-verify)
             shift
             review_gate_spawn_epic_verify "$@"
+            ;;
+        spawn-ask)
+            shift
+            review_gate_spawn_ask "$@"
             ;;
         resolve)
             shift

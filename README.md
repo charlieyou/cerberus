@@ -85,6 +85,18 @@ Review a feature specification:
 /cerberus:review-spec --agents codex,gemini path/to/spec.md
 ```
 
+### Ask
+
+Ask the Cerberus model panel any question, optionally using debate mode:
+
+```
+/cerberus:ask "Should we ship this design?"
+/cerberus:ask --debate "Compare these two migration options and recommend one"
+/cerberus:ask --mode max --debate --prompt-file /tmp/question.md
+```
+
+`/cerberus:ask` waits for the panel, then synthesizes the reviewer answers in the current conversation. Pass `--` before prompt text that starts with a dash.
+
 ### Create Spec (Generator)
 
 Interview the user, run multi-model generators, synthesize a spec, then run the spec review gate:
@@ -194,20 +206,22 @@ Examples:
 
 ## Debate Mode
 
-Opt-in multi-round peer-review mode for the four review (judging) commands. Off
-by default. Designed for the cases where a single-pass review is suspected of
-sycophantic agreement or missed defects.
+Opt-in multi-round peer-review mode for the review commands and `/cerberus:ask`.
+Off by default. Designed for the cases where a single-pass review is suspected
+of sycophantic agreement or missed defects, or where an arbitrary question would
+benefit from a debate among models.
 
 ### Usage
 
-Pass `--debate` to either the bare `spawn` command or any of the four
-`spawn-*-review` subcommands:
+Pass `--debate` to either the bare `spawn` command or the supported spawn
+subcommands:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --debate
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --debate path/to/plan.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --debate path/to/spec.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify --debate path/to/epic.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-ask --debate "Should we ship this?"
 ```
 
 `--debate` is silently passed through by the slash-command wrappers, so:
@@ -217,6 +231,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify --debate path/to/epic.md
 /cerberus:review-plan --debate path/to/plan.md
 /cerberus:review-spec --debate path/to/spec.md
 /cerberus:verify-epic --debate path/to/epic.md
+/cerberus:ask --debate "Should we ship this?"
 ```
 
 work as well.
@@ -284,10 +299,10 @@ not require `REVIEW_GATE_RERUN=1`.
 ### Bare-spawn Whitelist
 
 `bin/review-gate spawn --debate` is only accepted when `--type` is one of
-`code`, `plan`, `spec`, or `epic-verify`. Any other `--type` (for example
-`healthcheck`, `architecture-review`) is rejected at preflight before any
-model is invoked. The four named `spawn-*-review` subcommands are always
-allowed.
+`code`, `plan`, `spec`, `epic-verify`, or `ask`. Any other `--type` (for
+example `healthcheck`, `architecture-review`) is rejected at preflight before
+any model is invoked. The named review subcommands and `spawn-ask` set a
+supported type automatically.
 
 ### Byte-parity Guarantee
 

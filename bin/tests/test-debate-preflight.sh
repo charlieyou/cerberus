@@ -4,9 +4,9 @@
 # T002 Phase B preflight tests for `--debate` and `--debate-seed`:
 #
 #   1. Whitelist rejection: bare `spawn --type X --debate` for non-judging X
-#      MUST exit 2 with stderr that names X and the four allowed values, and
+#      MUST exit 2 with stderr that names X and the allowed values, and
 #      MUST NOT invoke any reviewer model.
-#   2. Whitelist positive: bare `spawn --type X --debate` for judging X passes
+#   2. Whitelist positive: bare `spawn --type X --debate` for supported X passes
 #      preflight (we don't run the model; we just assert preflight does not
 #      reject the type).
 #   3. <2 reviewers hard error: `--debate` with one or zero available
@@ -137,9 +137,9 @@ for nontype in healthcheck architecture-review create-tasks manual auto; do
         continue
     fi
 
-    # Must mention all four allowed values
+    # Must mention all allowed values
     missing_allowed=""
-    for allowed in code plan spec epic-verify; do
+    for allowed in code plan spec epic-verify ask; do
         if [[ "$output" != *"$allowed"* ]]; then
             missing_allowed+="$allowed "
         fi
@@ -164,7 +164,7 @@ done
 # fire. Other downstream errors (e.g., <2 reviewers) are acceptable here —
 # we only assert that the WHITELIST preflight passes.
 # ---------------------------------------------------------------------------
-for goodtype in code plan spec epic-verify; do
+for goodtype in code plan spec epic-verify ask; do
     log_test "whitelist positive: bare spawn --type $goodtype --debate does not produce a whitelist rejection error"
     clear_markers
     set +e
@@ -289,6 +289,9 @@ help_must_mention_debate spawn-spec-review || true
 
 log_test "help output: spawn-epic-verify --help mentions --debate, hides --debate-seed"
 help_must_mention_debate spawn-epic-verify || true
+
+log_test "help output: spawn-ask --help mentions --debate, hides --debate-seed"
+help_must_mention_debate spawn-ask || true
 
 log_test "help output: top-level help mentions --debate, hides --debate-seed"
 top_help=$("$REVIEW_GATE" --help 2>&1 || true)

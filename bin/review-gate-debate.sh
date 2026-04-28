@@ -33,7 +33,8 @@
 #                                                   string (matches the
 #                                                   epic_context value the
 #                                                   spawn flow already
-#                                                   computes).
+#                                                   computes)
+#                                     ask       → verbatim prompt content.
 #
 #   3. assign_strategies <artifact_id> <reviewer1> [reviewer2 ...]
 #                                  — emit a NEWLINE-separated `<reviewer> <strategy>`
@@ -109,13 +110,14 @@ _sha256_hex() {
 # ---------------------------------------------------------------------------
 # Usage:
 #   compute_artifact_id <review_type> <args...>
-#     review_type ∈ {plan, spec, code, epic-verify}
+#     review_type ∈ {plan, spec, code, epic-verify, ask}
 #     args:
 #       plan|spec    → first arg is the user-passed file path
 #       code         → first arg is the verbatim diff_args_str
 #                      (e.g., "--uncommitted", "--base main",
 #                       "--commit <sha>,<sha>", or a range like "main..feature")
 #       epic-verify  → first arg is the file path OR raw-criteria string
+#       ask          → first arg is the verbatim prompt content
 #
 # Output (stdout): the canonical artifact_id string.
 #
@@ -160,8 +162,15 @@ compute_artifact_id() {
                 printf '%s' "$arg"
             fi
             ;;
+        ask)
+            if [[ -z "$arg" ]]; then
+                echo "error: compute_artifact_id ask requires prompt content" >&2
+                return 1
+            fi
+            printf '%s' "$arg"
+            ;;
         *)
-            echo "error: compute_artifact_id: unknown review_type '$review_type' (expected: plan, spec, code, epic-verify)" >&2
+            echo "error: compute_artifact_id: unknown review_type '$review_type' (expected: plan, spec, code, epic-verify, ask)" >&2
             return 1
             ;;
     esac

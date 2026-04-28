@@ -315,6 +315,16 @@ test_artifact_id_per_type() {
     else
         log_fail "code: verbatim diff_args_str mismatch: '$code_id'"
     fi
+
+    log_test "compute_artifact_id ask: verbatim prompt content"
+    local ask_raw=$'question: should we ship?\ncontext: includes --flags and markdown'
+    local ask_id
+    ask_id=$(compute_artifact_id ask "$ask_raw")
+    if [[ "$ask_id" == "$ask_raw" ]]; then
+        log_pass "ask: verbatim prompt content preserved"
+    else
+        log_fail "ask: prompt content mismatch: '$ask_id' vs '$ask_raw'"
+    fi
 }
 
 # Test 9 — shasum / sha256sum / hard-error coverage.
@@ -358,13 +368,11 @@ test_shasum_selection() {
     if [[ -n "$real_shasum" ]]; then
         local sandbox_only_shasum="$tmp_path/path-only-shasum"
         mkdir -p "$sandbox_only_shasum"
-        ln -s "$real_shasum" "$sandbox_only_shasum/shasum"
-        # shasum on macOS is a Perl script; ensure perl is available for it.
-        local real_perl
-        real_perl=$(command -v perl 2>/dev/null || true)
-        if [[ -n "$real_perl" ]]; then
-            ln -sf "$real_perl" "$sandbox_only_shasum/perl"
-        fi
+        cat > "$sandbox_only_shasum/shasum" <<SHASUM_WRAPPER
+#!/usr/bin/env bash
+exec "$real_shasum" "\$@"
+SHASUM_WRAPPER
+        chmod +x "$sandbox_only_shasum/shasum"
         local out_only_shasum
         if out_only_shasum=$(PATH="$sandbox_only_shasum:/usr/bin:/bin" bash -c '
             source "$1"
