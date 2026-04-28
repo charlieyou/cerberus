@@ -276,6 +276,7 @@ JSON only, no markdown code fences:
   "summary": "Highest priority: P{N}. {1-2 sentences explaining why verdict matches the rules.}"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - PASS: No P0/P1 findings; P2/P3 allowed
 - NEEDS_WORK: At least one P1, or P2s that collectively prevent safe execution
 - FAIL: At least one P0

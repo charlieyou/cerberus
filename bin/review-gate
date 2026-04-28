@@ -242,7 +242,7 @@ substitute_debate_placeholders() {
         # Consume entire placeholder lines (line + trailing newline) so the
         # rendered prompt is byte-identical to a template that never had
         # the placeholders. R9 byte-parity requirement.
-        sed -E '/^\$\{(CONFIDENCE_ANCHORS|STRATEGY_DIRECTIVE|PEER_BLOCK|PRIOR_ROUND_SELF_BLOCK)\}$/d'
+        sed -E '/^\$\{(CONFIDENCE_ANCHORS|STRATEGY_DIRECTIVE|PEER_BLOCK|PRIOR_ROUND_SELF_BLOCK|DEBATE_OUTPUT_SHAPE)\}$/d'
         return 0
     fi
 
@@ -270,11 +270,23 @@ substitute_debate_placeholders() {
         fi
     done
 
+    local debate_output_shape_path=""
+    for _path in "$project_root/prompts/strategies/debate-output-shape.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/debate-output-shape.md"; do
+        if [[ -f "$_path" ]]; then
+            debate_output_shape_path="$_path"
+            break
+        fi
+    done
+
     if [[ -z "$anchors_path" ]]; then
         die "Confidence anchors strategy file not found: prompts/strategies/confidence-anchors.md"
     fi
     if [[ -z "$strategy_path" ]]; then
         die "Strategy directive file not found: prompts/strategies/${strategy_name}.md"
+    fi
+    if [[ -z "$debate_output_shape_path" ]]; then
+        die "Debate output shape file not found: prompts/strategies/debate-output-shape.md"
     fi
 
     # Substitute via awk: read each strategy / per-recipient block file once
@@ -318,6 +330,7 @@ substitute_debate_placeholders() {
     fi
 
     awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" \
+        -v debate_output_shape_file="$debate_output_shape_path" \
         -v peer_block_file="$_peer_block_file" \
         -v prior_self_block_file="$_prior_self_block_file" '
         BEGIN {
@@ -333,6 +346,12 @@ substitute_debate_placeholders() {
                 else      strategy = line
             }
             close(strategy_file)
+            n = 0
+            while ((getline line < debate_output_shape_file) > 0) {
+                if (n++) debate_output_shape = debate_output_shape "\n" line
+                else      debate_output_shape = line
+            }
+            close(debate_output_shape_file)
             peer_block = ""
             prior_self_block = ""
             if (peer_block_file != "") {
@@ -352,8 +371,9 @@ substitute_debate_placeholders() {
                 close(prior_self_block_file)
             }
         }
-        /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;  next }
-        /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy; next }
+        /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;              next }
+        /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy;             next }
+        /^\$\{DEBATE_OUTPUT_SHAPE\}$/    { print debate_output_shape;  next }
         /^\$\{PEER_BLOCK\}$/             {
                                             if (peer_block != "") print peer_block
                                             next
@@ -3292,7 +3312,7 @@ PROMPT
                 | (if $mode != "" then .intelligence_mode = $mode else . end)
                 | (if $consensus_mode != "" then .consensus_mode = $consensus_mode else . end)
                 | (if $debate == "true" then .debate = true else . end)
-                | (if $debate_seed != "" then .debate_seed = $debate_seed else . end)
+                | (if $debate == "true" and $debate_seed != "" then .debate_seed = $debate_seed else . end)
                 | if length == 0 then null else . end
             ),
             owner: (
@@ -3531,29 +3551,29 @@ with open(out_path, "wb") as f: f.write(out)
         local _rdc_timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
         local _rdc_poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
 
-        # On coordinator failure, transition gate-state.json to status
-        # "resolved" with a debate_aggregator_failed reason. The strict
-        # spec-text framing for the cancellation/aggregator-failure paths
-        # is "status stays at pending" (see plan: "Cancellation /
-        # aggregator-failure on-disk shape: status stays at 'pending'"),
-        # but Phase D's coordinator must integrate cleanly with today's
-        # Stop-hook. The Stop-hook auto-respawns on status="pending" +
-        # reviewers={} (bin/review-gate-hook.sh:795) and its `spawn_reviewers`
-        # helper does NOT propagate `--debate`, so a literal pending+empty
-        # shape would silently demote a failed debate run to a non-debate
-        # re-review on the next Stop event — losing the debate-mode
-        # guarantees the user invoked `--debate` to get. Status="resolved"
-        # is the only value the Stop-hook treats as terminal without
-        # respawning (bin/review-gate-hook.sh:736 "allow stop WITHOUT
-        # auto-respawn"). Setting consensus.verdict=ERROR + decision.action=
-        # manual_resolve + reason=debate_aggregator_failed surfaces the
-        # failure to the user via the gate report and lets recovery happen
-        # via either `bin/review-gate resolve` (which is idempotent on a
-        # resolved state) or a fresh re-spawn (the active-gate guard treats
-        # resolved as not-active so RERUN=1 is not required). T012 will pin
-        # the exact exit code for aggregator failure and may revisit this
-        # failure-state shape; for Phase D we choose UX-safety over a
-        # literal reading of the spec text.
+        # Coordinator-failure state mutation. Per spec
+        # (docs/2026-04-25-debate-spec.md "Aggregator failure" / AC-7),
+        # an aggregator crash (rc=5) MUST mirror the Cancellation
+        # on-disk shape exactly: status stays "pending", no .debate
+        # block, no consensus/decision mutation, reviews/ empty. The
+        # distinct stderr `aggregator failed: <reason>` marker plus the
+        # reserved exit code 5 (emitted by the coordinator's
+        # _rdc_aggregator_fail_exit before this caller sees the rc) is
+        # the only signal that distinguishes an aggregator crash from
+        # a SIGINT cancel or a hang. Therefore the rc=5 arm below does
+        # NOT invoke _debate_mark_state_failed.
+        #
+        # _debate_mark_state_failed remains in place for OTHER
+        # unexpected coordinator non-zero exits (the `*` arm — codes
+        # not pinned by the spec): those represent a coordinator bug
+        # rather than a spec-defined failure mode, and surfacing them
+        # via status="resolved" + verdict="ERROR" prevents the
+        # Stop-hook auto-respawn loop (bin/review-gate-hook.sh:795)
+        # from silently demoting a buggy debate run to a non-debate
+        # re-review (the Stop-hook's `spawn_reviewers` helper does NOT
+        # propagate --debate). Spec-pinned failure modes (5/6/130) all
+        # have explicit case arms below; the `*` arm only fires for
+        # genuinely unexpected codes.
         _debate_mark_state_failed() {
             if [[ -f "$STATE_FILE" ]]; then
                 local _state_tmp="$STATE_FILE.coord-fail.tmp.$$"
@@ -3622,6 +3642,28 @@ with open(out_path, "wb") as f: f.write(out)
                 "${_debate_spawned_reviewers[@]}" || _rdc_rc=$?
         case "$_rdc_rc" in
             0) ;;
+            5)
+                # Aggregator failure (spec AC-7 / "Aggregator failure"
+                # subsection): the coordinator's
+                # _rdc_aggregator_fail_exit already emitted the canonical
+                # `aggregator failed: <reason>` stderr marker and exited
+                # with the spec-reserved code 5. Per spec the on-disk
+                # shape MUST mirror Cancellation: gate-state.json.status
+                # stays "pending", no .debate block, no consensus or
+                # decision mutation; canonical $REVIEWS_DIR stays empty;
+                # partial round telemetry lives under iterations/<iter>/.
+                # We deliberately do NOT call _debate_mark_state_failed
+                # here. Recovery is identical to Cancellation: re-spawn
+                # under REVIEW_GATE_RERUN=1 (or `${CLI_CMD} resolve` for
+                # cleanup). Propagate the reserved exit code unchanged so
+                # users and CI can distinguish aggregator failure from
+                # cancel (130) or degraded-below-2 (6) without parsing
+                # telemetry.
+                echo "" >&2
+                echo "Debate coordinator: aggregator failed; reviews/ left empty, gate-state status remains 'pending' (staging preserved at $_debate_staging_dir)." >&2
+                echo "Recovery: re-spawn with REVIEW_GATE_RERUN=1 (or '${CLI_CMD} resolve' for cleanup); identical to Cancellation recovery." >&2
+                exit 5
+                ;;
             6)
                 # Degraded-below-2 (mid-debate or final-round): coordinator
                 # already wrote `gate-state.json.status="awaiting_decision"`
@@ -3638,8 +3680,15 @@ with open(out_path, "wb") as f: f.write(out)
                 exit 1
                 ;;
             *)
+                # Unexpected coordinator failure (NOT one of the spec-
+                # pinned modes 5/6/130). This represents a coordinator
+                # bug rather than a spec-defined failure mode, so we
+                # mark gate-state.json terminal (status="resolved",
+                # consensus.verdict="ERROR", decision.action=
+                # "manual_resolve") to keep the Stop-hook from auto-
+                # respawning into a non-debate re-review.
                 echo "" >&2
-                echo "Debate coordinator failed; reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
+                echo "Debate coordinator failed unexpectedly (rc=$_rdc_rc); reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
                 echo "Recovery: 'bin/review-gate resolve' to mark the gate resolved, or re-spawn with REVIEW_GATE_RERUN=1 to bypass the active-gate guard." >&2
                 _debate_mark_state_failed
                 exit 1

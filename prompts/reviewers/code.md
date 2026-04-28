@@ -243,6 +243,7 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
   "summary": "1-3 sentence explanation"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - `priority` must be 0, 1, 2, or 3, corresponding to [P0]–[P3].
 - `line_start` and `line_end` are 1-based file line numbers (not diff-relative), inclusive.
 - `verdict` must be one of: "PASS", "FAIL", or "NEEDS_WORK".

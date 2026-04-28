@@ -433,6 +433,7 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
   "summary": "1-3 sentence explanation"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - `priority` must be 0, 1, 2, or 3, corresponding to [P0]–[P3].
 - `line_start` and `line_end` are 1-based file line numbers, inclusive.
 - `file_path`, `line_start`, `line_end` may be null if not applicable to a specific file.

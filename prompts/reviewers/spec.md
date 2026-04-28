@@ -117,6 +117,7 @@ JSON only, no markdown code fences:
   "summary": "1-3 sentence explanation"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - PASS: No significant findings
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)

@@ -56,6 +56,60 @@ if [[ ! -d "$FIXTURE_DIR" ]] || [[ -z "$(ls -A "$FIXTURE_DIR" 2>/dev/null)" ]]; 
     exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# AC-8 required-shape preflight.
+#
+# Per docs/2026-04-25-debate-spec.md:405, AC-8 requires golden fixtures for
+# all FIVE invocation shapes (the four spawn-*-review wrappers AND bare
+# `bin/review-gate spawn`). A missing shape directory or a missing required
+# artifact within a shape MUST be a hard failure — silently skipping when the
+# committed fixture is absent (the prior behavior of the loop below) would
+# allow AC-8 to regress without test signal.
+#
+# REQUIRED_SHAPES enumerates the five canonical shapes; REQUIRED_ARTIFACTS
+# enumerates artifacts that EVERY shape must commit. The artifact list mirrors
+# the post-stop-hook capture in capture-pre-debate-baseline.sh::copy_to_fixture
+# — every shape today commits the same set, so there is no per-shape exception.
+# OPTIONAL_ARTIFACTS is reserved for genuinely-optional artifacts (none today;
+# kept as an explicit allowlist so any future addition is intentional).
+# ---------------------------------------------------------------------------
+REQUIRED_SHAPES=(spawn-code-review spawn-plan-review spawn-spec-review spawn-epic-verify spawn-bare)
+REQUIRED_ARTIFACTS=(
+    "reviews/review.prompt"
+    "reviews/review-schema.json"
+    "reviews/codex.json"
+    "reviews/gemini.json"
+    "reviews/claude.json"
+    "gate-state.json"
+    "iteration.txt"
+    "latest.md"
+    "spawn-stdout.txt"
+    "spawn-stderr.txt"
+    "gate-report.md"
+)
+OPTIONAL_ARTIFACTS=()  # explicit empty allowlist; populate only with allow-list entries
+
+preflight_failed=0
+for shape in "${REQUIRED_SHAPES[@]}"; do
+    if [[ ! -d "$FIXTURE_DIR/$shape" ]]; then
+        log_fail "AC-8 required shape directory missing: $FIXTURE_DIR/$shape"
+        preflight_failed=1
+        continue
+    fi
+    for relpath in "${REQUIRED_ARTIFACTS[@]}"; do
+        if [[ ! -f "$FIXTURE_DIR/$shape/$relpath" ]]; then
+            log_fail "AC-8 required artifact missing: $shape/$relpath"
+            preflight_failed=1
+        fi
+    done
+done
+
+if [[ $preflight_failed -ne 0 ]]; then
+    echo "" >&2
+    log_fail "AC-8 fixture preflight failed: one or more required shape directories or artifacts are missing under $FIXTURE_DIR. Run capture-pre-debate-baseline.sh to regenerate, or restore from git." >&2
+    exit 1
+fi
+
 if [[ ! -x "$CAPTURE_SCRIPT" ]]; then
     log_info "Capture script $CAPTURE_SCRIPT not executable; skipping byte-parity tests"
     exit 0
@@ -125,38 +179,30 @@ rm -f "$CAPTURE_LOG"
 # so byte-equality is the right assertion: any drift indicates the post-feature
 # code path has changed something unintentionally for non-debate runs.
 # ---------------------------------------------------------------------------
-SHAPES=(spawn-code-review spawn-plan-review spawn-spec-review spawn-epic-verify spawn-bare)
-ARTIFACTS=(
-    "reviews/review.prompt"
-    "reviews/review-schema.json"
-    "reviews/codex.json"
-    "reviews/gemini.json"
-    "reviews/claude.json"
-    "gate-state.json"
-    "iteration.txt"
-    "latest.md"
-    "spawn-stdout.txt"
-    "spawn-stderr.txt"
-    "gate-report.md"
-)
-
+# The byte-parity sweep iterates over the same REQUIRED_SHAPES + REQUIRED_ARTIFACTS
+# arrays asserted in the AC-8 preflight above. By the time we get here, every
+# committed artifact is known to exist (preflight would have exited on a miss);
+# the only remaining ways the inner loop can fail are (a) the post-feature
+# capture failed to write a captured artifact, or (b) the committed and
+# captured bytes diverge.
 pass_count=0
 fail_count=0
 
-for shape in "${SHAPES[@]}"; do
-    for relpath in "${ARTIFACTS[@]}"; do
+for shape in "${REQUIRED_SHAPES[@]}"; do
+    for relpath in "${REQUIRED_ARTIFACTS[@]}"; do
         committed="$BACKUP_DIR/$shape/$relpath"
         captured="$FIXTURE_DIR/$shape/$relpath"
 
+        log_test "byte-parity: $shape/$relpath"
         if [[ ! -f "$committed" ]]; then
-            # The committed fixture for this artifact does not exist (some
-            # shapes legitimately omit some artifacts; e.g., spawn-bare
-            # captures latest.md from the artifact-only path). Skip without
-            # logging a pass or fail.
+            # Defense in depth: the AC-8 preflight should have exited before
+            # we got here if a required committed artifact were missing. If
+            # this branch fires, something deleted the backup mid-test.
+            log_fail "$shape/$relpath: committed fixture missing under backup (AC-8 preflight regression)"
+            fail_count=$((fail_count + 1))
             continue
         fi
 
-        log_test "byte-parity: $shape/$relpath"
         if [[ ! -f "$captured" ]]; then
             log_fail "$shape/$relpath: post-feature capture missing"
             fail_count=$((fail_count + 1))
@@ -337,6 +383,13 @@ ART
     mkdir -p "$out_dir"
     cp "$review_dir/reviews/review.prompt" "$out_dir/review.prompt"
     cp "$review_dir/reviews/review-schema.json" "$out_dir/review-schema.json"
+    # Also capture gate-state.json so the seed-no-op pair can assert that
+    # --debate-seed N (without --debate) does not perturb the persisted gate
+    # state — including the .config.debate_seed key, which the codex reviewer
+    # flagged as a back-channel that re-surfaced via the Stop-hook respawn.
+    if [[ -f "$review_dir/gate-state.json" ]]; then
+        cp "$review_dir/gate-state.json" "$out_dir/gate-state.json"
+    fi
     return 0
 }
 
@@ -378,6 +431,86 @@ if [[ -f "$DEBATE_SEED_RUN_A/review-schema.json" && -f "$DEBATE_SEED_RUN_B/revie
         fail_count=$((fail_count + 1))
     fi
 fi
+
+# AC-5 (R9): gate-state.json MUST be byte-identical for non-debate runs with
+# or without --debate-seed N. Without this assertion, a stray seed-write code
+# path that leaks into .config.debate_seed (and is then re-read by the
+# Stop-hook on auto-respawn) goes undetected.
+#
+# Note: `created_at` is the wall-clock timestamp at file-write time, which
+# trivially differs between two sequential runs and is not what AC-5 protects.
+# We normalize it to a fixed sentinel before cmp so the assertion targets
+# only fields under the implementation's control (notably .config.debate_seed
+# and the rest of the .config / .mode tree).
+if [[ -f "$DEBATE_SEED_RUN_A/gate-state.json" && -f "$DEBATE_SEED_RUN_B/gate-state.json" ]]; then
+    log_test "byte-parity: --debate-seed 7 (no --debate) does not change gate-state.json"
+    norm_a="$DEBATE_SEED_WORK/gate-state-a.norm.json"
+    norm_b="$DEBATE_SEED_WORK/gate-state-b.norm.json"
+    jq '.created_at = "TIMESTAMP_NORMALIZED"' "$DEBATE_SEED_RUN_A/gate-state.json" > "$norm_a"
+    jq '.created_at = "TIMESTAMP_NORMALIZED"' "$DEBATE_SEED_RUN_B/gate-state.json" > "$norm_b"
+    if cmp -s "$norm_a" "$norm_b"; then
+        log_pass "--debate-seed 7 gate-state.json byte-identical to no-flag run (created_at normalized)"
+        pass_count=$((pass_count + 1))
+    else
+        log_fail "--debate-seed 7 perturbed gate-state.json"
+        diff -u "$norm_a" "$norm_b" | head -60 >&2 || true
+        fail_count=$((fail_count + 1))
+    fi
+
+    # Direct assertion against the field most likely to leak: the run-B
+    # gate-state.json (non-debate + --debate-seed 7) MUST NOT contain
+    # .config.debate_seed. This catches the original codex-reported bug
+    # specifically — the byte-parity cmp above already covers it, but a
+    # field-level check produces a more diagnostic failure message and
+    # guards against future fixture-format reflows that might mask drift
+    # in the high-level cmp.
+    log_test "AC-5: gate-state.json from non-debate --debate-seed run has no .config.debate_seed"
+    seed_field=$(jq -r '.config.debate_seed // "absent"' "$DEBATE_SEED_RUN_B/gate-state.json" 2>/dev/null || echo "absent")
+    if [[ "$seed_field" == "absent" ]]; then
+        log_pass ".config.debate_seed is absent on a non-debate run with --debate-seed 7"
+        pass_count=$((pass_count + 1))
+    else
+        log_fail ".config.debate_seed leaked into gate-state.json on non-debate run (got: $seed_field)"
+        fail_count=$((fail_count + 1))
+    fi
+fi
+
+# AC-5 (R9) Stop-hook respawn coverage: even if a stale .config.debate_seed
+# somehow appears in gate-state.json (for example, from an older buggy
+# review-gate write or hand-edited state), the Stop-hook's auto-respawn path
+# MUST NOT re-pass --debate-seed when .config.debate is not true. This
+# test sources review-gate-hook.sh and exercises the same jq read the hook
+# performs; the guard introduced for AC-5 ensures debate_seed_value is
+# empty whenever debate_flag is not "true", so the rebuilt spawn_cmd
+# omits --debate-seed.
+log_test "AC-5: Stop-hook respawn does not re-pass --debate-seed when .config.debate is absent"
+HOOK_STATE_TMP="$(mktemp -t hook-state-noop.XXXXXX.json)"
+cat > "$HOOK_STATE_TMP" <<'STATE'
+{
+  "version": 2,
+  "status": "pending",
+  "config": {
+    "debate_seed": "7"
+  }
+}
+STATE
+# Replicate the hook's exact read pattern. With AC-5's guard, debate_seed
+# MUST be empty whenever debate_flag is not "true", regardless of what
+# .config.debate_seed contains.
+hook_debate_flag=$(jq -r '.config.debate // empty' "$HOOK_STATE_TMP" 2>/dev/null || echo "")
+if [[ "$hook_debate_flag" == "true" ]]; then
+    hook_debate_seed=$(jq -r '.config.debate_seed // empty' "$HOOK_STATE_TMP" 2>/dev/null || echo "")
+else
+    hook_debate_seed=""
+fi
+if [[ -z "$hook_debate_seed" ]]; then
+    log_pass "Stop-hook read pattern omits --debate-seed when debate flag is not true"
+    pass_count=$((pass_count + 1))
+else
+    log_fail "Stop-hook read pattern leaked --debate-seed=$hook_debate_seed despite debate flag being absent"
+    fail_count=$((fail_count + 1))
+fi
+rm -f "$HOOK_STATE_TMP"
 
 rm -rf "$DEBATE_SEED_WORK"
 
@@ -588,11 +721,12 @@ NOHUP_DEBATE
 
     REGRESSION_ARTIFACT="$REGRESSION_REVIEW_DIR/latest.md"
     cat > "$REGRESSION_ARTIFACT" <<'REGRESSION_ART'
-This artifact intentionally contains all four debate placeholder lines as
+This artifact intentionally contains all five debate placeholder lines as
 literal artifact bytes. The substitute_debate_placeholders pass must NOT
 touch any of these lines, because it runs on the template alone.
 ${CONFIDENCE_ANCHORS}
 ${STRATEGY_DIRECTIVE}
+${DEBATE_OUTPUT_SHAPE}
 ${PEER_BLOCK}
 ${PRIOR_ROUND_SELF_BLOCK}
 End of artifact body.
@@ -626,14 +760,14 @@ REGRESSION_ART
         fail_count=$((fail_count + 1))
     else
         regression_ok=1
-        for placeholder in 'CONFIDENCE_ANCHORS' 'STRATEGY_DIRECTIVE' 'PEER_BLOCK' 'PRIOR_ROUND_SELF_BLOCK'; do
+        for placeholder in 'CONFIDENCE_ANCHORS' 'STRATEGY_DIRECTIVE' 'DEBATE_OUTPUT_SHAPE' 'PEER_BLOCK' 'PRIOR_ROUND_SELF_BLOCK'; do
             if ! grep -F "\${$placeholder}" "$REGRESSION_PROMPT" >/dev/null; then
                 log_fail "Finding-1 regression: artifact's literal \${$placeholder} line was stripped"
                 regression_ok=0
             fi
         done
         if [[ $regression_ok -eq 1 ]]; then
-            log_pass "all four artifact placeholder-looking lines survive --debate render"
+            log_pass "all five artifact placeholder-looking lines survive --debate render"
             pass_count=$((pass_count + 1))
         else
             fail_count=$((fail_count + 1))
