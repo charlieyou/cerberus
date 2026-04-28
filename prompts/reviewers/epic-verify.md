@@ -30,6 +30,8 @@ This is a three-phase verification—DO NOT skip to JSON output:
 
 ---
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Author Context Handling (highest behavioral priority)
 
 When an "Author Context" section appears in this prompt, follow these rules in order.
@@ -92,6 +94,8 @@ If Author Context contains questions, answer them in the `summary` field. Do not
 ${EPIC_CONTEXT}
 </epic_context>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 The above contains either:
 - **A file path** (single line, looks like a path) — read it with your tools to find acceptance criteria
 - **Raw acceptance criteria** (multi-line text) — verify these directly against the codebase
@@ -429,6 +433,7 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
   "summary": "1-3 sentence explanation"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - `priority` must be 0, 1, 2, or 3, corresponding to [P0]–[P3].
 - `line_start` and `line_end` are 1-based file line numbers, inclusive.
 - `file_path`, `line_start`, `line_end` may be null if not applicable to a specific file.

@@ -2,12 +2,16 @@
 
 You are acting as a reviewer for an implementation plan proposed by another engineer.
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Plan to Review
 
 <plan>
 ${PLAN_CONTENT}
 </plan>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 ### What to Evaluate
 
 1. **Template & Structure**
@@ -272,6 +276,7 @@ JSON only, no markdown code fences:
   "summary": "Highest priority: P{N}. {1-2 sentences explaining why verdict matches the rules.}"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - PASS: No P0/P1 findings; P2/P3 allowed
 - NEEDS_WORK: At least one P1, or P2s that collectively prevent safe execution
 - FAIL: At least one P0

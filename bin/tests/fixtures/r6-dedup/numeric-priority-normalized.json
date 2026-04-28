@@ -1,0 +1,79 @@
+{
+  "label": "Numeric priority (per the reviewer schema, .priority is integer 0..3) is normalized to canonical \"P0\"..\"P3\" string form for sorting, dedup, and aggregate.json output",
+  "consensus_mode": "majority",
+  "active_reviewers": ["claude", "codex"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "NEEDS_WORK",
+      "summary": "claude r2",
+      "overall_confidence": 0.9,
+      "findings": [
+        {
+          "priority": 1,
+          "title": "Race condition",
+          "body": "Claude numeric P1.",
+          "file_path": "src/svc.ts",
+          "line_start": 30,
+          "line_end": 40,
+          "confidence": 0.9
+        },
+        {
+          "priority": 2,
+          "title": "Style nit",
+          "body": "Claude numeric P2.",
+          "file_path": "src/svc.ts",
+          "line_start": 100,
+          "line_end": 105,
+          "confidence": 0.5
+        }
+      ]
+    },
+    "codex": {
+      "verdict": "NEEDS_WORK",
+      "summary": "codex r2",
+      "overall_confidence": 0.7,
+      "findings": [
+        {
+          "priority": 1,
+          "title": "Race condition",
+          "body": "Codex numeric P1.",
+          "file_path": "src/svc.ts",
+          "line_start": 32,
+          "line_end": 38,
+          "confidence": 0.7
+        }
+      ]
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "NEEDS_WORK",
+    "summary": "NEEDS_WORK from 2 active final-round reviewers (claude, codex); 2 unique findings (P0:0 P1:1 P2:1 P3:0); avg overall_confidence 0.80.",
+    "findings": [
+      {
+        "priority": "P1",
+        "title": "Race condition",
+        "body": "Claude numeric P1.\n\nAlso raised by another reviewer:\n\nCodex numeric P1.",
+        "file_path": "src/svc.ts",
+        "line_start": 30,
+        "line_end": 40,
+        "confidence": 0.9,
+        "raised_by": ["claude", "codex"]
+      },
+      {
+        "priority": "P2",
+        "title": "Style nit",
+        "body": "Claude numeric P2.",
+        "file_path": "src/svc.ts",
+        "line_start": 100,
+        "line_end": 105,
+        "confidence": 0.5
+      }
+    ],
+    "consensus_mode": "majority",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first"}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "label": "N=2 distinct strategies (codex+gemini on artifact-1; baseline for the no-collision swap pair)",
+  "artifact_id": "artifact-1",
+  "reviewers": ["codex", "gemini"],
+  "expected": [
+    ["codex", "verification-first"],
+    ["gemini", "decompose"]
+  ]
+}

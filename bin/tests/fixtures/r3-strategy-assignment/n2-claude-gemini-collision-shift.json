@@ -1,0 +1,9 @@
+{
+  "label": "N=2 collision-driven shift (codex→claude on artifact-6; gemini SHIFTS falsification-first→decompose because claude_idx (1) == gemini_idx (1) forces gemini's forward walk to (1+1)%3=2)",
+  "artifact_id": "artifact-6",
+  "reviewers": ["claude", "gemini"],
+  "expected": [
+    ["claude", "falsification-first"],
+    ["gemini", "decompose"]
+  ]
+}

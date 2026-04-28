@@ -114,8 +114,46 @@ gemini_readonly_policy_path() {
     echo "$policy_path"
 }
 
-default_review_schema() {
-    cat <<'SCHEMA'
+# Emit the structured-output review schema bytes to stdout.
+#
+# Pinned by spec R9: schema bytes MUST be byte-identical to the pre-feature
+# bytes when --debate is absent (so the byte-parity guarantee for
+# review-schema.json holds), and the debate variant MUST add the additive
+# debate fields (overall_confidence, strategy, round, peer_responses_seen at
+# the top level; confidence inside findings[*]) as OPTIONAL properties while
+# retaining additionalProperties:false on both objects so genuinely unknown
+# fields are still rejected.
+#
+# Selection contract:
+#   $1 (optional)            "true" enables the debate variant; anything else
+#                            (or unset) emits the pre-feature schema bytes.
+#   REVIEW_GATE_DEBATE env   Fallback when no positional arg is provided
+#                            (1/true/TRUE/yes/YES/on/ON enables debate).
+#
+# This is the single source of truth for the schema bytes; both the inline
+# schema-emission code path in bin/review-gate (formerly an inline heredoc)
+# and the repair_review_output() fallback delegate to this function so the
+# debate-conditional branch lives in exactly one place.
+_emit_review_schema() {
+    local debate_arg="${1-}"
+    local debate
+    if [[ -n "$debate_arg" ]]; then
+        debate="$debate_arg"
+    else
+        debate="${REVIEW_GATE_DEBATE:-false}"
+    fi
+    case "$debate" in
+        1|true|TRUE|yes|YES|on|ON) debate="true" ;;
+        *) debate="false" ;;
+    esac
+
+    if [[ "$debate" != "true" ]]; then
+        # Pre-feature schema. Bytes MUST be byte-identical to the bytes
+        # emitted historically by this function and by the inline heredoc in
+        # bin/review-gate (lines ~3148-3181 pre-T006). Verified by
+        # bin/tests/test-debate-byte-parity.sh against the committed fixtures
+        # under bin/tests/fixtures/pre-debate-baseline/.
+        cat <<'SCHEMA'
 {
   "type": "object",
   "properties": {
@@ -147,6 +185,68 @@ default_review_schema() {
   "additionalProperties": false
 }
 SCHEMA
+    else
+        # Debate variant. Adds the additive debate fields as OPTIONAL
+        # top-level properties (overall_confidence, strategy, round,
+        # peer_responses_seen) and an OPTIONAL findings[*].confidence field.
+        # `required` keeps the original three core fields only — the
+        # additive fields are not required so reviewers that fail to emit
+        # them still validate (Mode B handling clamps/defaults at parse
+        # time, not schema-validation time). Both objects retain
+        # `additionalProperties: false` so genuinely unknown fields are
+        # still rejected.
+        cat <<'SCHEMA'
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "NEEDS_WORK"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "priority": {"type": "integer", "minimum": 0, "maximum": 3},
+          "file_path": {"type": ["string", "null"]},
+          "line_start": {"type": ["integer", "null"]},
+          "line_end": {"type": ["integer", "null"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
+        "additionalProperties": false
+      }
+    },
+    "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "strategy": {
+      "type": "string",
+      "enum": ["verification-first", "falsification-first", "decompose"]
+    },
+    "round": {"type": "integer", "minimum": 1},
+    "peer_responses_seen": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": ["verdict", "summary", "findings"],
+  "additionalProperties": false
+}
+SCHEMA
+    fi
+}
+
+# Default review schema — thin wrapper around _emit_review_schema for callers
+# that read the env-var-driven default (e.g., repair_review_output's fallback
+# path when no schema_file is provided). The positional override is honored
+# when a caller explicitly passes "true"/"false".
+default_review_schema() {
+    _emit_review_schema "${1-}"
 }
 
 repair_review_output() {
@@ -286,7 +386,7 @@ repair_review_output() {
             if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
                 codex_extra_args=(--ephemeral)
             fi
-            if codex exec "${codex_extra_args[@]}" -m "$model" -s read-only --skip-git-repo-check \
+            if codex exec ${codex_extra_args[@]+"${codex_extra_args[@]}"} -m "$model" -s read-only --skip-git-repo-check \
                 --output-schema "$schema_path" --json -o "$out_file" \
                 - < "$prompt_file" > "$jsonl_file" 2>&1; then
                 if [[ -s "$out_file" ]]; then
@@ -543,6 +643,24 @@ extract_json() {
             if [[ -n "$result_str" ]]; then
                 raw_output="$result_str"
             fi
+            # Already-normalized review JSON path (e.g., the file was promoted
+            # by run_debate_coordinator after augmenting with the additive
+            # debate fields, so it is no longer in Claude's
+            # `--output-format json` metadata wrapper shape). If the file
+            # itself parses as a review object with a recognized verdict, use
+            # it directly. This keeps the existing wrapper extraction below
+            # as the primary path while letting downstream consumers
+            # (`extract_json` from `review_gate_wait`, the Stop-hook, T011's
+            # gate-report renderer) read the promoted Claude JSON without
+            # going through repair.
+            if [[ -z "$result_str" ]]; then
+                local _claude_direct
+                _claude_direct=$(jq -c 'select(type == "object" and (.verdict // null) != null)' "$file" 2>/dev/null || true)
+                if [[ -n "$_claude_direct" ]]; then
+                    rg_log "review-gate: extract_json claude file is already-normalized review JSON (no .result wrapper); using direct parse"
+                    json="$_claude_direct"
+                fi
+            fi
             if [[ -n "$result_str" ]]; then
                 # Try direct parse first (no fences)
                 json=$(printf '%s' "$result_str" | jq -c '.' 2>/dev/null || true)
@@ -728,6 +846,9 @@ spawn_reviewer() {
             '
             ;;
         codex)
+            # Note: the heredoc body runs via spawn_detached_review_shell -> `bash -c`,
+            # which starts a fresh shell without `set -u`, so the unguarded
+            # "${codex_extra_args[@]}" expansion below is safe under bash 3.2.
             echo "Spawning codex reviewer (model: $codex_model, reasoning: $codex_reasoning)..." >&2
             REVIEW_OUT="$output_file" \
             REVIEW_JSONL="$transcript_file" \

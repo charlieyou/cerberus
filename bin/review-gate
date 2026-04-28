@@ -50,26 +50,27 @@ Commands:
   check
     Stop hook logic (reads JSON from stdin)
 
-  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <artifact-path>
+  spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] <artifact-path>
     Spawn reviewers for an artifact. If no artifact path is provided, uses the
     session-scoped latest.md when available.
 
-  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
+  spawn-code-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--exclude <pathspec>...] [--debate] [--uncommitted | --base <branch> | --commit <sha...> | <range>]
     Spawn reviewers for code changes. Claude fixes code until consensus passes.
     Diff modes: --uncommitted (default), --base <branch>, --commit <sha...>, <range>
     Options:
       --commit <shas>     Review one or more commits as a net diff (space or comma separated)
       --exclude <spec>    Exclude files matching pattern (auto-prefixed with :! for git)
+      --debate            Opt in to debate-mode review (requires >=2 available reviewers)
 
-  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [plan-path]
+  spawn-plan-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--focus <text>] [--debate] [plan-path]
     Spawn reviewers for a plan file. If no plan path is provided, uses the
     most recent session plan from ~/.claude/plans/. Claude fixes plan until
     consensus passes.
 
-  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] <spec-path>
+  spawn-spec-review [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] <spec-path>
     Spawn reviewers for a spec file. Claude fixes spec until consensus passes.
 
-  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] <epic-file>
+  spawn-epic-verify [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--debate] <epic-file>
     Spawn reviewers to verify epic acceptance criteria against the codebase.
     Reviewers explore the code themselves to verify criteria are met.
     Claude fixes code until all criteria pass consensus verification.
@@ -206,6 +207,189 @@ inject_context_block() {
 
 # normalize_mode and validate_mode are provided by review-gate-models.sh
 
+# Substitute the four debate-mode reviewer template placeholders:
+#   ${CONFIDENCE_ANCHORS}, ${STRATEGY_DIRECTIVE}, ${PEER_BLOCK}, ${PRIOR_ROUND_SELF_BLOCK}
+#
+# Reads prompt content from stdin, writes the substituted content to stdout.
+#
+# Arguments:
+#   $1 - debate flag ("true" enables anchor/strategy injection; anything else
+#        consumes every placeholder line entirely so the rendered prompt is
+#        byte-identical to a template that never had the placeholders, per
+#        spec D2).
+#   $2 - assigned strategy name (only used when debate=true; default
+#        "verification-first"). T005 wires real per-(artifact, reviewer)
+#        assignment via the coordinator stub; T004 leaves it as a no-op
+#        default so the substitution is exercisable end-to-end.
+#
+# When --debate is absent: every placeholder line is removed in its entirety
+# (line + trailing newline) using `sed -E`. This consumes the placeholder
+# whitespace exactly once (D2 line-consume semantics).
+#
+# When --debate is set: ${CONFIDENCE_ANCHORS} is replaced with the literal
+# bytes of prompts/strategies/confidence-anchors.md; ${STRATEGY_DIRECTIVE} is
+# replaced with the literal bytes of prompts/strategies/<strategy>.md;
+# ${PEER_BLOCK} and ${PRIOR_ROUND_SELF_BLOCK} are consumed entirely (T008
+# fills them).
+#
+# Bash 3.2-portable (uses sed -E and awk only; no Bash-4 parameter
+# expansions; no GNU-only sed extensions).
+substitute_debate_placeholders() {
+    local debate="${1:-false}"
+    local strategy_name="${2:-verification-first}"
+
+    if [[ "$debate" != "true" ]]; then
+        # Consume entire placeholder lines (line + trailing newline) so the
+        # rendered prompt is byte-identical to a template that never had
+        # the placeholders. R9 byte-parity requirement.
+        sed -E '/^\$\{(CONFIDENCE_ANCHORS|STRATEGY_DIRECTIVE|PEER_BLOCK|PRIOR_ROUND_SELF_BLOCK|DEBATE_OUTPUT_SHAPE)\}$/d'
+        return 0
+    fi
+
+    # Resolve asset paths with project-local override support, mirroring the
+    # template-resolution pattern used elsewhere in this file.
+    local project_root
+    project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+    local anchors_path=""
+    local _path
+    for _path in "$project_root/prompts/strategies/confidence-anchors.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/confidence-anchors.md"; do
+        if [[ -f "$_path" ]]; then
+            anchors_path="$_path"
+            break
+        fi
+    done
+
+    local strategy_path=""
+    for _path in "$project_root/prompts/strategies/${strategy_name}.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/${strategy_name}.md"; do
+        if [[ -f "$_path" ]]; then
+            strategy_path="$_path"
+            break
+        fi
+    done
+
+    local debate_output_shape_path=""
+    for _path in "$project_root/prompts/strategies/debate-output-shape.md" \
+                 "$SCRIPT_DIR/../prompts/strategies/debate-output-shape.md"; do
+        if [[ -f "$_path" ]]; then
+            debate_output_shape_path="$_path"
+            break
+        fi
+    done
+
+    if [[ -z "$anchors_path" ]]; then
+        die "Confidence anchors strategy file not found: prompts/strategies/confidence-anchors.md"
+    fi
+    if [[ -z "$strategy_path" ]]; then
+        die "Strategy directive file not found: prompts/strategies/${strategy_name}.md"
+    fi
+    if [[ -z "$debate_output_shape_path" ]]; then
+        die "Debate output shape file not found: prompts/strategies/debate-output-shape.md"
+    fi
+
+    # Substitute via awk: read each strategy / per-recipient block file once
+    # via getline (preserving exact line bytes), then for each input line,
+    # replace whole-line placeholders with the file contents (or consume the
+    # line for PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK when the matching env vars
+    # are unset). The accumulator+`print` pattern produces output bytes
+    # byte-identical to the source files (each source ends with a single
+    # trailing \n, which is what `print` emits).
+    #
+    # T008: Round-2 prompt construction may pre-render per-recipient PEER_BLOCK
+    # and PRIOR_ROUND_SELF_BLOCK content into env vars before invoking
+    # build_prompt; when set (non-empty), the matching placeholder line is
+    # substituted with the env-var content (in place of consume). When unset
+    # (or empty — Round 1 default), the placeholder line is consumed entirely
+    # (line + trailing newline) so the rendered prompt is byte-identical to a
+    # template that never had the placeholder. Under `--debate` absent the
+    # consume path runs unconditionally above (the early `sed -E` branch).
+    #
+    # Multi-line content portability: PEER_BLOCK / PRIOR_ROUND_SELF_BLOCK
+    # contain markdown with literal LFs. Many `awk` implementations (BSD
+    # awk, mawk) DO NOT accept literal newlines in `-v var="..."` value
+    # arguments — they replace the LF with whitespace or split the assign
+    # across multiple `-v` evaluations. The portable pattern that the
+    # rest of this function already uses is to write multi-line content
+    # to a temp file and read it via `getline` in BEGIN. We mirror that
+    # pattern here: stage env-var content (when set) into temp files,
+    # then pass file paths (single-line, no newlines) via -v. The temp
+    # files are cleaned up after awk returns.
+    local _peer_block_file=""
+    local _prior_self_block_file=""
+    if [[ -n "${PEER_BLOCK:-}" ]]; then
+        _peer_block_file=$(mktemp -t cerberus-debate-peer-block.XXXXXX) || \
+            die "substitute_debate_placeholders: cannot allocate temp file for PEER_BLOCK"
+        printf '%s' "$PEER_BLOCK" > "$_peer_block_file"
+    fi
+    if [[ -n "${PRIOR_ROUND_SELF_BLOCK:-}" ]]; then
+        _prior_self_block_file=$(mktemp -t cerberus-debate-prior-self.XXXXXX) || \
+            die "substitute_debate_placeholders: cannot allocate temp file for PRIOR_ROUND_SELF_BLOCK"
+        printf '%s' "$PRIOR_ROUND_SELF_BLOCK" > "$_prior_self_block_file"
+    fi
+
+    awk -v anchors_file="$anchors_path" -v strategy_file="$strategy_path" \
+        -v debate_output_shape_file="$debate_output_shape_path" \
+        -v peer_block_file="$_peer_block_file" \
+        -v prior_self_block_file="$_prior_self_block_file" '
+        BEGIN {
+            n = 0
+            while ((getline line < anchors_file) > 0) {
+                if (n++) anchors = anchors "\n" line
+                else      anchors = line
+            }
+            close(anchors_file)
+            n = 0
+            while ((getline line < strategy_file) > 0) {
+                if (n++) strategy = strategy "\n" line
+                else      strategy = line
+            }
+            close(strategy_file)
+            n = 0
+            while ((getline line < debate_output_shape_file) > 0) {
+                if (n++) debate_output_shape = debate_output_shape "\n" line
+                else      debate_output_shape = line
+            }
+            close(debate_output_shape_file)
+            peer_block = ""
+            prior_self_block = ""
+            if (peer_block_file != "") {
+                n = 0
+                while ((getline line < peer_block_file) > 0) {
+                    if (n++) peer_block = peer_block "\n" line
+                    else      peer_block = line
+                }
+                close(peer_block_file)
+            }
+            if (prior_self_block_file != "") {
+                n = 0
+                while ((getline line < prior_self_block_file) > 0) {
+                    if (n++) prior_self_block = prior_self_block "\n" line
+                    else      prior_self_block = line
+                }
+                close(prior_self_block_file)
+            }
+        }
+        /^\$\{CONFIDENCE_ANCHORS\}$/     { print anchors;              next }
+        /^\$\{STRATEGY_DIRECTIVE\}$/     { print strategy;             next }
+        /^\$\{DEBATE_OUTPUT_SHAPE\}$/    { print debate_output_shape;  next }
+        /^\$\{PEER_BLOCK\}$/             {
+                                            if (peer_block != "") print peer_block
+                                            next
+                                         }
+        /^\$\{PRIOR_ROUND_SELF_BLOCK\}$/ {
+                                            if (prior_self_block != "") print prior_self_block
+                                            next
+                                         }
+        { print }
+    '
+    local _awk_rc=$?
+    [[ -n "$_peer_block_file" ]] && rm -f "$_peer_block_file"
+    [[ -n "$_prior_self_block_file" ]] && rm -f "$_prior_self_block_file"
+    return $_awk_rc
+}
+
 review_gate_spawn_code_review() {
     # --- Parse diff mode args ---
     local diff_mode="--uncommitted"
@@ -221,12 +405,26 @@ review_gate_spawn_code_review() {
     local artifact_only="false"
     local -a exclude_pathspecs=()
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --artifact-only)
                 artifact_only="true"
                 shift
+                ;;
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
                 ;;
             --agents=*)
                 agents_csv="${1#*=}"
@@ -353,6 +551,7 @@ Options:
   --base <branch>     Review changes from branch to HEAD
   --commit <sha...>   Review one or more commits as a net diff (space or comma separated)
   <range>             Review a commit range (e.g., main..feature)
+  --debate            Opt in to debate-mode review (requires >=2 available reviewers)
   [--] <focus>        Optional focus text (use --focus or trailing text; -- forces focus)
 
 Consensus modes:
@@ -805,7 +1004,18 @@ USAGE
         task_context="${task_context:-No additional context provided.}"$'\n\n'"$commit_net_warning"
     fi
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first (D2
+        # line-consume semantics under --debate absent; canonical anchor +
+        # strategy bytes injected under --debate set). This MUST happen
+        # before the diff/context substitution so that artifact content
+        # containing literal `${CONFIDENCE_ANCHORS}` etc. (e.g., a diff that
+        # touches these very templates) is not corrupted by the placeholder
+        # pass.
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${DIFF_CONTENT} and ${CONTEXT} using temp files to avoid ARG_MAX limits
         local diff_tmp="${review_dir}/diff_content.tmp"
         local context_tmp="${review_dir}/context_content.tmp"
         printf '%s' "$diff_content" > "$diff_tmp"
@@ -828,8 +1038,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$diff_tmp" "$context_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$diff_tmp" "$context_tmp" "$template_substituted_tmp"
     else
         die "Code review prompt template not found in project or built-in locations"
     fi
@@ -938,6 +1148,12 @@ USAGE
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
@@ -956,6 +1172,8 @@ review_gate_spawn_plan_review() {
     local -a positionals=()
     local force_focus="false"
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -963,6 +1181,18 @@ review_gate_spawn_plan_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1033,6 +1263,7 @@ Options:
   --context-file <path>     Inject author context from file into the prompt
   --focus <text>            Focus area to emphasize in the review
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
   [--] <focus>             Optional focus text (or trailing text; -- forces focus)
@@ -1183,7 +1414,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${PLAN_CONTENT} using temp file to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first so
+        # plan content containing literal `${CONFIDENCE_ANCHORS}` etc.
+        # is not corrupted by the placeholder pass. (D2 line-consume
+        # under --debate absent; canonical anchor + strategy injection
+        # under --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${PLAN_CONTENT} using temp file to avoid ARG_MAX limits
         local plan_tmp="${review_dir}/plan_content.tmp"
         printf '%s' "$plan_content" > "$plan_tmp"
         prompt_content=$(awk -v plan_file="$plan_tmp" '
@@ -1196,8 +1436,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$plan_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$plan_tmp" "$template_substituted_tmp"
     else
         # Fallback: use plan content directly with basic prompt structure
         prompt_content="You are reviewing a plan for quality and correctness.
@@ -1231,6 +1471,8 @@ JSON only, no markdown code fences:
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)
 "
+        # Fallback path uses a synthetic prompt with no placeholders, so the
+        # fallback intentionally bypasses substitute_debate_placeholders.
     fi
 
     # --- Inject focus area before Output Format section if provided ---
@@ -1278,11 +1520,22 @@ JSON only, no markdown code fences:
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
+    # Export REVIEW_GATE_DEBATE_PLAN_PATH so the bare-spawn debate
+    # preflight uses the canonical user-passed plan path (already
+    # realpath'd above) for spec R3 stability rather than the session-
+    # scoped latest.md artifact path.
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_DEBATE_PLAN_PATH="$plan_path" \
     "${spawn_cmd[@]}"
 
     # Update state to include plan path in mode
@@ -1310,6 +1563,8 @@ review_gate_spawn_spec_review() {
     local mode=""
     local context_file=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -1317,6 +1572,18 @@ review_gate_spawn_spec_review() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1377,6 +1644,7 @@ Options:
   --mode <level>           Intelligence mode: fast, smart, max
   --context-file <path>     Inject author context from file into the prompt
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>        Session ID for scoping
   --transcript-path <path> Path to transcript file
 
@@ -1495,7 +1763,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute ${SPEC_CONTENT} using temp file to avoid ARG_MAX limits
+        # Substitute debate-mode placeholders on the TEMPLATE first so spec
+        # content containing literal `${CONFIDENCE_ANCHORS}` etc. is not
+        # corrupted by the placeholder pass. (D2 line-consume under
+        # --debate absent; canonical anchor + strategy injection under
+        # --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute ${SPEC_CONTENT} using temp file to avoid ARG_MAX limits
         local spec_tmp="${review_dir}/spec_content.tmp"
         printf '%s' "$spec_content" > "$spec_tmp"
         prompt_content=$(awk -v spec_file="$spec_tmp" '
@@ -1508,8 +1785,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$spec_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$spec_tmp" "$template_substituted_tmp"
     else
         # Fallback: use spec content directly with basic prompt structure
         prompt_content="You are reviewing a feature specification for quality and correctness.
@@ -1543,6 +1820,8 @@ JSON only, no markdown code fences:
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end are optional (use null if not applicable)"
+        # Fallback path uses a synthetic prompt with no placeholders, so the
+        # fallback intentionally bypasses substitute_debate_placeholders.
     fi
 
     if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
@@ -1572,11 +1851,22 @@ JSON only, no markdown code fences:
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
+    # Export REVIEW_GATE_DEBATE_SPEC_PATH so the bare-spawn debate
+    # preflight uses the canonical user-passed spec path (already
+    # realpath'd above) for spec R3 stability rather than the session-
+    # scoped latest.md artifact path.
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_DEBATE_SPEC_PATH="$spec_path" \
     "${spawn_cmd[@]}"
 
     # Update state to include spec path in mode
@@ -1603,6 +1893,8 @@ review_gate_spawn_epic_verify() {
     local max_rounds=""
     local mode=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     # --- Session metadata ---
     local session_id="${CLAUDE_SESSION_ID:-}"
@@ -1610,6 +1902,18 @@ review_gate_spawn_epic_verify() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --agents=*)
                 agents_csv="${1#*=}"
                 shift
@@ -1662,6 +1966,7 @@ Options:
   --max-rounds <n>          Maximum verification iterations (0 disables auto-respawn)
   --mode <level>            Intelligence mode: fast, smart, max
   --consensus <mode>        Consensus mode: majority (default), all, any
+  --debate                  Opt in to debate-mode review (requires >=2 available reviewers)
   --session-id <id>         Session ID for scoping
   --transcript-path <path>  Path to transcript file
 
@@ -1874,7 +2179,16 @@ USAGE
 
     local prompt_content
     if [[ -n "$prompt_template_path" && -f "$prompt_template_path" ]]; then
-        # Load template and substitute epic context (file path or raw criteria)
+        # Substitute debate-mode placeholders on the TEMPLATE first so epic
+        # context containing literal `${CONFIDENCE_ANCHORS}` etc. is not
+        # corrupted by the placeholder pass. (D2 line-consume under
+        # --debate absent; canonical anchor + strategy injection under
+        # --debate set.)
+        local template_substituted_tmp="${review_dir}/template-substituted.tmp"
+        substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}" \
+            < "$prompt_template_path" > "$template_substituted_tmp"
+
+        # Load substituted template and substitute epic context (file path or raw criteria)
         # Use match+printf loop to avoid gsub & and \ interpretation issues
         local context_tmp="${review_dir}/epic_context.tmp"
         printf '%s' "$epic_context" > "$context_tmp"
@@ -1888,8 +2202,8 @@ USAGE
                 }
                 print
             }
-        ' "$prompt_template_path")
-        rm -f "$context_tmp"
+        ' "$template_substituted_tmp")
+        rm -f "$context_tmp" "$template_substituted_tmp"
     else
         die "Epic verification prompt template not found in project or built-in locations"
     fi
@@ -1934,11 +2248,24 @@ USAGE
     if [[ -n "$consensus_mode" ]]; then
         spawn_cmd+=(--consensus "$consensus_mode")
     fi
+    if [[ "$debate" == "true" ]]; then
+        spawn_cmd+=(--debate)
+    fi
+    if [[ -n "$debate_seed" ]]; then
+        spawn_cmd+=(--debate-seed "$debate_seed")
+    fi
     spawn_cmd+=("$artifact_path")
+    # Export REVIEW_GATE_EPIC_CONTEXT so the bare-spawn debate preflight can
+    # compute the canonical artifact_id for spec R3's per-(artifact, reviewer)
+    # strategy assignment. Without this, bare-spawn would fall back to the
+    # session-scoped `latest.md` artifact_path (which varies across sessions
+    # and breaks the stability requirement). The value matches the
+    # `<!-- epic-context: ... -->` frontmatter source used in artifact prep.
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="epic-verify" \
     REVIEW_GATE_PROMPT_FILE="$prompt_file" \
+    REVIEW_GATE_EPIC_CONTEXT="$epic_context" \
     "${spawn_cmd[@]}"
 
     # Update state to include epic path in mode
@@ -2124,6 +2451,8 @@ review_gate_spawn() {
     local mode=""
     local context_file=""
     local consensus_mode=""
+    local debate="false"
+    local debate_seed=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2175,6 +2504,18 @@ review_gate_spawn() {
                 REVIEW_TYPE="${2:-}"
                 shift 2
                 ;;
+            --debate)
+                debate="true"
+                shift
+                ;;
+            --debate-seed=*)
+                debate_seed="${1#*=}"
+                shift
+                ;;
+            --debate-seed)
+                debate_seed="${2:-}"
+                shift 2
+                ;;
             --session-id)
                 OWNER_SESSION_ID="${2:-}"
                 shift 2
@@ -2185,7 +2526,11 @@ review_gate_spawn() {
                 ;;
             -h|--help)
                 cat <<USAGE
-Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+Usage: ${CLI_CMD} spawn [--agents <list>] [--max-rounds <n>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--context-file <path>] [--debate] [--session-id <id>] [--transcript-path <path>] [artifact-path]
+
+Options:
+  --debate              Opt in to debate-mode review (judging review types only:
+                        code, plan, spec, epic-verify; requires >=2 reviewers).
 USAGE
                 return 0
                 ;;
@@ -2200,6 +2545,13 @@ USAGE
                 ;;
         esac
     done
+
+    # Validate --debate-seed value (integer; no-op when --debate absent).
+    if [[ -n "$debate_seed" ]]; then
+        if ! [[ "$debate_seed" =~ ^[0-9]+$ ]]; then
+            die "--debate-seed must be a non-negative integer; got: $debate_seed"
+        fi
+    fi
 
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
@@ -2443,8 +2795,15 @@ DEFAULT
         local content
         content=$(cat "$artifact_path")
 
+        # Substitute the four debate-mode placeholders on the TEMPLATE only,
+        # before it is concatenated with the artifact content. This prevents
+        # artifact bytes that happen to contain literal `${CONFIDENCE_ANCHORS}`
+        # etc. (e.g., a diff that touches these very templates) from being
+        # corrupted by the substitution. (D2 line-consume under --debate
+        # absent; canonical anchor + strategy injection under --debate set.)
         local criteria
-        criteria=$(resolve_template "$review_type")
+        criteria=$(resolve_template "$review_type" \
+            | substitute_debate_placeholders "$debate" "${REVIEW_GATE_DEBATE_STRATEGY:-verification-first}")
 
         local previous_reviews
         previous_reviews=$(get_previous_reviews)
@@ -2574,6 +2933,248 @@ PROMPT
 
     IFS=',' read -r -a agents_list <<< "$agents_final_csv"
 
+    # --- Debate preflights (R10 whitelist + <2 reviewers hard error) ---
+    # Both run BEFORE preflight_check so that no model is ever invoked when
+    # --debate is misused. Per spec R9/R10 these errors are an explicit
+    # exception to the byte-parity guarantee for valid invocations.
+    if [[ "$debate" == "true" ]]; then
+        # R10 whitelist: --debate is judging-only. The four allowed --type values
+        # match the canonical REVIEW_TYPE values used end-to-end (see spec R10).
+        # Empty / auto-detected types are rejected because debate requires an
+        # explicit judging type to select the right reviewer/revision template.
+        case "$REVIEW_TYPE" in
+            code|plan|spec|epic-verify)
+                ;;
+            "")
+                {
+                    echo "Error: --debate requires an explicit judging --type (got: <auto-detected>)."
+                    echo "       Allowed --type values: code, plan, spec, epic-verify"
+                    echo "       --debate is judging-only; pass --type=<value> or use a spawn-*-review subcommand."
+                } >&2
+                exit 2
+                ;;
+            *)
+                {
+                    echo "Error: --debate is not supported for --type=$REVIEW_TYPE (rejected at preflight)."
+                    echo "       Allowed --type values: code, plan, spec, epic-verify"
+                    echo "       --debate is judging-only and is rejected for non-judging types"
+                    echo "       (healthcheck, architecture-review, create-tasks, manual, auto, etc.)."
+                } >&2
+                exit 2
+                ;;
+        esac
+
+        # <2 reviewers hard error: count agents with available CLIs. If fewer
+        # than two are available, hard-error before any model invocation.
+        local _debate_available=0
+        local _debate_agent
+        for _debate_agent in "${agents_list[@]}"; do
+            if command -v "$_debate_agent" >/dev/null 2>&1; then
+                _debate_available=$((_debate_available + 1))
+            fi
+        done
+        if [[ $_debate_available -lt 2 ]]; then
+            {
+                echo "Error: --debate requires at least 2 available reviewers; only $_debate_available of ${#agents_list[@]} are available."
+                echo "       Reviewers requested: ${agents_list[*]}"
+                echo "       Install the missing reviewer CLIs or pass --agents with >=2 available reviewers."
+            } >&2
+            exit 6
+        fi
+
+        # --- Strategy assignment (T005 / spec R3) ---
+        # Source the debate coordinator helpers (compute_artifact_id /
+        # assign_strategies / _sha256_hex). Sourced only under --debate so
+        # the byte-parity guarantee for non-debate runs is preserved (no
+        # new env vars, no helper-side effects on the non-debate path).
+        #
+        # T005 contract (this commit): compute the canonical <artifact_id>,
+        # run assign_strategies, and export per-reviewer
+        # STRATEGY_DIRECTIVE_PATH_<REVIEWER> + STRATEGY_NAME_<REVIEWER>
+        # plus DEBATE_ARTIFACT_ID. The substitution call in build_prompt /
+        # spawn-*-review wrappers continues to use the
+        # ${REVIEW_GATE_DEBATE_STRATEGY:-verification-first} default for v1
+        # of the substitution, since per-reviewer prompt rendering is the
+        # synchronous coordinator's job.
+        #
+        # T006 contract (next task): the synchronous coordinator's spawn
+        # loop reads STRATEGY_DIRECTIVE_PATH_<REVIEWER> per-reviewer and
+        # renders the prompt per-reviewer (either by setting
+        # REVIEW_GATE_DEBATE_STRATEGY before each per-reviewer render or
+        # by introducing a marker-and-replace step on the prebuilt prompt).
+        # Until T006 lands the per-reviewer rendering is computed-but-not-
+        # consumed; the byte-parity tests (test-debate-byte-parity.sh)
+        # still assert the verification-first default bytes appear in the
+        # prompt and will be updated to per-reviewer expectations alongside
+        # T006.
+        # shellcheck source=review-gate-debate.sh
+        source "$SCRIPT_DIR/review-gate-debate.sh"
+
+        # Compute the canonical <artifact_id> per review type. The four
+        # judging review types use the input pinned by spec R3, with a
+        # three-level fallback ladder for stability across sessions:
+        #
+        #   1. Wrapper-exported env var (canonical source). spawn-*-review
+        #      wrappers pre-set the relevant env var so bare-spawn does
+        #      NOT need to infer the source from the session-scoped
+        #      `latest.md` artifact path:
+        #        plan        → REVIEW_GATE_DEBATE_PLAN_PATH
+        #        spec        → REVIEW_GATE_DEBATE_SPEC_PATH
+        #        code        → REVIEW_GATE_DIFF_ARGS
+        #        epic-verify → REVIEW_GATE_EPIC_CONTEXT
+        #
+        #   2. Artifact frontmatter parse. The wrappers also embed the
+        #      canonical source in artifact frontmatter; this is the
+        #      direct-bare-spawn path where the user invokes
+        #      `bin/review-gate spawn --type X --debate <wrapper-built-artifact>`:
+        #        plan        → `<!-- plan-path: ... -->`
+        #        spec        → `<!-- spec-path: ... -->`
+        #        code        → `<!-- diff-args: ... -->`
+        #        epic-verify → wrapper exports the FULL untruncated
+        #                      epic_context via env var; the
+        #                      `<!-- epic-context: ... -->` frontmatter
+        #                      is presentational only and is truncated to
+        #                      100 chars, so it is NOT used as a fallback
+        #                      hash input (spec R3 explicitly: "The full
+        #                      untruncated epic_context value is the hash
+        #                      input regardless of whether it would be
+        #                      truncated in frontmatter; the frontmatter
+        #                      truncation is presentational only.")
+        #
+        #   3. Resolved artifact realpath. Last-ditch fallback for ad-hoc
+        #      bare-spawn invocations on stub/minimal artifacts. Different
+        #      artifact paths still produce different hashes (spec R3
+        #      "different artifacts shuffle assignments"), but per-diff
+        #      / per-source differentiation is not available on this
+        #      branch — a stderr note records the limitation.
+        local _debate_artifact_id=""
+        # Resolve the artifact realpath up-front for fallback paths. Use
+        # the same resolve_artifact helper that the rest of review_gate_spawn
+        # uses so the path computation stays in one place.
+        local _resolved_artifact_path=""
+        if _resolved_artifact_path=$(resolve_artifact "$artifact_arg" 2>/dev/null); then
+            :
+        else
+            _resolved_artifact_path=""
+        fi
+        case "$REVIEW_TYPE" in
+            plan)
+                local _plan_source="${REVIEW_GATE_DEBATE_PLAN_PATH:-}"
+                if [[ -z "$_plan_source" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _plan_source=$(sed -nE 's|^<!-- plan-path: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
+                fi
+                if [[ -z "$_plan_source" && -n "$_resolved_artifact_path" ]]; then
+                    echo "Note: --debate plan review without REVIEW_GATE_DEBATE_PLAN_PATH or <!-- plan-path: ... --> frontmatter; using artifact realpath for artifact_id (per-source shuffle is not available on this invocation path)." >&2
+                    _plan_source="$_resolved_artifact_path"
+                fi
+                if [[ -z "$_plan_source" ]]; then
+                    die "--debate plan review: cannot determine plan source path for artifact_id (no env var, no frontmatter, no resolvable artifact)"
+                fi
+                _debate_artifact_id=$(compute_artifact_id plan "$_plan_source") || \
+                    die "compute_artifact_id plan failed for: $_plan_source"
+                ;;
+            spec)
+                local _spec_source="${REVIEW_GATE_DEBATE_SPEC_PATH:-}"
+                if [[ -z "$_spec_source" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _spec_source=$(sed -nE 's|^<!-- spec-path: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
+                fi
+                if [[ -z "$_spec_source" && -n "$_resolved_artifact_path" ]]; then
+                    echo "Note: --debate spec review without REVIEW_GATE_DEBATE_SPEC_PATH or <!-- spec-path: ... --> frontmatter; using artifact realpath for artifact_id (per-source shuffle is not available on this invocation path)." >&2
+                    _spec_source="$_resolved_artifact_path"
+                fi
+                if [[ -z "$_spec_source" ]]; then
+                    die "--debate spec review: cannot determine spec source path for artifact_id (no env var, no frontmatter, no resolvable artifact)"
+                fi
+                _debate_artifact_id=$(compute_artifact_id spec "$_spec_source") || \
+                    die "compute_artifact_id spec failed for: $_spec_source"
+                ;;
+            code)
+                # Three-level fallback ladder per the comment block above.
+                local _code_diff_args="${REVIEW_GATE_DIFF_ARGS:-}"
+                if [[ -z "$_code_diff_args" && -n "$_resolved_artifact_path" && -f "$_resolved_artifact_path" ]]; then
+                    _code_diff_args=$(sed -nE 's|^<!-- diff-args: (.*) -->$|\1|p' "$_resolved_artifact_path" | head -n 1)
+                fi
+                if [[ -n "$_code_diff_args" ]]; then
+                    _debate_artifact_id=$(compute_artifact_id code "$_code_diff_args") || \
+                        die "compute_artifact_id code failed"
+                elif [[ -n "$_resolved_artifact_path" ]]; then
+                    # Realpath fallback — emit a stderr note so debugging
+                    # the determinism contract is easier when this branch
+                    # fires. Use plan-style realpath since artifact path
+                    # is the only stable identifier we have here.
+                    echo "Note: --debate code review without REVIEW_GATE_DIFF_ARGS or <!-- diff-args: ... --> frontmatter; using artifact realpath for artifact_id (per-diff shuffle is not available on this invocation path)." >&2
+                    _debate_artifact_id=$(compute_artifact_id plan "$_resolved_artifact_path") || \
+                        die "compute_artifact_id (code-realpath fallback) failed for: $_resolved_artifact_path"
+                else
+                    die "--debate code review: cannot determine artifact_id (no env var, no frontmatter, no resolvable artifact)"
+                fi
+                ;;
+            epic-verify)
+                # spawn-epic-verify exports the FULL untruncated
+                # epic_context via REVIEW_GATE_EPIC_CONTEXT. The artifact
+                # frontmatter <!-- epic-context: ... --> is truncated to
+                # 100 chars and is NOT used as a fallback hash input
+                # (spec R3 explicit constraint).
+                local _epic_source="${REVIEW_GATE_EPIC_CONTEXT:-}"
+                if [[ -z "$_epic_source" ]]; then
+                    # Fall back to the resolved artifact path / realpath
+                    # for direct bare-spawn invocations.
+                    if [[ -n "$_resolved_artifact_path" ]]; then
+                        echo "Note: --debate epic-verify without REVIEW_GATE_EPIC_CONTEXT; using artifact realpath for artifact_id." >&2
+                        _epic_source="$_resolved_artifact_path"
+                    elif [[ -n "$artifact_arg" ]]; then
+                        _epic_source="$artifact_arg"
+                    else
+                        die "--debate epic-verify: cannot determine epic_context for artifact_id (no env var, no resolvable artifact)"
+                    fi
+                fi
+                _debate_artifact_id=$(compute_artifact_id epic-verify "$_epic_source") || \
+                    die "compute_artifact_id epic-verify failed"
+                ;;
+        esac
+
+        # Assign per-(artifact_id, reviewer) strategies via SHA-256 + canonical
+        # collision walk. Export STRATEGY_DIRECTIVE_PATH_<reviewer> for each
+        # reviewer in the active set so the per-reviewer prompt-rendering path
+        # (T006 coordinator) can pick up the assigned strategy file. This
+        # function is byte-deterministic per spec R3.
+        #
+        # Capture assign_strategies output EAGERLY before the read loop so a
+        # non-zero return code from the helper (e.g., neither shasum nor
+        # sha256sum on PATH) propagates to this shell. `set -euo pipefail`
+        # does NOT propagate exit codes from a process substitution
+        # `<(...)`, so a hard-error from _sha256_hex would otherwise be
+        # silently swallowed and the loop body would run zero iterations.
+        local _debate_assignments
+        _debate_assignments=$(assign_strategies "$_debate_artifact_id" "${agents_list[@]}") || \
+            die "Strategy assignment failed (artifact_id='$_debate_artifact_id', reviewers=${agents_list[*]})"
+
+        local _debate_reviewer _debate_strategy _debate_strategy_path _upper
+        # Empty reviewer list is defensive: assign_strategies returns empty
+        # output, the loop body is skipped, no env vars are exported.
+        if [[ -n "$_debate_assignments" ]]; then
+            while IFS=$' \t' read -r _debate_reviewer _debate_strategy; do
+                [[ -z "$_debate_reviewer" ]] && continue
+                _debate_strategy_path=$(resolve_strategy_path "$_debate_strategy") || \
+                    die "Failed to resolve strategy path for $_debate_strategy"
+                # Export per-reviewer strategy directive path (consumed by T006).
+                # The variable name is uppercase-canonical-reviewer so multiple
+                # reviewers don't collide.
+                _upper=$(echo "$_debate_reviewer" | tr '[:lower:]' '[:upper:]')
+                export "STRATEGY_DIRECTIVE_PATH_${_upper}=$_debate_strategy_path"
+                # Also export the strategy NAME for the same reviewer (handy for
+                # report rendering and downstream tools that don't want to
+                # re-read the file).
+                export "STRATEGY_NAME_${_upper}=$_debate_strategy"
+            done <<< "$_debate_assignments"
+        fi
+
+        # Export the canonical artifact_id so downstream tools (T006
+        # coordinator, telemetry) can reference the same identifier without
+        # recomputing it.
+        export DEBATE_ARTIFACT_ID="$_debate_artifact_id"
+    fi
+
     preflight_check
 
     # --- Resolve author context (context file > env override > previous state) ---
@@ -2617,43 +3218,39 @@ PROMPT
         # Use pre-built prompt content (read before clean_state)
         echo "$prebuilt_prompt_content" > "$prompt_file"
     else
+        # The bare-spawn path uses build_prompt, which substitutes the
+        # four debate-mode placeholders on the template via
+        # substitute_debate_placeholders BEFORE merging artifact content.
+        # That ordering keeps artifact bytes (which may contain literal
+        # `${CONFIDENCE_ANCHORS}` etc., e.g., a diff that touches these
+        # templates) untouched, while still removing the placeholders
+        # under --debate absent (R9 byte-parity) and injecting canonical
+        # anchor/strategy bytes under --debate set.
         build_prompt "$artifact_path" "$REVIEW_TYPE" > "$prompt_file"
     fi
 
-    # Create JSON schema for structured output
+    # Create JSON schema for structured output. Delegates to
+    # `_emit_review_schema` (review-gate-models.sh) which owns the single
+    # debate-conditional branch: byte-identical pre-feature schema bytes when
+    # `--debate` is absent (R9 byte-parity), debate variant with the additive
+    # fields when `--debate` is set. The repair path
+    # (`repair_review_output()`) reads the same schema_file when present and
+    # falls back to `default_review_schema()` (which honors the
+    # `REVIEW_GATE_DEBATE` env var exported below) so the repair-prompt schema
+    # picks the matching variant.
     local schema_file="$REVIEWS_DIR/review-schema.json"
-    cat > "$schema_file" <<'SCHEMA'
-{
-  "type": "object",
-  "properties": {
-    "verdict": {
-      "type": "string",
-      "enum": ["PASS", "FAIL", "NEEDS_WORK"]
-    },
-    "summary": {
-      "type": "string"
-    },
-    "findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "title": {"type": "string"},
-          "body": {"type": "string"},
-          "priority": {"type": "integer", "minimum": 0, "maximum": 3},
-          "file_path": {"type": ["string", "null"]},
-          "line_start": {"type": ["integer", "null"]},
-          "line_end": {"type": ["integer", "null"]}
-        },
-        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
-        "additionalProperties": false
-      }
-    }
-  },
-  "required": ["verdict", "summary", "findings"],
-  "additionalProperties": false
-}
-SCHEMA
+    if [[ "$debate" == "true" ]]; then
+        # Export REVIEW_GATE_DEBATE so downstream callers of
+        # default_review_schema() (notably repair_review_output's fallback
+        # when no schema_file is on disk) emit the debate variant. The env
+        # var is scoped to this spawn invocation; non-debate runs never set
+        # it, preserving R9 byte-parity for the schema artifact and the
+        # repair-prompt schema text.
+        export REVIEW_GATE_DEBATE=1
+        _emit_review_schema "true" > "$schema_file"
+    else
+        _emit_review_schema "false" > "$schema_file"
+    fi
 
     # Initialize state
     local now
@@ -2697,6 +3294,8 @@ SCHEMA
         --arg mode "$mode" \
         --arg max_rounds "$max_rounds" \
         --arg consensus_mode "$consensus_mode" \
+        --arg debate "$debate" \
+        --arg debate_seed "$debate_seed" \
         '{
             version: ($version | tonumber),
             status: $status,
@@ -2712,6 +3311,8 @@ SCHEMA
                 | (if $max_rounds != "" then .max_rounds = ($max_rounds | tonumber) else . end)
                 | (if $mode != "" then .intelligence_mode = $mode else . end)
                 | (if $consensus_mode != "" then .consensus_mode = $consensus_mode else . end)
+                | (if $debate == "true" then .debate = true else . end)
+                | (if $debate == "true" and $debate_seed != "" then .debate_seed = $debate_seed else . end)
                 | if length == 0 then null else . end
             ),
             owner: (
@@ -2733,20 +3334,174 @@ SCHEMA
     # Spawn reviewers and record in state
     local reviewers_json='{}'
     local spawned=0
+    # Track the names of reviewers that successfully spawned. Under --debate
+    # this is the set passed to run_debate_coordinator's wait loop; reviewers
+    # that fail to spawn (missing CLI, gemini policy missing, etc.) MUST NOT
+    # be polled for sentinels because no detached process will ever produce
+    # one — passing the full agents_list would hang the coordinator for the
+    # entire timeout budget on a missing-CLI invocation.
+    local -a _debate_spawned_reviewers=()
+
+    # Pre-resolve the default-strategy file content (verification-first.md)
+    # ONCE for all reviewers; the prebuilt-prompt per-reviewer rendering
+    # path uses string-replace to swap these bytes for each reviewer's
+    # assigned-strategy bytes. Resolved here (outside the loop) so we hard-
+    # error early if the asset is missing rather than mid-loop on the Nth
+    # reviewer. Only resolved under --debate AND when there's a prebuilt
+    # prompt to operate on; otherwise the variable is intentionally unset.
+    local _debate_default_strategy_file=""
+    if [[ "$debate" == "true" ]] && [[ -n "$prebuilt_prompt_content" ]]; then
+        _debate_default_strategy_file=$(resolve_strategy_path "verification-first") || \
+            die "Failed to resolve default verification-first.md (required for prebuilt-prompt per-reviewer rendering)"
+    fi
+
+    # ----------------------------------------------------------------------
+    # Debate-mode staging directory. Under --debate, spawn_reviewer writes
+    # per-reviewer outputs into the per-round staging dir
+    # `iterations/<iter>/round-1/` rather than the canonical $REVIEWS_DIR.
+    # The synchronous coordinator (run_debate_coordinator below) sync-waits
+    # for the staging sentinels, runs the Phase D stub aggregator, and
+    # atomically promotes per-reviewer JSONs into $REVIEWS_DIR with the
+    # additive debate fields. Non-debate runs leave _debate_staging_dir
+    # empty and spawn_reviewer falls back to $REVIEWS_DIR (R9 byte-parity
+    # is preserved since spawn_reviewer's 5th-arg default is REVIEWS_DIR).
+    # ----------------------------------------------------------------------
+    local _debate_staging_dir=""
+    if [[ "$debate" == "true" ]]; then
+        _debate_staging_dir="$REVIEW_DIR/iterations/$current_iter/round-1"
+        mkdir -p "$_debate_staging_dir"
+        # Defensive cleanup: a re-spawn under REVIEW_GATE_RERUN=1 in the
+        # same iteration must not see stale sentinels from a prior run
+        # (otherwise the coordinator's wait loop would short-circuit on
+        # stale .done files before reviewers have re-written outputs).
+        rm -f "$_debate_staging_dir"/*.done \
+              "$_debate_staging_dir"/*.failed \
+              "$_debate_staging_dir"/*.json \
+              "$_debate_staging_dir"/*.jsonl 2>/dev/null || true
+    fi
 
     for reviewer in "${agents_list[@]}"; do
-        if spawn_reviewer "$reviewer" "$reviewer" "$prompt_file" "$schema_file"; then
+        # Per-reviewer prompt rendering under --debate (T005). Two branches:
+        #
+        #   (1) Bare-spawn build_prompt branch (no prebuilt content): re-
+        #       render the prompt for THIS reviewer using their assigned
+        #       strategy (STRATEGY_NAME_<REVIEWER>) by setting
+        #       REVIEW_GATE_DEBATE_STRATEGY and recalling build_prompt.
+        #
+        #   (2) Prebuilt-prompt branch (spawn-*-review wrappers wrote
+        #       review.prompt with the default verification-first.md
+        #       content inlined by T004's substitute_debate_placeholders):
+        #       string-replace those default bytes with the per-reviewer
+        #       strategy file's bytes via python3. python3 is already a
+        #       hard dependency of the helper (used by _resolve_realpath
+        #       fallback and the test harness). The replacement is
+        #       limited to a single occurrence (the strategy block
+        #       inserted by the substitute pass).
+        #
+        # Both branches write to `$REVIEWS_DIR/review.<reviewer>.prompt`
+        # and pass that to spawn_reviewer. Per-reviewer rendering makes
+        # the per-(artifact_id, reviewer) R3 strategy assignment ACTUALLY
+        # appear in the prompts sent to each model; the env-var exports
+        # alone are not sufficient (they would be computed-but-unused
+        # without this rendering step).
+        local _rendered_prompt_file="$prompt_file"
+        if [[ "$debate" == "true" ]]; then
+            local _rev_upper _strategy_name_var _per_reviewer_strategy _per_reviewer_strategy_file
+            _rev_upper=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
+            _strategy_name_var="STRATEGY_NAME_${_rev_upper}"
+            _per_reviewer_strategy="${!_strategy_name_var:-verification-first}"
+            _rendered_prompt_file="$REVIEWS_DIR/review.${reviewer}.prompt"
+
+            if [[ -z "$prebuilt_prompt_content" ]]; then
+                # Branch (1): build_prompt path.
+                REVIEW_GATE_DEBATE_STRATEGY="$_per_reviewer_strategy" \
+                    build_prompt "$artifact_path" "$REVIEW_TYPE" > "$_rendered_prompt_file"
+            else
+                # Branch (2): prebuilt path. String-replace the default
+                # strategy bytes with the per-reviewer strategy bytes.
+                _per_reviewer_strategy_file=$(resolve_strategy_path "$_per_reviewer_strategy") || \
+                    die "Failed to resolve per-reviewer strategy file for $reviewer ($_per_reviewer_strategy)"
+                if [[ "$_per_reviewer_strategy" == "verification-first" ]]; then
+                    # Optimization: assigned strategy matches the default;
+                    # no string replace needed. Just copy the prebuilt
+                    # prompt to the per-reviewer location.
+                    cp "$prompt_file" "$_rendered_prompt_file"
+                else
+                    if ! python3 -c '
+import sys
+prompt_path, default_path, new_path, out_path = sys.argv[1:5]
+with open(prompt_path, "rb") as f: prompt = f.read()
+with open(default_path, "rb") as f: default_bytes = f.read()
+with open(new_path, "rb") as f: new_bytes = f.read()
+if default_bytes not in prompt:
+    sys.stderr.write(
+        "error: default verification-first.md bytes not found in prebuilt prompt; "
+        "cannot perform per-reviewer strategy substitution. The wrapper that wrote "
+        "this prompt must use the canonical T004 substitute_debate_placeholders pass "
+        "with the default strategy.\n"
+    )
+    sys.exit(1)
+out = prompt.replace(default_bytes, new_bytes, 1)
+with open(out_path, "wb") as f: f.write(out)
+' "$prompt_file" "$_debate_default_strategy_file" "$_per_reviewer_strategy_file" "$_rendered_prompt_file"; then
+                        die "Failed to render per-reviewer prompt for $reviewer (strategy=$_per_reviewer_strategy)"
+                    fi
+                fi
+            fi
+        fi
+        # Under --debate, override spawn_reviewer's output_dir to the
+        # per-round staging dir so reviewer JSON/sentinels land there
+        # rather than the canonical $REVIEWS_DIR. Non-debate runs omit
+        # the 5th arg so spawn_reviewer's default ($REVIEWS_DIR) applies
+        # — keeping R9 byte-parity for non-debate invocations.
+        local _rdc_spawn_rc=0
+        if [[ "$debate" == "true" ]]; then
+            spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file" "$_debate_staging_dir" || _rdc_spawn_rc=$?
+        else
+            spawn_reviewer "$reviewer" "$reviewer" "$_rendered_prompt_file" "$schema_file" || _rdc_spawn_rc=$?
+        fi
+        if [[ $_rdc_spawn_rc -eq 0 ]]; then
+            # state_json.reviewers always points at the canonical
+            # $REVIEWS_DIR paths since the synchronous coordinator
+            # promotes per-reviewer JSONs there before returning. Stop-
+            # hook (today) reads $REVIEWS_DIR; the staging dir is an
+            # implementation detail not surfaced via state_json.
             reviewers_json=$(echo "$reviewers_json" | jq \
                 --arg name "$reviewer" \
                 --arg output "$REVIEWS_DIR/${reviewer}.json" \
                 --arg sentinel "$REVIEWS_DIR/${reviewer}.done" \
                 '.[$name] = {output_file: $output, sentinel_file: $sentinel, completed_at: null, result: null}')
             spawned=$((spawned + 1))
+            _debate_spawned_reviewers+=("$reviewer")
         fi
     done
 
     if [[ $spawned -eq 0 ]]; then
-        # No reviewers available; resolve gate to avoid blocking stop hooks
+        # Under `--debate`, zero successful spawns is the realistic
+        # degraded-before-round case (every spawn_reviewer invocation
+        # returned non-zero — gemini policy lookup failure, missing CLI
+        # under runtime PATH, etc.) and MUST take the T012 distinct-
+        # exit-codes contract: exit 6, awaiting_decision/requires_decision,
+        # iterations/<iter>/debate-telemetry.json. Pre-write the gate
+        # state with .reviewers = {} so the degraded helper's
+        # `_rdc_mark_state_degraded` jq patch lands cleanly.
+        if [[ "$debate" == "true" ]]; then
+            state_json=$(echo "$state_json" | jq '.reviewers = {}')
+            echo "$state_json" > "$STATE_FILE"
+            echo "Debate coordinator: 0 reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
+            _RDC_ITER_DIR="$(dirname "$_debate_staging_dir")" \
+            _RDC_REVIEWS_DIR="$REVIEWS_DIR" \
+            _RDC_CONSENSUS_MODE="$consensus_mode" \
+            _RDC_DEBATE_MODE="$mode" \
+            _RDC_STRATEGIES_JSON='{}' \
+            _RDC_ROUNDS_JSON='[]' \
+            _RDC_ROUNDS_COMPLETED=0 \
+            _RDC_AGGREGATOR_NOTES_JSON='[]' \
+            _rdc_pre_round_degraded_exit
+        fi
+
+        # Non-debate path: resolve gate as proceed/no_reviewers to avoid
+        # blocking the Stop hook (legacy behavior, unchanged).
         state_json=$(echo "$state_json" | jq \
             --arg status "resolved" \
             --arg verdict "no_reviewers" \
@@ -2771,6 +3526,177 @@ SCHEMA
 
     echo "Review gate spawned: $spawned reviewers for $artifact_path" >&2
     echo "State file: $STATE_FILE" >&2
+
+    # ----------------------------------------------------------------------
+    # Debate-mode synchronous coordinator (Phase D scope: Round 1 + stub
+    # aggregate + atomic promotion).
+    #
+    # By this point under --debate, reviewer processes have been detached
+    # against the per-round staging dir ($_debate_staging_dir). The
+    # coordinator sync-waits for sentinels, runs the stub aggregator, and
+    # atomically promotes per-reviewer JSONs (with additive debate fields:
+    # overall_confidence, strategy, round=1, peer_responses_seen=[]) plus
+    # `aggregate.json` into the canonical $REVIEWS_DIR. By the time control
+    # returns from this call, $REVIEWS_DIR is populated exactly as the
+    # Stop-hook expects today.
+    #
+    # On any aggregator error: $REVIEWS_DIR is left UNTOUCHED (no
+    # per-reviewer JSONs, no sentinels, no aggregate.json). Staging is
+    # preserved under iterations/<iter>/round-1/ for inspection. The
+    # process exits non-zero so the failure is not silently swallowed
+    # (T012 will pin the exact reserved exit code; for now any non-zero
+    # exit is acceptable per the task spec).
+    # ----------------------------------------------------------------------
+    if [[ "$debate" == "true" ]]; then
+        local _rdc_timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
+        local _rdc_poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
+
+        # Coordinator-failure state mutation. Per spec
+        # (docs/2026-04-25-debate-spec.md "Aggregator failure" / AC-7),
+        # an aggregator crash (rc=5) MUST mirror the Cancellation
+        # on-disk shape exactly: status stays "pending", no .debate
+        # block, no consensus/decision mutation, reviews/ empty. The
+        # distinct stderr `aggregator failed: <reason>` marker plus the
+        # reserved exit code 5 (emitted by the coordinator's
+        # _rdc_aggregator_fail_exit before this caller sees the rc) is
+        # the only signal that distinguishes an aggregator crash from
+        # a SIGINT cancel or a hang. Therefore the rc=5 arm below does
+        # NOT invoke _debate_mark_state_failed.
+        #
+        # _debate_mark_state_failed remains in place for OTHER
+        # unexpected coordinator non-zero exits (the `*` arm — codes
+        # not pinned by the spec): those represent a coordinator bug
+        # rather than a spec-defined failure mode, and surfacing them
+        # via status="resolved" + verdict="ERROR" prevents the
+        # Stop-hook auto-respawn loop (bin/review-gate-hook.sh:795)
+        # from silently demoting a buggy debate run to a non-debate
+        # re-review (the Stop-hook's `spawn_reviewers` helper does NOT
+        # propagate --debate). Spec-pinned failure modes (5/6/130) all
+        # have explicit case arms below; the `*` arm only fires for
+        # genuinely unexpected codes.
+        _debate_mark_state_failed() {
+            if [[ -f "$STATE_FILE" ]]; then
+                local _state_tmp="$STATE_FILE.coord-fail.tmp.$$"
+                local _now_ts
+                _now_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+                if jq --arg now "$_now_ts" \
+                      --arg reason "debate_aggregator_failed" \
+                   '.reviewers = {}
+                    | .status = "resolved"
+                    | .consensus = {verdict: "ERROR", iteration: (.iteration // 0), reason: $reason}
+                    | .decision = {action: "manual_resolve", decided_at: $now, reason: $reason}' \
+                   "$STATE_FILE" > "$_state_tmp" 2>/dev/null; then
+                    mv -f "$_state_tmp" "$STATE_FILE"
+                else
+                    rm -f "$_state_tmp" 2>/dev/null || true
+                fi
+            fi
+        }
+
+        # Pass ONLY the successfully-spawned reviewers to the coordinator.
+        # Reviewers that failed to spawn (missing CLI, missing gemini policy,
+        # spawn_reviewer non-zero return) never produce a sentinel, so a
+        # wait loop over the full agents_list would block for the entire
+        # timeout budget. The <2 reviewers preflight already runs above on
+        # the requested set; if we end up with <2 successfully-spawned
+        # reviewers here (e.g., due to a runtime CLI failure that the
+        # `command -v` preflight missed), this is a realistic
+        # degraded-before-round path under the T012 distinct-exit-codes
+        # contract: stderr the canonical degraded-below-2 message,
+        # transition gate-state.json to awaiting_decision/requires_decision
+        # via `_rdc_mark_state_degraded`, write
+        # iterations/<iter>/debate-telemetry.json with empty
+        # rounds_telemetry (no round reached the wait loop), and exit 6.
+        if [[ ${#_debate_spawned_reviewers[@]} -lt 2 ]]; then
+            echo "" >&2
+            echo "Debate coordinator: only ${#_debate_spawned_reviewers[@]} reviewer(s) spawned successfully (need >=2); aborting before sync-wait." >&2
+            echo "Spawned: ${_debate_spawned_reviewers[*]:-(none)}" >&2
+            _RDC_ITER_DIR="$(dirname "$_debate_staging_dir")" \
+            _RDC_REVIEWS_DIR="$REVIEWS_DIR" \
+            _RDC_CONSENSUS_MODE="$consensus_mode" \
+            _RDC_DEBATE_MODE="$mode" \
+            _RDC_STRATEGIES_JSON='{}' \
+            _RDC_ROUNDS_JSON='[]' \
+            _RDC_ROUNDS_COMPLETED=0 \
+            _RDC_AGGREGATOR_NOTES_JSON='[]' \
+            _rdc_pre_round_degraded_exit
+        fi
+        # Export the captured `--debate-seed N` value (if any) so the
+        # synchronous coordinator's T007 anonymization pass can pick the
+        # seeded vs. production-path shuffle without widening
+        # run_debate_coordinator's positional signature. Empty `debate_seed`
+        # ⇒ the production-path /dev/urandom shuffle.
+        export REVIEW_GATE_DEBATE_SEED="$debate_seed"
+        # Export the captured --mode so the coordinator can determine the
+        # max round count (2 under fast/smart, 3 under max — T010 wires
+        # Round 3). T008 caps at 2 rounds always; T010 lifts this when
+        # max-mode is the active mode.
+        export REVIEW_GATE_DEBATE_MODE="$mode"
+        # Capture the staging-dir's iteration parent so the coordinator can
+        # locate iterations/<iter>/round-2/ relative to the round-1 staging
+        # without re-deriving the path from REVIEW_DIR + iter#.
+        local _rdc_rc=0
+        run_debate_coordinator \
+                "$_debate_staging_dir" "$REVIEWS_DIR" \
+                "$consensus_mode" "$_rdc_timeout" "$_rdc_poll" \
+                "${_debate_spawned_reviewers[@]}" || _rdc_rc=$?
+        case "$_rdc_rc" in
+            0) ;;
+            5)
+                # Aggregator failure (spec AC-7 / "Aggregator failure"
+                # subsection): the coordinator's
+                # _rdc_aggregator_fail_exit already emitted the canonical
+                # `aggregator failed: <reason>` stderr marker and exited
+                # with the spec-reserved code 5. Per spec the on-disk
+                # shape MUST mirror Cancellation: gate-state.json.status
+                # stays "pending", no .debate block, no consensus or
+                # decision mutation; canonical $REVIEWS_DIR stays empty;
+                # partial round telemetry lives under iterations/<iter>/.
+                # We deliberately do NOT call _debate_mark_state_failed
+                # here. Recovery is identical to Cancellation: re-spawn
+                # under REVIEW_GATE_RERUN=1 (or `${CLI_CMD} resolve` for
+                # cleanup). Propagate the reserved exit code unchanged so
+                # users and CI can distinguish aggregator failure from
+                # cancel (130) or degraded-below-2 (6) without parsing
+                # telemetry.
+                echo "" >&2
+                echo "Debate coordinator: aggregator failed; reviews/ left empty, gate-state status remains 'pending' (staging preserved at $_debate_staging_dir)." >&2
+                echo "Recovery: re-spawn with REVIEW_GATE_RERUN=1 (or '${CLI_CMD} resolve' for cleanup); identical to Cancellation recovery." >&2
+                exit 5
+                ;;
+            6)
+                # Degraded-below-2 (mid-debate or final-round): coordinator
+                # already wrote `gate-state.json.status="awaiting_decision"`
+                # and `consensus.verdict="requires_decision"` per spec R6
+                # (see _rdc_mark_state_degraded in review-gate-debate.sh).
+                # Canonical $REVIEWS_DIR is left empty; partial outputs
+                # preserved under iterations/<iter>/round-N/. T012 will pin
+                # the public exit code; for T008 we surface non-zero so the
+                # caller's failure path is exercised.
+                echo "" >&2
+                echo "Debate coordinator: degraded below 2 active reviewers in the final peer round." >&2
+                echo "Reviews/ left empty; partial outputs preserved under $_debate_staging_dir (and round-2 staging if reached)." >&2
+                echo "Recovery: '${CLI_CMD} resolve --reason \"...\"' or re-spawn under REVIEW_GATE_RERUN=1." >&2
+                exit 1
+                ;;
+            *)
+                # Unexpected coordinator failure (NOT one of the spec-
+                # pinned modes 5/6/130). This represents a coordinator
+                # bug rather than a spec-defined failure mode, so we
+                # mark gate-state.json terminal (status="resolved",
+                # consensus.verdict="ERROR", decision.action=
+                # "manual_resolve") to keep the Stop-hook from auto-
+                # respawning into a non-debate re-review.
+                echo "" >&2
+                echo "Debate coordinator failed unexpectedly (rc=$_rdc_rc); reviews/ left empty (staging preserved at $_debate_staging_dir)." >&2
+                echo "Recovery: 'bin/review-gate resolve' to mark the gate resolved, or re-spawn with REVIEW_GATE_RERUN=1 to bypass the active-gate guard." >&2
+                _debate_mark_state_failed
+                exit 1
+                ;;
+        esac
+        echo "Debate coordinator completed: aggregate.json + per-reviewer JSONs promoted to $REVIEWS_DIR" >&2
+    fi
+
     echo "" >&2
     echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
 }

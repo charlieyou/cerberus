@@ -397,6 +397,62 @@ init_iteration_dir() {
     echo "$iter_dir"
 }
 
+# write_debate_telemetry — atomically write a partial-state debate
+# telemetry surface to iterations/<iter>/debate-telemetry.json.
+#
+# Why a separate helper from atomic_write: the debate failure surfaces
+# (cancel / aggregator-fail / degraded-below-2) need a dedicated, named
+# entry point that the cancellation trap, aggregator-failure path, and
+# degraded-below-2 paths can call without re-deriving the target filename
+# or re-implementing the directory-creation / atomic-rename dance. The
+# helper also documents the contract: the SUCCESS path does NOT write
+# this file (the success surface is gate-state.json.debate); presence of
+# `iterations/<iter>/debate-telemetry.json` therefore unambiguously
+# signals a non-success debate run.
+#
+# Args:
+#   $1  iter_dir              iterations/<iter>/ root (best-effort
+#                              created if missing — the degraded preflight
+#                              path may invoke this before init has run).
+#   $2  partial_state_json    JSON string with the partial debate block
+#                              shape (rounds, mode, consensus_mode,
+#                              strategies, rounds_telemetry,
+#                              aggregator_notes). An empty-string second
+#                              argument writes `{}` so the file is always
+#                              valid JSON.
+#
+# Returns 0 on success; non-zero on missing iter_dir / atomic-write
+# failure. The hook runs in best-effort mode: failure to write the
+# telemetry file MUST NOT mask the upstream non-zero exit code (cancel,
+# aggregator-fail, degraded) — the caller logs the failure but does not
+# alter its return code based on this helper's success.
+write_debate_telemetry() {
+    local iter_dir="$1"
+    local partial_state_json="${2:-}"
+
+    if [[ -z "$iter_dir" ]]; then
+        rg_log "telemetry: write_debate_telemetry requires iter_dir"
+        return 1
+    fi
+
+    if [[ ! -d "$iter_dir" ]]; then
+        # Best-effort: the degraded preflight path may invoke this before
+        # iterations/<iter>/ has been created. Silently mkdir -p; if that
+        # fails (read-only FS, etc.) the atomic_write below will return
+        # non-zero and the caller will log the failure.
+        mkdir -p "$iter_dir" 2>/dev/null || {
+            rg_log "telemetry: write_debate_telemetry could not create $iter_dir"
+            return 1
+        }
+    fi
+
+    if [[ -z "$partial_state_json" ]]; then
+        partial_state_json='{}'
+    fi
+
+    atomic_write "$iter_dir/debate-telemetry.json" "$partial_state_json"
+}
+
 # Write agent telemetry files to iteration directory
 # Usage: write_agent_telemetry <iter_dir> <agent> <stats_json> [raw_json] [draft_md]
 write_agent_telemetry() {

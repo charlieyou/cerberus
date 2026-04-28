@@ -2,12 +2,16 @@
 
 You are acting as a reviewer for a feature specification proposed by another engineer.
 
+${CONFIDENCE_ANCHORS}
+${STRATEGY_DIRECTIVE}
 ## Specification to Review
 
 <spec>
 ${SPEC_CONTENT}
 </spec>
 
+${PEER_BLOCK}
+${PRIOR_ROUND_SELF_BLOCK}
 ### What to Evaluate
 
 1. **Clarity of Goals** - Is it clear what problem this solves and for whom?
@@ -113,6 +117,7 @@ JSON only, no markdown code fences:
   "summary": "1-3 sentence explanation"
 }
 
+${DEBATE_OUTPUT_SHAPE}
 - PASS: No significant findings
 - FAIL: Blocking issues (P0/P1)
 - NEEDS_WORK: Non-blocking issues (P2/P3)

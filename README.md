@@ -192,6 +192,121 @@ Examples:
 /cerberus:create-plan --mode fast --from-spec docs/spec.md
 ```
 
+## Debate Mode
+
+Opt-in multi-round peer-review mode for the four review (judging) commands. Off
+by default. Designed for the cases where a single-pass review is suspected of
+sycophantic agreement or missed defects.
+
+### Usage
+
+Pass `--debate` to either the bare `spawn` command or any of the four
+`spawn-*-review` subcommands:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-code-review --debate
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --debate path/to/plan.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-spec-review --debate path/to/spec.md
+${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify --debate path/to/epic.md
+```
+
+`--debate` is silently passed through by the slash-command wrappers, so:
+
+```
+/cerberus:review-code --debate
+/cerberus:review-plan --debate path/to/plan.md
+/cerberus:review-spec --debate path/to/spec.md
+/cerberus:verify-epic --debate path/to/epic.md
+```
+
+work as well.
+
+### Round Shape
+
+| Mode    | Total rounds |
+|---------|--------------|
+| `fast`  | 2 |
+| `smart` | 2 |
+| `max`   | 3 |
+
+Round 1 is the cold first read; the remaining round(s) are peer rounds. Each
+peer round shows reviewers an anonymized block of their peers' prior-round
+outputs and their own prior-round output, then re-runs them. Reviewers are
+assigned distinct reasoning strategies (`verification-first`,
+`falsification-first`, `decompose`) per artifact for the duration of the run.
+
+### Cost & Latency
+
+Debate adds full reviewer rounds to the critical path. Approximate cost vs the
+non-debate baseline on the same artifact:
+
+| Mode    | Token cost | Wall-clock latency |
+|---------|------------|---------------------|
+| `fast`  | ~2× | ~2× |
+| `smart` | ~2× | ~2× |
+| `max`   | ~3× | ~3× |
+
+These are vibes, not budgets — anything in the 1.5×–3.5× band is expected.
+**CI jobs sized for single-pass review will time out under `--debate`.** If
+you wire `--debate` into CI, raise the job timeout accordingly.
+
+### Hard Error: Fewer Than 2 Reviewers
+
+Debate has no useful single-agent fallback. Running with fewer than 2 available
+reviewers (because of `--agents` selection or missing CLIs) exits with a clear
+error **before any model is invoked**. The error is also raised mid-debate if
+abstentions or per-reviewer timeouts drop the active reviewer count below 2 in
+the final peer round; in that case the gate transitions to `awaiting_decision`
+with `consensus.verdict = "requires_decision"` so a human resolves it.
+
+Distinct exit codes the debate coordinator emits for its named failure paths
+(in addition to the existing `wait --json` codes 0–4):
+
+| Code | Meaning |
+|------|---------|
+| `5` | Aggregator failure raised by the coordinator's aggregator-fail helper (e.g., malformed reviewer JSON survived repair). `reviews/` left empty; the coordinator does not transition the status, so `gate-state.json.status` stays at the `"pending"` value the spawn wrote on entry, and re-spawn under `REVIEW_GATE_RERUN=1` recovers. |
+| `6` (preflight) | Fewer than 2 reviewers available before any model invocation. The coordinator has not yet touched `gate-state.json`, so no active gate is created; recovery is to re-invoke with `--agents` covering ≥2 available reviewers (or install the missing CLIs). `bin/review-gate resolve` does not apply because no gate was created. |
+| `6` (mid-debate) | Active reviewer count dropped below 2 during the run (abstentions / per-reviewer timeouts). The coordinator's degraded helper writes `gate-state.json.status="awaiting_decision"` with `consensus.verdict="requires_decision"` before exiting; resolve via `bin/review-gate resolve` or re-spawn under `REVIEW_GATE_RERUN=1`. |
+| `130` | SIGINT / Ctrl-C cancellation during a debate run. The coordinator's SIGINT handler defers exit so the in-flight round runs to completion (or hits per-reviewer timeout) before partial telemetry is written; `reviews/` is left empty and the coordinator does not transition status, so `gate-state.json.status` stays at the `"pending"` value the spawn wrote on entry. |
+
+The four codes above are the canonical exits from the named coordinator
+helpers (`_rdc_aggregator_fail_exit`, `_rdc_pre_round_degraded_exit`,
+`_rdc_degraded_exit`, `_rdc_cancel_exit`). If the coordinator instead returns
+a non-zero status from its own argument-validation paths (rather than calling
+one of those exit helpers), `bin/review-gate` falls back to exit code `1`,
+calls a defensive `_debate_mark_state_failed` helper that transitions
+`gate-state.json.status` to `"resolved"` with `consensus.verdict="ERROR"` and
+`decision.action="manual_resolve"`, and prints the recovery hint.
+`bin/review-gate resolve` is idempotent on a `"resolved"` state, and the
+active-gate guard treats `"resolved"` as not-active so a fresh re-spawn does
+not require `REVIEW_GATE_RERUN=1`.
+
+### Bare-spawn Whitelist
+
+`bin/review-gate spawn --debate` is only accepted when `--type` is one of
+`code`, `plan`, `spec`, or `epic-verify`. Any other `--type` (for example
+`healthcheck`, `architecture-review`) is rejected at preflight before any
+model is invoked. The four named `spawn-*-review` subcommands are always
+allowed.
+
+### Byte-parity Guarantee
+
+Every existing CI invocation that does NOT pass `--debate` is byte-for-byte
+identical to the prior plugin version, modulo `--help`, `--version`, and error
+messages for newly-rejected flag combinations. Reviewer prompts, persisted
+schemas, gate report markdown, and `gate-state.json` keys present before this
+release are preserved verbatim on the non-debate path.
+
+### Rollback
+
+To roll back debate mode:
+
+1. Drop `--debate` from the affected invocations, OR
+2. Revert the plugin to the prior version.
+
+There is **no env-var kill switch.** Debate is opt-in, scoped per invocation,
+and cannot be globally disabled by setting an environment variable.
+
 ## How It Works
 
 ```
@@ -344,6 +459,39 @@ Model override variables (override the mode-based defaults):
 | `GEMINI_MODEL_OVERRIDE` | Override Gemini model (e.g., `gemini-3.1-pro-preview`) |
 | `CLAUDE_MODEL_OVERRIDE` | Override Claude model (e.g., `sonnet`) |
 | `CODEX_REASONING_EFFORT_OVERRIDE` | Override Codex reasoning effort (`medium`/`high`/`xhigh`) |
+
+## Releasing
+
+### Debate Mode Manual Smoke Checks
+
+Before flagging the [Debate Mode](#debate-mode) feature for general use, the
+maintainer runs the following manual smoke checks. None of these are automated;
+they're judgment calls on real artifacts.
+
+1. **Gemini read-only policy under debate prompts.** Run `--debate` with the
+   Gemini reviewer included against a normal artifact. Confirm the Gemini CLI
+   Policy Engine (`config/gemini-readonly-policy.toml`) still blocks any write
+   tool — debate prompts inject anonymized peer broadcasts, and the smoke check
+   verifies that peer text cannot be used as a jailbreak surface to escape
+   read-only mode.
+2. **Confidence calibration.** Spot-check `overall_confidence` and
+   `findings[*].confidence` in per-reviewer JSONs across a few real runs.
+   Anchors should be visibly influencing reviewer behavior — values should NOT
+   look like all-0.9 or all-0.5. A finding the reviewer cannot evidence should
+   sit lower than one it can.
+3. **Token + wall-clock cost band per mode.** Run `--debate` against the same
+   artifact under each of `--mode fast`, `--mode smart`, and `--mode max`.
+   Confirm token cost and wall-clock latency land roughly within the bands
+   documented in [Cost & Latency](#cost--latency) (~2× for fast/smart, ~3× for
+   max; the 1.5×–3.5× band is fine).
+4. **Vibes review on at least 3 real artifacts.** Compare debate vs non-debate
+   gate reports side by side on at least three real artifacts the maintainer
+   has independent judgment on. Debate output should look at least as good as
+   non-debate; if it looks worse on aggregate, hold the release and
+   investigate.
+
+If any of the four checks fails, do not flag the feature for general use.
+Roll back via the documented [Rollback](#rollback) path.
 
 ## License
 

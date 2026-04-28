@@ -1,0 +1,19 @@
+{
+  "verdict": "NEEDS_WORK",
+  "summary": "Round-1 cold review; one P1 finding raised before any peer responses are visible.",
+  "overall_confidence": 0.8,
+  "findings": [
+    {
+      "priority": "P1",
+      "title": "Missing null check in handler",
+      "body": "Cold-read identification of an unguarded null dereference.",
+      "file_path": "src/handler.ts",
+      "line_start": 42,
+      "line_end": 48,
+      "confidence": 0.85
+    }
+  ],
+  "strategy": "verification-first",
+  "round": 1,
+  "peer_responses_seen": []
+}

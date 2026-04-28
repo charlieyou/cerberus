@@ -1,0 +1,10 @@
+{
+  "label": "N=3 full permutation: each strategy appears exactly once (artifact-1, [claude, codex, gemini])",
+  "artifact_id": "artifact-1",
+  "reviewers": ["claude", "codex", "gemini"],
+  "expected": [
+    ["claude", "falsification-first"],
+    ["codex", "verification-first"],
+    ["gemini", "decompose"]
+  ]
+}

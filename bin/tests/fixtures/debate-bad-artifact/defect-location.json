@@ -1,0 +1,8 @@
+{
+  "file_path": "service.py",
+  "line_start": 12,
+  "line_end": 22,
+  "priority": "P1",
+  "title_hint": "Hardcoded credential in login()",
+  "rationale": "The login function compares username/password against fixed string literals; any committed credential constitutes a P1 security defect. Range 12..22 covers the full login() function (signature on line 12 through `return False` on line 22) so any reviewer whose finding line range overlaps any line of the function body counts as flagging the planted defect."
+}

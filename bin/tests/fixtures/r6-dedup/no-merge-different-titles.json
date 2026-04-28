@@ -1,0 +1,69 @@
+{
+  "label": "No merge: identical priority + file_path + overlapping lines but different titles after [Px] strip + case-fold",
+  "consensus_mode": "majority",
+  "active_reviewers": ["claude", "codex"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "NEEDS_WORK",
+      "summary": "claude r2",
+      "overall_confidence": 0.7,
+      "findings": [
+        {
+          "priority": "P2",
+          "title": "Missing null check",
+          "body": "Claude title-A body.",
+          "file_path": "src/handler.ts",
+          "line_start": 10,
+          "line_end": 20,
+          "confidence": 0.7
+        }
+      ]
+    },
+    "codex": {
+      "verdict": "NEEDS_WORK",
+      "summary": "codex r2",
+      "overall_confidence": 0.7,
+      "findings": [
+        {
+          "priority": "P2",
+          "title": "Unhandled exception path",
+          "body": "Codex title-B body.",
+          "file_path": "src/handler.ts",
+          "line_start": 12,
+          "line_end": 18,
+          "confidence": 0.6
+        }
+      ]
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "NEEDS_WORK",
+    "summary": "NEEDS_WORK from 2 active final-round reviewers (claude, codex); 2 unique findings (P0:0 P1:0 P2:2 P3:0); avg overall_confidence 0.70.",
+    "findings": [
+      {
+        "priority": "P2",
+        "title": "Missing null check",
+        "body": "Claude title-A body.",
+        "file_path": "src/handler.ts",
+        "line_start": 10,
+        "line_end": 20,
+        "confidence": 0.7
+      },
+      {
+        "priority": "P2",
+        "title": "Unhandled exception path",
+        "body": "Codex title-B body.",
+        "file_path": "src/handler.ts",
+        "line_start": 12,
+        "line_end": 18,
+        "confidence": 0.6
+      }
+    ],
+    "consensus_mode": "majority",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first"}
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "label": "N=4 collision wrap (each strategy appears at least once; one duplicates)",
+  "artifact_id": "artifact-1",
+  "reviewers": ["alice", "bob", "carol", "dave"],
+  "expected": [
+    ["alice", "falsification-first"],
+    ["bob", "decompose"],
+    ["carol", "verification-first"],
+    ["dave", "falsification-first"]
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "label": "Majority no tie: {PASS@0.80, NEEDS_WORK@0.55, PASS@0.40} under majority → PASS (modal count 2 > 1; confidence not invoked)",
+  "consensus_mode": "majority",
+  "active_reviewers": ["claude", "codex", "gemini"],
+  "strategies": {"claude": "verification-first", "codex": "falsification-first", "gemini": "decompose"},
+  "rounds_consumed": 2,
+  "augmented": {
+    "claude": {
+      "verdict": "PASS",
+      "summary": "claude r2",
+      "overall_confidence": 0.8,
+      "findings": []
+    },
+    "codex": {
+      "verdict": "NEEDS_WORK",
+      "summary": "codex r2",
+      "overall_confidence": 0.55,
+      "findings": []
+    },
+    "gemini": {
+      "verdict": "PASS",
+      "summary": "gemini r2",
+      "overall_confidence": 0.4,
+      "findings": []
+    }
+  },
+  "expected_aggregate": {
+    "verdict": "PASS",
+    "summary": "PASS from 3 active final-round reviewers (claude, codex, gemini); 0 unique findings (P0:0 P1:0 P2:0 P3:0); avg overall_confidence 0.58.",
+    "findings": [],
+    "consensus_mode": "majority",
+    "rounds_consumed": 2,
+    "reviewers": ["claude", "codex", "gemini"],
+    "strategies": {"claude": "verification-first", "codex": "falsification-first", "gemini": "decompose"}
+  }
+}
