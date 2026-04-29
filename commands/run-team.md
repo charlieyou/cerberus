@@ -13,6 +13,7 @@ Run a strictly serial agent-team implementation loop from a `*-team-tasks.md` fi
 - The lead may call `TaskUpdate(owner: ...)` and `TaskUpdate(status: "deleted")` for cancellation, but must never move a task to `completed`.
 - The lead never edits repository files. The lead may write per-task state files under `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/` via Bash.
 - The lead never invokes `/cerberus:review-code` directly. Code review fires automatically from the `TaskCompleted` hook.
+- The lead minimizes human intervention. Do not ask the user to confirm routine choices; choose the safest documented default and proceed. Ask at most one focused question only when continuing could mutate user work incorrectly, require credentials/secrets, deploy or publish externally, run destructive commands, or choose between materially ambiguous task inputs. When a safe automated choice is unavailable, prefer aborting with exact recovery steps over asking for preferences.
 - Scheduling is strictly serial: run at most one implementer teammate at a time.
 - Every implementer teammate spawned with `Agent` MUST request `model: "opus"`; do not omit the model or spawn lower-tier teammates.
 - Implementer teammates are single-use. After a teammate reaches a terminal idle and its outcome is classified, do not message it again; the plugin's `TeammateIdle` hook suppresses duplicate idle notifications for parked teammates.
@@ -59,19 +60,19 @@ Abort with a clear error if any hard gate fails.
 3. For each task, parse the first fenced block immediately under the heading as `meta`; the body extends from after that fence until the next `## ` heading at column 0 or EOF.
 4. Build a dependency graph from `depends: [...]`; abort on unknown task IDs or cycles.
 5. Resolve `--max-review-rounds` as an integer greater than zero, default `5`.
-6. Resolve `--skip-verify` for the final epic verifier only, default false. This flag does not skip the per-task project verification gate confirmed in Phase 1.5.
+6. Resolve `--skip-verify` for the final epic verifier only, default false. This flag does not skip the per-task project verification gate resolved in Phase 1.5.
 
-## Phase 1.5: Confirm Verification Gate
+## Phase 1.5: Resolve Verification Gate
 
 Before creating the team or any TaskList tasks, determine the project-specific verification commands that must pass after each teammate completion and before code review.
 
 1. Inspect repository guidance and automation in this order: applicable `AGENTS.md` instructions, README or contributor docs, CI workflow files, package/build manifests (`package.json`, `Makefile`, `pyproject.toml`, `tox.ini`, `noxfile.py`, `Cargo.toml`, `go.mod`, etc.), and existing test/lint scripts.
 2. Choose the smallest command set that collectively covers lint/static checks, build/typecheck/compile, and tests for this repository. Prefer documented or CI-backed commands over invented commands. Avoid deployment, publishing, destructive cleanup, watch modes, or commands that require secrets unless the repo guidance explicitly requires them.
-3. Present the proposed verification gate to the user before starting the team. Include the exact commands, why each command was selected, any checks you could not find, and whether the gate is expected to be long-running.
-4. Ask the user to confirm or edit the command list. Do not call `TeamCreate`, `TaskCreate`, or `Agent` until the user explicitly confirms the verification gate.
-5. If the user confirms that no automated verification should run, use an explicit no-op script that prints that decision. Do not silently omit the verification script.
+3. Do not ask for confirmation when the commands are documented, CI-backed, or strongly implied by standard project manifests. Proceed with the selected gate and record the command list plus any missing coverage categories for the final report.
+4. If only partial safe coverage is discoverable, proceed with the best safe gate rather than blocking. If no safe automated verification command is discoverable, write an explicit no-op script that prints that no safe verification command was found; do not silently omit the verification script.
+5. Ask the user before team creation only for a super-important decision: every viable command is destructive, deploys/publishes externally, requires secrets/credentials, would mutate production data, or the task source is materially ambiguous and choosing wrong would send implementers at the wrong work. If asking is necessary, ask one concrete question with the safest default and do not ask follow-up preferences.
 
-The confirmed commands are authoritative for this run. The implementer may run targeted checks while working, but completion is blocked unless the confirmed gate passes inside the `TaskCompleted` hook.
+The resolved commands are authoritative for this run. The implementer may run targeted checks while working, but completion is blocked unless the resolved gate passes inside the `TaskCompleted` hook.
 
 ## Phase 2: Team Setup
 
@@ -87,7 +88,7 @@ fi
 mkdir -p "$state_root"
 ```
 
-Write the user-confirmed verification gate into the run state before creating the team:
+Write the resolved verification gate into the run state before creating the team:
 
 ```bash
 verify_script_path="${state_root}/verify.sh"
@@ -95,12 +96,12 @@ cat > "$verify_script_path" <<'CERBERUS_VERIFY'
 #!/usr/bin/env bash
 set -euo pipefail
 
-<user-confirmed verification commands>
+<resolved verification commands>
 CERBERUS_VERIFY
 chmod +x "$verify_script_path"
 ```
 
-This script must be project-specific. It is run by the `TaskCompleted` hook after the implementer's commits and trailer checks pass, but before `spawn-code-review` starts reviewers.
+This script should be project-specific when safe commands are discoverable. If the no-op fallback is used, it must print that no safe automated verification command was found. The script is run by the `TaskCompleted` hook after the implementer's commits and trailer checks pass, but before `spawn-code-review` starts reviewers.
 
 Create the team:
 
@@ -126,7 +127,7 @@ mkdir -p "$state_dir"
 cat > "$task_context_path" <<'TASK_CONTEXT'
 <task heading, meta files/dependencies/acceptance, and full task body>
 
-## Confirmed Pre-Review Verification Gate
+## Resolved Pre-Review Verification Gate
 
 The TaskCompleted hook will run this script after teammate completion and before code review:
 <verify_script_path>
@@ -192,7 +193,7 @@ Agent({
   subagent_type: "implementer",
   model: "opus",
   description: "T### implement <subject>",
-  prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. Task spec: <task_context_path>. Read that file once at startup; it is the canonical task body. State dir: <state_dir>. The lead-confirmed verification gate is <verify_script_path>; the TaskCompleted hook will run it before code review and will block completion if it fails. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience, but immediately before TaskUpdate(status:'completed') you MUST run exactly: touch \"<state_dir>/completion_intent\". Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, commit with trailer Cerberus-Task: T###, and follow the implementer agent rules."
+  prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. Task spec: <task_context_path>. Read that file once at startup; it is the canonical task body. State dir: <state_dir>. The lead-resolved verification gate is <verify_script_path>; the TaskCompleted hook will run it before code review and will block completion if it fails. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience, but immediately before TaskUpdate(status:'completed') you MUST run exactly: touch \"<state_dir>/completion_intent\". Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, commit with trailer Cerberus-Task: T###, and follow the implementer agent rules."
 })
 ```
 
@@ -202,9 +203,9 @@ Wait for the teammate to go idle. On the first `TeammateIdle`, inspect `TaskGet(
 
 Classify the running task into exactly one category.
 
-- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the confirmed project-specific verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits in `baseline_sha..HEAD`, delete `state_dir`, and schedule the next ready task without messaging the completed teammate.
+- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the resolved project verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits in `baseline_sha..HEAD`, delete `state_dir`, and schedule the next ready task without messaging the completed teammate.
 - **needs-human**: teammate sent `STATUS: NEEDS_HUMAN T###` while the Claude task remains `in_progress`, or `exhausted` exists while the task remains `in_progress`. Mark failed, retain `state_dir`, stop scheduling.
-- **unverified-failure**: task status is `completed` but `verified_pass` or `reviewed_pass` is absent, `verified_head` or `reviewed_head` does not equal current `HEAD`, or task status is `completed` while `exhausted` exists. Missing `verified_pass` means the confirmed project verification gate did not run or did not pass before completion; missing `reviewed_pass` means code review did not run or did not pass; head mismatch means the current code differs from what was verified or reviewed. The completed-plus-exhausted case should be impossible in the normal hook path, but the lead defends against stale/tampered state or runtime variance. Mark failed, retain `state_dir`, stop scheduling.
+- **unverified-failure**: task status is `completed` but `verified_pass` or `reviewed_pass` is absent, `verified_head` or `reviewed_head` does not equal current `HEAD`, or task status is `completed` while `exhausted` exists. Missing `verified_pass` means the resolved project verification gate did not run or did not pass before completion; missing `reviewed_pass` means code review did not run or did not pass; head mismatch means the current code differs from what was verified or reviewed. The completed-plus-exhausted case should be impossible in the normal hook path, but the lead defends against stale/tampered state or runtime variance. Mark failed, retain `state_dir`, stop scheduling.
 - **infra-failure**: `last_error` exists. Mark failed, retain `state_dir`, include raw `last_error` in the final report, stop scheduling.
 - **abandoned**: teammate went idle with task still `in_progress` and no `exhausted`, no `last_error`, and no `STATUS: NEEDS_HUMAN` message. Mark failed, retain `state_dir`, stop scheduling.
 
@@ -261,7 +262,7 @@ Report:
 
 - Team name and `team_hash`.
 - Team tasks file path.
-- Confirmed per-task verification gate commands.
+- Resolved per-task verification gate commands, including any missing coverage categories or no-op fallback reason.
 - Table of tasks with `passed`, `failed`, or `skipped`, including commit ranges for passed tasks.
 - Failed task category: `needs-human`, `unverified-failure`, `infra-failure`, or `abandoned`.
 - For failures: baseline SHA, retained state directory, raw `last_error` if present, and manual recovery options such as `git reset --hard <baseline_sha>` or `git revert <commit_range>`.

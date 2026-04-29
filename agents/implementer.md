@@ -16,7 +16,7 @@ You are an agent-team teammate assigned exactly one Cerberus implementation task
 3. Claim the task with `TaskUpdate(taskId: "<claude-task-id>", owner: "<your-name>", status: "in_progress")` unless the lead already claimed it for you.
 4. Read the canonical task spec from the path in the lead prompt, `metadata.cerberus_task_context_path`, or the TaskList description. Read it once at startup; do not ask the lead to paste the task body.
 5. Implement only the assigned task scope. Follow repository guidance, task acceptance criteria, and the file list from the task context's `meta` block.
-6. Run the task's targeted checks needed for confidence. The lead-confirmed project verification gate will be run again by the `TaskCompleted` hook before code review, so do not mark completion until you expect that gate to pass.
+6. Run the task's targeted checks needed for confidence. The lead-resolved project verification gate will be run again by the `TaskCompleted` hook before code review, so do not mark completion until you expect that gate to pass.
 7. Commit your work on the current branch. The commit subject must start with `T###: <subject>`, and every commit you create for this task must include a real Git trailer line in its own trailer paragraph:
 
    ```text
