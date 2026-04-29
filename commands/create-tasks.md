@@ -1,11 +1,11 @@
 ---
-description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear-project/--linear-new-project), agent-team tasks (--agent-team), or TODO.md
-argument-hint: [--beads | --linear-project <project> | --linear-new-project | --agent-team] [--linear-project-name <name>] [--linear-team <team>] [--from-plan <path/to/plan.md>]
+description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear), agent-team tasks (--agent-team), or TODO.md
+argument-hint: [--beads | --linear [project] | --agent-team] [--linear-team <team>] [--from-plan <path/to/plan.md>]
 ---
 
 # Create Tasks (Plan → Execution Artifacts)
 
-Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear-project` or `--linear-new-project`), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
+Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear`), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
 > **Downstream**: Output is validated by `/review-tasks` for local/Beads artifacts, or by applying the same validation checks before creating Linear issues.
@@ -24,17 +24,21 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 |------|--------|----------|
 | (default) | `TODO.md` in plan directory | Quick projects, no issue tracker |
 | `--beads` | Beads issues with dependencies | Multi-agent parallelization, tracked work |
-| `--linear-project <project>` | Linear issues added to an existing Linear project by ID, URL, or name | Teams already coordinating work in Linear |
-| `--linear-new-project` | New Linear project plus Linear issues | New tracked initiative in Linear |
+| `--linear [project]` | Linear issues in an existing or newly confirmed Linear project | Teams coordinating work in Linear |
 | `--agent-team` | `*-team-tasks.md` next to the plan | Autonomous implementer/reviewer team loop via `/cerberus:run-team` |
 
-Output modes are mutually exclusive. If more than one of `--beads`, `--linear-project`, `--linear-new-project`, or `--agent-team` is supplied, abort before generating output.
+Output modes are mutually exclusive. If more than one of `--beads`, `--linear`, or `--agent-team` is supplied, abort before generating output.
 
 Linear mode details:
-- `--linear-project <id|url|name>` adds generated task issues to an existing Linear project.
-- `--linear-new-project` creates a Linear project first, then adds the task issues to it.
-- `--linear-project-name <name>` overrides the default new project name, which is derived from the plan title. If supplied without `--linear-new-project`, abort before generating output.
-- `--linear-team <key|id>` selects the Linear team used for project creation and issue creation. If supplied without `--linear-project` or `--linear-new-project`, abort before generating output. Ask one short clarifying question before creating anything if a team is required and cannot be inferred unambiguously.
+- `--linear` enables Linear output. With no project value, derive the project name from the plan title.
+- `--linear <id|url|name>` targets a specific Linear project by ID, URL, or exact name. If a name has no exact match, ask whether to create a new project with that name instead of making the user rerun with a different flag.
+- `--linear-team <key|id|name>` is optional and only disambiguates team selection. If supplied without `--linear`, abort before generating output.
+- Ask one short clarifying question before creating anything when the project or team cannot be inferred unambiguously.
+
+Linear examples:
+- `/cerberus:create-tasks --linear` uses the plan title as the Linear project name.
+- `/cerberus:create-tasks --linear "Plugin Port"` targets or, after confirmation, creates a project named `Plugin Port`.
+- `/cerberus:create-tasks --linear "Plugin Port" --linear-team ENG` disambiguates the Linear team only when needed.
 
 ## Input
 
@@ -609,9 +613,9 @@ Use the **beads skill** to create issues. Follow these patterns:
    br ready
    ```
 
-#### If a Linear project flag is set:
+#### If `--linear` flag is set:
 
-Use the available Linear integration (MCP tools, CLI, or API client configured in the environment) to create or update Linear issues. Do not create any Linear objects until Phase 5 validation passes.
+Use the available Linear integration (MCP tools, CLI, or API client configured in the environment) to create or update Linear issues. Do not create any Linear objects until Phase 5 validation passes and project/team resolution is complete.
 
 ##### Linear Project Resolution
 
@@ -619,23 +623,25 @@ Use the available Linear integration (MCP tools, CLI, or API client configured i
    - Verify Linear tooling is available and authenticated before creating anything.
    - If Linear tooling is unavailable, abort with a clear message unless the user explicitly requested TODO.md fallback in the same request.
 
-2. **Existing project mode** (`--linear-project <id|url|name>`):
-   - Resolve by project ID or URL first.
-   - If a name is provided, search Linear projects and require an exact unique match.
-   - If multiple projects match, ask the user to choose before creating issues.
-   - If no project matches, abort with guidance to use `--linear-new-project` or provide a valid project ID/URL.
+2. **Resolve the project target**:
+   - Let the project target be the value after `--linear`. If no value is supplied, or the next token is another flag, use the plan title as the desired Linear project name.
+   - If the target is a Linear project ID or URL, resolve it directly. If it does not resolve, abort; do not reinterpret an invalid ID/URL as a new project name.
+   - Otherwise, treat the target as a project name. Search active Linear projects for an exact unique match before creating anything.
+   - If exactly one project matches, use it.
+   - If multiple projects match, ask the user to choose by project URL/ID before creating issues.
+   - If no project matches, plan to create a project with that name. Ask one short confirmation question after team resolution instead of requiring a different flag.
 
-3. **New project mode** (`--linear-new-project`):
-   - Derive the project name from `--linear-project-name <name>` if supplied; otherwise use the plan title.
-   - Search active Linear projects for the same name before creating a new project.
-   - If an exact same-name project exists, ask whether to use the existing project or create a new project with a distinct name.
-   - Create the project only after resolving the Linear team.
-
-4. **Team resolution**:
-   - Linear issues require a team. Use `--linear-team <key|id>` when supplied.
+3. **Resolve the team**:
+   - Linear issues require a team. Use `--linear-team <key|id|name>` when supplied.
    - When `--linear-team` is supplied for an existing project, verify that the team is compatible with the project before creating or updating issues. If it conflicts, abort rather than guessing.
    - For an existing project with exactly one associated team, use that team if `--linear-team` is omitted.
-   - If the project spans multiple teams, or a new project is requested without a clear team, ask one short clarifying question before creating anything.
+   - For a new project, use `--linear-team` if supplied. Otherwise, use the only available Linear team or an unambiguous workspace default if the tooling exposes one.
+   - If the project spans multiple teams, or a new project needs a team that cannot be inferred, ask one short clarifying question before creating anything.
+
+4. **Create the project only when needed**:
+   - If an existing project was resolved, do not create another project.
+   - If no project matched by name, create the new project only after resolving the team and confirming the project name with the user.
+   - Do not ask the user to rerun with a separate "new project" flag; `--linear` covers both reuse and confirmed creation.
 
 ##### Linear Priority Mapping
 
@@ -776,10 +782,11 @@ Handled by Phase 2 "Missing referenced artifact gate". Summary:
 - **Beads not available**: Fall back to TODO.md with warning
 - **`br` command fails mid-run**: Stop immediately, report what was created, don't leave half-created epic graph
 - **Linear tooling not available**: Abort with a clear message unless the user explicitly requested TODO.md fallback in the same request
-- **Linear project name is ambiguous**: Ask the user to choose a project ID/URL before creating or updating issues
-- **Linear team is ambiguous or missing**: Ask the user for `--linear-team <key|id>` before creating a project or issues
+- **Linear project target is ambiguous**: Ask the user to choose a project ID/URL before creating or updating issues
+- **Linear project ID/URL is invalid**: Abort with a clear message and ask for a valid project ID/URL or a project name
+- **Linear team is ambiguous or missing**: Ask the user for a team key, ID, or name before creating a project or issues
 - **Linear issue creation fails mid-run**: Stop immediately, report the created/updated issue map, and do not attempt dependency relations for missing issues
 - **Linear dependency creation fails mid-run**: Backfill dependency links into descriptions for every missing relation, then report the run as partial/incomplete
 - **Existing TODO.md**: Ask whether to overwrite or append
 - **Existing Beads epic for this feature**: Ask whether to add tasks to existing epic or create new one
-- **Existing Linear project for this feature**: If `--linear-new-project` would duplicate an exact project name, ask whether to use the existing project or create a new project with a distinct name
+- **Existing Linear project for this feature**: Use the exact matching project by default; ask only when multiple exact matches exist or the user explicitly asks for a distinct project name
