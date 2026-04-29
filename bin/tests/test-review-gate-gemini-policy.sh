@@ -95,8 +95,15 @@ case " \$* " in
     *) echo "missing --approval-mode plan" >&2; exit 11 ;;
 esac
 case " \$* " in
-    *" --skip-trust "*) ;;
-    *) echo "missing --skip-trust" >&2; exit 12 ;;
+    *" --output-format json "*) ;;
+    *) echo "missing --output-format json" >&2; exit 10 ;;
+esac
+case " \$* " in
+    *" -p  "*|*" --prompt  "*) ;;
+    *) echo "missing headless prompt flag" >&2; exit 12 ;;
+esac
+case " \$* " in
+    *"--skip-trust"*|*"--skipTrust"*) echo "unsupported skip-trust flag" >&2; exit 21 ;;
 esac
 case " \$* " in
     *" --policy "*) ;;
@@ -132,7 +139,8 @@ if ! "$GREP_BIN" -q 'decision = "deny"' "\$policy_path"; then
     exit 20
 fi
 
-printf '%s' '{"verdict":"PASS","summary":"ok","findings":[]}'
+echo "Gemini warning/preamble" >&2
+printf '%s' '{"response":"{\"verdict\":\"PASS\",\"summary\":\"ok\",\"findings\":[]}","stats":{}}'
 EOF
 
 chmod +x "$FAKE_BIN/nohup" "$FAKE_BIN/mkdir" "$FAKE_BIN/touch" "$FAKE_BIN/gemini"
@@ -154,7 +162,7 @@ export CLAUDE_MODEL=""
 log_test "spawn_reviewer invokes gemini with Policy Engine read-only controls"
 
 env \
-    PATH="$FAKE_BIN" \
+    PATH="$FAKE_BIN:$PATH" \
     PLUGIN_ROOT="$PLUGIN_ROOT" \
     REVIEWS_DIR="$REVIEWS_DIR" \
     GEMINI_MODEL="$GEMINI_MODEL" \
@@ -163,6 +171,7 @@ env \
     PROMPT_FILE="$PROMPT_FILE" \
     SCHEMA_FILE="$SCHEMA_FILE" \
     "$RUNNER_BASH" -c '
+        source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
         source "$PLUGIN_ROOT/bin/review-gate-models.sh"
         spawn_reviewer gemini gemini "$PROMPT_FILE" "$SCHEMA_FILE"
     '
@@ -196,6 +205,10 @@ if [[ "$gemini_args" == *"--allowed-tools"* ]]; then
     log_fail "gemini should not receive deprecated --allowed-tools, got: $gemini_args"
 fi
 
+if [[ "$gemini_args" == *"--skip-trust"* || "$gemini_args" == *"--skipTrust"* ]]; then
+    log_fail "gemini should not receive unsupported skip-trust flags, got: $gemini_args"
+fi
+
 settings_path=$("$CAT_BIN" "$GEMINI_SETTINGS_FILE")
 if [[ "$settings_path" != "$PLUGIN_ROOT/config/gemini-readonly-settings.json" ]]; then
     log_fail "expected system settings path to point at Cerberus config, got: $settings_path"
@@ -206,9 +219,50 @@ if [[ "$policy_path" != "$PLUGIN_ROOT/config/gemini-readonly-policy.toml" ]]; th
     log_fail "expected policy path to point at Cerberus policy, got: $policy_path"
 fi
 
-output=$("$CAT_BIN" "$REVIEWS_DIR/gemini.json")
+output=$(
+    env \
+        PATH="$FAKE_BIN:$PATH" \
+        PLUGIN_ROOT="$PLUGIN_ROOT" \
+        REVIEWS_DIR="$REVIEWS_DIR" \
+        REVIEW_REPAIR_ENABLED="false" \
+        "$RUNNER_BASH" -c '
+            source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
+            source "$PLUGIN_ROOT/bin/review-gate-models.sh"
+            extract_json "$REVIEWS_DIR/gemini.json" gemini
+        '
+)
 if [[ "$output" != *'"verdict":"PASS"'* ]]; then
-    log_fail "expected reviewer verdict to be written to gemini.json, got: $output"
+    log_fail "expected extract_json to normalize gemini wrapper output, got: $output"
 fi
 
 log_pass "gemini reviewer uses policy-based read-only invocation"
+
+log_test "repair_review_output invokes gemini with Policy Engine read-only controls"
+
+repair_output=$(
+    env \
+        PATH="$FAKE_BIN:$PATH" \
+        PLUGIN_ROOT="$PLUGIN_ROOT" \
+        REVIEWS_DIR="$REVIEWS_DIR" \
+        REVIEW_REPAIR_PROVIDER="gemini" \
+        SCHEMA_FILE="$SCHEMA_FILE" \
+        "$RUNNER_BASH" -c '
+            source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
+            source "$PLUGIN_ROOT/bin/review-gate-models.sh"
+            repair_review_output "not json" "$SCHEMA_FILE" gemini unit_test
+        '
+)
+
+if [[ "$repair_output" != *'"verdict":"PASS"'* ]]; then
+    log_fail "expected repair_review_output to return normalized gemini JSON, got: $repair_output"
+fi
+
+gemini_args=$("$CAT_BIN" "$GEMINI_ARGS_FILE")
+if [[ "$gemini_args" == *"--allowed-tools"* ]]; then
+    log_fail "gemini repair should not receive deprecated --allowed-tools, got: $gemini_args"
+fi
+if [[ "$gemini_args" == *"--skip-trust"* || "$gemini_args" == *"--skipTrust"* ]]; then
+    log_fail "gemini repair should not receive unsupported skip-trust flags, got: $gemini_args"
+fi
+
+log_pass "gemini repair uses policy-based read-only invocation"

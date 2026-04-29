@@ -413,9 +413,9 @@ repair_review_output() {
                 rg_log "review-gate: repair_json gemini missing read-only policy"
             else
                 if GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings" \
-                    gemini -m "$model" --approval-mode plan --skip-trust \
+                    gemini -m "$model" --approval-mode plan -p "" \
                         --policy "$gemini_policy" --admin-policy "$gemini_policy" \
-                        -o json < "$prompt_file" > "$out_file" 2>&1; then
+                        --output-format json < "$prompt_file" > "$out_file" 2>&1; then
                     # Use extract_last_json_object directly (consistent with extract_json)
                     # This handles arbitrary preamble/noise before JSON
                     repaired=$(extract_last_json_object "$out_file" "false" 2>/dev/null || true)
@@ -838,7 +838,7 @@ spawn_reviewer() {
                 if [[ -n "${REVIEW_TIMEOUT_BIN:-}" && -n "${REVIEW_TIMEOUT:-}" ]]; then
                     timeout_prefix=("$REVIEW_TIMEOUT_BIN" "$REVIEW_TIMEOUT")
                 fi
-                if "${timeout_prefix[@]}" gemini -m "$REVIEW_MODEL" --approval-mode plan --skip-trust --policy "$REVIEW_POLICY" --admin-policy "$REVIEW_POLICY" -o json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
+                if "${timeout_prefix[@]}" gemini -m "$REVIEW_MODEL" --approval-mode plan -p "" --policy "$REVIEW_POLICY" --admin-policy "$REVIEW_POLICY" --output-format json < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
                     touch "$REVIEW_DONE"
                 else
                     touch "$REVIEW_FAIL"

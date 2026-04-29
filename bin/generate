@@ -185,7 +185,7 @@ extract_codex_content() {
 }
 
 # Extract content from Gemini JSON output
-# Gemini -o json can return various structures similar to Claude
+# Gemini --output-format json can return various structures similar to Claude
 extract_gemini_content() {
     local raw_file="$1"
     local json_file="$raw_file"
@@ -523,9 +523,9 @@ review_gate_generate() {
                 export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$gemini_settings"
 
                 if [[ "$gemini_json_mode" == "true" ]]; then
-                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan -p "" \
                             --policy "$gemini_policy" --admin-policy "$gemini_policy" \
-                            -o json < "$prompt_input" > "$gemini_raw" 2>&1; then
+                            --output-format json < "$prompt_input" > "$gemini_raw" 2>&1; then
                         extract_gemini_content "$gemini_raw" > "$gemini_draft"
                         safe_extract_telemetry gemini "$gemini_raw" > "$gemini_stats"
                         touch "$gemini_done"
@@ -534,9 +534,9 @@ review_gate_generate() {
                     fi
                 else
                     # Fallback to text mode
-                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan --skip-trust \
+                    if "${timeout_prefix[@]}" gemini -m "$gemini_model" --approval-mode plan -p "" \
                             --policy "$gemini_policy" --admin-policy "$gemini_policy" \
-                            -o text < "$prompt_input" > "$gemini_draft" 2>&1; then
+                            --output-format text < "$prompt_input" > "$gemini_draft" 2>&1; then
                         _emit_empty_telemetry gemini > "$gemini_stats"
                         touch "$gemini_done"
                     else
