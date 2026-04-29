@@ -1,14 +1,14 @@
 ---
-description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), agent-team tasks (--agent-team), or TODO.md
-argument-hint: [--beads | --agent-team] [--from-plan <path/to/plan.md>]
+description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear-project/--linear-new-project), agent-team tasks (--agent-team), or TODO.md
+argument-hint: [--beads | --linear-project <project> | --linear-new-project | --agent-team] [--linear-project-name <name>] [--linear-team <team>] [--from-plan <path/to/plan.md>]
 ---
 
 # Create Tasks (Plan → Execution Artifacts)
 
-Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
+Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear-project` or `--linear-new-project`), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
-> **Downstream**: Output is validated by `/review-tasks`.
+> **Downstream**: Output is validated by `/review-tasks` for local/Beads artifacts, or by applying the same validation checks before creating Linear issues.
 
 ## The No-Stragglers Invariant
 
@@ -24,9 +24,17 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 |------|--------|----------|
 | (default) | `TODO.md` in plan directory | Quick projects, no issue tracker |
 | `--beads` | Beads issues with dependencies | Multi-agent parallelization, tracked work |
+| `--linear-project <project>` | Linear issues added to an existing Linear project by ID, URL, or name | Teams already coordinating work in Linear |
+| `--linear-new-project` | New Linear project plus Linear issues | New tracked initiative in Linear |
 | `--agent-team` | `*-team-tasks.md` next to the plan | Autonomous implementer/reviewer team loop via `/cerberus:run-team` |
 
-`--beads` and `--agent-team` are mutually exclusive. If both are supplied, abort before generating output.
+Output modes are mutually exclusive. If more than one of `--beads`, `--linear-project`, `--linear-new-project`, or `--agent-team` is supplied, abort before generating output.
+
+Linear mode details:
+- `--linear-project <id|url|name>` adds generated task issues to an existing Linear project.
+- `--linear-new-project` creates a Linear project first, then adds the task issues to it.
+- `--linear-project-name <name>` overrides the default new project name, which is derived from the plan title. If supplied without `--linear-new-project`, abort before generating output.
+- `--linear-team <key|id>` selects the Linear team used for project creation and issue creation. If supplied without `--linear-project` or `--linear-new-project`, abort before generating output. Ask one short clarifying question before creating anything if a team is required and cannot be inferred unambiguously.
 
 ## Input
 
@@ -595,12 +603,84 @@ Use the **beads skill** to create issues. Follow these patterns:
    ```
    
    **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
-   ```
 
 5. **Verify the task graph**:
    ```bash
    br ready
    ```
+
+#### If a Linear project flag is set:
+
+Use the available Linear integration (MCP tools, CLI, or API client configured in the environment) to create or update Linear issues. Do not create any Linear objects until Phase 5 validation passes.
+
+##### Linear Project Resolution
+
+1. **Authenticate/tooling gate**:
+   - Verify Linear tooling is available and authenticated before creating anything.
+   - If Linear tooling is unavailable, abort with a clear message unless the user explicitly requested TODO.md fallback in the same request.
+
+2. **Existing project mode** (`--linear-project <id|url|name>`):
+   - Resolve by project ID or URL first.
+   - If a name is provided, search Linear projects and require an exact unique match.
+   - If multiple projects match, ask the user to choose before creating issues.
+   - If no project matches, abort with guidance to use `--linear-new-project` or provide a valid project ID/URL.
+
+3. **New project mode** (`--linear-new-project`):
+   - Derive the project name from `--linear-project-name <name>` if supplied; otherwise use the plan title.
+   - Search active Linear projects for the same name before creating a new project.
+   - If an exact same-name project exists, ask whether to use the existing project or create a new project with a distinct name.
+   - Create the project only after resolving the Linear team.
+
+4. **Team resolution**:
+   - Linear issues require a team. Use `--linear-team <key|id>` when supplied.
+   - When `--linear-team` is supplied for an existing project, verify that the team is compatible with the project before creating or updating issues. If it conflicts, abort rather than guessing.
+   - For an existing project with exactly one associated team, use that team if `--linear-team` is omitted.
+   - If the project spans multiple teams, or a new project is requested without a clear team, ask one short clarifying question before creating anything.
+
+##### Linear Priority Mapping
+
+| Task Priority | Linear Priority |
+|---------------|-----------------|
+| P0 | Urgent |
+| P1 | High |
+| P2 | Medium |
+| P3 | Low |
+| P4 | No priority |
+
+##### Linear Issue Creation Flow
+
+1. **De-duplicate within the target project first**:
+   - List existing non-archived issues in the target Linear project, including open and recently closed issues.
+   - Compute a stable Cerberus task marker for each generated task from the plan path, plan title, normalized task title without the `T###` prefix, primary files, and source document anchors. Do not include the generated sequence number alone in this marker.
+   - Match existing issues by the Cerberus task marker in the issue description first. Treat `[T###]` in the title as display-only, not as identity.
+   - If no marker exists on older issues, fall back to normalized title plus primary files only when the match is exact and unique.
+   - If an exact task match exists, update its title, description, priority, labels, and project assignment instead of creating a duplicate.
+   - If a partial overlap exists, note the relationship in the description and ask before merging or skipping the generated task.
+
+2. **Create or update one Linear issue per generated task**:
+   - Title format: `[T001] Task title`.
+   - Project: resolved Linear project.
+   - Team: resolved Linear team.
+   - Priority: mapped from the generated task priority.
+   - Labels: include `cerberus`; include phase/story labels when the Linear workspace already uses compatible labels.
+   - Description: start with a visible `Cerberus Sync` block containing the plan path, task marker, generated task ID, and generated timestamp. Then include the full Phase 4 task spec, preserving Source Documents, Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
+
+3. **Keep a task-to-issue map**:
+   ```text
+   T001 -> LIN-123
+   T002 -> LIN-124
+   ```
+   Use this map for dependencies and the Phase 7 report.
+
+4. **Add Linear dependency relations after all issues exist**:
+   - For each task dependency `T002 → T001`, set the Linear relation so the `T001` issue blocks the `T002` issue.
+   - Add dependency links to each issue description if the Linear tooling cannot create native blocking relations.
+   - If native dependency creation fails partway through, backfill explicit dependency links into the descriptions for every missing relation before stopping. Report the run as partial/incomplete and list any relation that could not be represented.
+
+5. **Verify the Linear project graph**:
+   - Re-list the target project issues and confirm every generated task ID maps to exactly one Linear issue.
+   - Confirm all generated dependencies are represented as Linear blocking relations or explicit dependency links in descriptions.
+   - Confirm the project URL/ID, issue count, updated issue count, and created issue count for Phase 7.
 
 #### If `--agent-team` flag is set:
 
@@ -625,7 +705,7 @@ Use `templates/team-tasks-template.md` as the canonical schema. This format is i
 - Include all source document links, sizing notes, dependencies, verification steps, and acceptance criteria from the validated Phase 4 task specs.
 - Report the output path and total task count in Phase 7.
 
-#### If neither `--beads` nor `--agent-team` is set (default):
+#### If no output flag is set (default):
 
 Generate `TODO.md` in the same directory as the plan.
 
@@ -648,7 +728,8 @@ Output summary:
 ```
 ## Tasks Generated
 
-**Output**: [TODO.md path] or [team-tasks.md path] or [Beads epic ID]
+**Output**: [TODO.md path] or [team-tasks.md path] or [Beads epic ID] or [Linear project URL/ID]
+**Linear Issues**: Created X, updated Y (only for Linear output)
 **Total Tasks**: N
 **Phases**: X
 **Parallelizable**: M tasks can run concurrently
@@ -667,7 +748,7 @@ Output summary:
 - 5/5 acceptance criteria mapped to tasks
 
 ### Ready to Execute
-Run `/implement` to begin execution, or review TODO.md first.
+Run `/implement` to begin execution, review TODO.md first, or start from the Linear project backlog.
 ```
 
 ## Quality Checks
@@ -693,6 +774,12 @@ Handled by Phase 2 "Missing referenced artifact gate". Summary:
 
 ### Output Issues
 - **Beads not available**: Fall back to TODO.md with warning
-- **`bd` command fails mid-run**: Stop immediately, report what was created, don't leave half-created epic graph
+- **`br` command fails mid-run**: Stop immediately, report what was created, don't leave half-created epic graph
+- **Linear tooling not available**: Abort with a clear message unless the user explicitly requested TODO.md fallback in the same request
+- **Linear project name is ambiguous**: Ask the user to choose a project ID/URL before creating or updating issues
+- **Linear team is ambiguous or missing**: Ask the user for `--linear-team <key|id>` before creating a project or issues
+- **Linear issue creation fails mid-run**: Stop immediately, report the created/updated issue map, and do not attempt dependency relations for missing issues
+- **Linear dependency creation fails mid-run**: Backfill dependency links into descriptions for every missing relation, then report the run as partial/incomplete
 - **Existing TODO.md**: Ask whether to overwrite or append
 - **Existing Beads epic for this feature**: Ask whether to add tasks to existing epic or create new one
+- **Existing Linear project for this feature**: If `--linear-new-project` would duplicate an exact project name, ask whether to use the existing project or create a new project with a distinct name
