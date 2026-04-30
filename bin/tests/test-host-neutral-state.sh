@@ -10,14 +10,14 @@
 # plus the centralized helpers in bin/review-gate. Rows 8-15 are scaffolded
 # placeholders that explain which downstream task wires them up:
 #
-#   Row  8: T002 — alias precedence + once-per-process warning
-#   Row  9: T002 — alias-only legacy run key
-#   Row 10: T002 — empty-string env vars treated as unset
+#   Row  8: T002 — alias precedence + once-per-process warning [DONE]
+#   Row  9: T002 — alias-only legacy run key [DONE]
+#   Row 10: T002 — empty-string env vars treated as unset [DONE]
 #   Row 11: T004 — concurrent runs in same project
-#   Row 12: T002 — missing run key in generic mode (fail diagnostic)
+#   Row 12: T004 — missing run key in generic mode (fail diagnostic)
 #   Row 13: T004 — invalid CERBERUS_STATE_ROOT diagnostics through bin/review-gate
 #   Row 14: T004 — path-traversal rejection through bin/review-gate
-#   Row 15: T002/T003 — wait + status --session-key under neutral state
+#   Row 15: T003 — wait + status --session-key under neutral state
 #
 # Skipped rows still emit log_skip lines so downstream tasks know exactly
 # which scaffold rows to flip to assertions.
@@ -394,13 +394,13 @@ log_skip "Row 11: scaffolded; T004 turns this row green"
 
 # ---------------------------------------------------------------------------
 # Row 12 — Missing run key in generic mode exits non-zero with diagnostic.
-# TODO(T002): bin/review-gate spawn-* without a run key under
+# TODO(T004): bin/review-gate spawn-* without a run key under
 # CERBERUS_HOST=generic must fail safely with a diagnostic. The diagnostic
-# wiring lives in the spawn surface, not the resolver, so this row activates
-# in T002.
+# wiring lives in the spawn surface state-creation paths (T004) — the
+# resolver-level rejection is already in place from T001.
 # ---------------------------------------------------------------------------
 log_test "Row 12 — missing run key in generic mode (fail diagnostic)"
-log_skip "Row 12: scaffolded; T002 turns this row green"
+log_skip "Row 12: scaffolded; T004 turns this row green"
 
 # ---------------------------------------------------------------------------
 # Row 13 — Invalid CERBERUS_STATE_ROOT (empty / relative / literal '~').
@@ -422,12 +422,14 @@ log_skip "Row 14: scaffolded; T004 turns this row green"
 
 # ---------------------------------------------------------------------------
 # Row 15 — wait + status --session-key parity under neutral state.
-# TODO(T002/T003): spawn under CERBERUS_RUN_KEY=k and verify BOTH
+# TODO(T003): spawn under CERBERUS_RUN_KEY=k and verify BOTH
 # wait --session-key k AND status --session-key k succeed without Claude
-# env. Requires T002 (env propagation) and T003 (status subcommand).
+# env. T002 already extended find_state_by_session_key in bin/review-gate
+# to search neutral roots; T003 adds the `status --json` subcommand and
+# wires the parity test that exercises both lookup paths end-to-end.
 # ---------------------------------------------------------------------------
 log_test "Row 15 — wait + status --session-key parity under neutral state"
-log_skip "Row 15: scaffolded; T002/T003 turn this row green"
+log_skip "Row 15: scaffolded; T003 turns this row green"
 
 # ---------------------------------------------------------------------------
 # Summary

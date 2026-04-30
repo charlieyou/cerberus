@@ -110,6 +110,15 @@ PLUGIN_ROOT="$(__cerberus_resolve_root)"
 PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
+# Best-effort cleanup of the alias-warning marker (created lazily by
+# __cerberus_resolve_run_key when CERBERUS_RUN_KEY != REVIEW_GATE_SESSION_KEY).
+# Some subcommand functions register their own EXIT traps further down; the
+# last `trap ... EXIT` wins, so this top-level trap may be clobbered. That
+# is acceptable: the marker is a 0-byte file keyed on $$ that the OS
+# reaps as part of routine TMPDIR cleanup. The trap below ensures cleanup
+# in the common subcommand paths that don't register their own EXIT trap.
+trap '__cerberus_marker_path="${TMPDIR:-/tmp}/cerberus-alias-warned.$$"; rm -f "$__cerberus_marker_path" 2>/dev/null || true' EXIT
+
 # Load shared helpers
 source "$SCRIPT_DIR/review-gate-lib.sh"
 source "$SCRIPT_DIR/review-gate-models.sh"
@@ -1032,7 +1041,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -1509,7 +1526,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -1861,7 +1886,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -2182,7 +2215,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     # --- Setup review directory ---
@@ -2619,7 +2660,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     local review_dir
@@ -2789,7 +2838,11 @@ USAGE
     done
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID (via SessionStart hook) or pass --session-id."
+        # T002: host-neutral fallback. See spawn-* sites above.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID (via SessionStart hook), or pass --session-id."
     fi
 
     local review_dir
@@ -2850,7 +2903,15 @@ USAGE
     fi
 
     if [[ -z "$session_id" ]]; then
-        die "Unable to determine session id. Set CLAUDE_SESSION_ID."
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. Using the neutral run key as
+        # session_id lets Codex/Amp/generic spawns work without
+        # CLAUDE_SESSION_ID set.
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+    if [[ -z "$session_id" ]]; then
+        die "Unable to determine session id. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID."
     fi
 
     if [[ "$clear" == "false" && -z "$context" ]]; then
@@ -4520,8 +4581,20 @@ USAGE
         local candidate=""
         local candidate_epoch=0
         shopt -s nullglob
+        # T002: search the legacy Claude layout AND the neutral host layout
+        # ($HOME/.cerberus/projects/<proj>/<run>) plus any custom
+        # CERBERUS_STATE_ROOT, so wait --session-key works for non-Claude
+        # spawns. Plan §Run-key lookup parity (L613-L630) requires this
+        # tree to match resolve_review_dir's neutral-roots search path.
+        local -a state_files=(
+            "$HOME/.claude/projects"/*/cerberus/*/gate-state.json
+            "$HOME/.cerberus/projects"/*/*/gate-state.json
+        )
+        if [[ -n "${CERBERUS_STATE_ROOT:-}" && "${CERBERUS_STATE_ROOT:-}" == /* ]]; then
+            state_files+=("${CERBERUS_STATE_ROOT}"/*/*/gate-state.json)
+        fi
         local state_file
-        for state_file in "$HOME/.claude/projects"/*/cerberus/*/gate-state.json; do
+        for state_file in "${state_files[@]}"; do
             [[ ! -f "$state_file" ]] && continue
             local owner_key
             owner_key=$(jq -r '.owner.session_key // ""' "$state_file" 2>/dev/null || echo "")
