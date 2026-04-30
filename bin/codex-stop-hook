@@ -29,11 +29,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW_GATE_BIN="${CERBERUS_REVIEW_GATE_BIN:-$SCRIPT_DIR/review-gate}"
 
 # Tracked child PIDs. The signal trap iterates and kills these on the
-# way out so a long-running `review-gate wait` child cannot orphan or
-# block the user from stopping. Bash 3.2-safe array length check
-# (cf. T007 round-1 review feedback).
+# way out so a long-running `review-gate wait`/`status` child cannot
+# orphan or block the user from stopping. EVERY foreground call into
+# review-gate goes through __cerberus_call_status / the wait helper —
+# both register the spawned PID here so signals can be processed
+# promptly even mid-status (round-2 review feedback #1: the prior
+# foreground status call deferred SIGTERM/INT/HUP until the slow
+# backend returned).
 __CERBERUS_STOP_CHILD_PIDS=()
-# Re-entrancy guard: trap may fire mid-emission; emit at most once.
+
+# Tracked tmpfiles to clean up in the trap path so SIGINT/TERM/HUP
+# does not leave /tmp/codex-stop-* fragments behind (round-2 review
+# feedback #4).
+__CERBERUS_STOP_TMPFILES=()
+
+# Re-entrancy guard. Set to "true" ONLY AFTER the body has been
+# completely written to stdout (round-2 review feedback #3: the prior
+# version flipped this BEFORE jq emitted, so a signal mid-jq made the
+# trap skip emission and produce empty stdout). Ordering invariant:
+#
+#   1. Build the JSON body in a shell variable (jq captured via $(...);
+#      partial jq output never reaches stdout).
+#   2. printf the body to stdout.
+#   3. Set __CERBERUS_STOP_EMITTED=true.
+#
+# Worst-case race: signal between step 2 and step 3 → trap sees
+# EMITTED=false, emits its own envelope → Codex sees two envelopes.
+# Codex parses the first; double-emit is acceptable, zero-emit is not.
 __CERBERUS_STOP_EMITTED="false"
 
 __cerberus_stop_log() {
@@ -52,17 +74,31 @@ __cerberus_stop_safe_exit() {
     # Kill tracked children. Bash 3.2-safe length gate (no `${arr[@]:-}`
     # array expansion with default — that form aborts under set -u on
     # bash 3.2). T007 round-1 review feedback.
-    local _n=${#__CERBERUS_STOP_CHILD_PIDS[@]}
-    local _i=0
+    local _n _i
+    _n=${#__CERBERUS_STOP_CHILD_PIDS[@]}
+    _i=0
     while [ "$_i" -lt "$_n" ]; do
         kill -TERM "${__CERBERUS_STOP_CHILD_PIDS[$_i]}" 2>/dev/null
         _i=$((_i + 1))
     done
 
+    # Emit failure-open envelope unless a normal-path emit already
+    # printed the body (T009 round-2 review feedback #3: double-emit
+    # is preferable to zero-emit; Codex parses the first envelope and
+    # ignores the rest).
     if [ "$__CERBERUS_STOP_EMITTED" != "true" ]; then
-        __CERBERUS_STOP_EMITTED="true"
         printf '{"action":"allow","note":"signal_trap"}\n'
+        __CERBERUS_STOP_EMITTED="true"
     fi
+
+    # Best-effort tmpfile cleanup (round-2 review feedback #4).
+    _n=${#__CERBERUS_STOP_TMPFILES[@]}
+    _i=0
+    while [ "$_i" -lt "$_n" ]; do
+        rm -f "${__CERBERUS_STOP_TMPFILES[$_i]}" 2>/dev/null
+        _i=$((_i + 1))
+    done
+
     exit 0
 }
 
@@ -72,33 +108,43 @@ __cerberus_stop_safe_exit() {
 trap '__cerberus_stop_safe_exit' INT TERM HUP
 
 # ---- Hook output emitters --------------------------------------------------
-# Every emitter sets __CERBERUS_STOP_EMITTED so that if a signal arrives
-# AFTER emission but BEFORE exit, the trap doesn't double-print.
+# Each emitter:
+#   1. Builds the JSON body via $(jq ...) capture.
+#   2. printf the body to stdout (single write syscall for the small
+#      payloads emitted by this hook; bash defers signal handling
+#      across simple-command boundaries).
+#   3. Sets __CERBERUS_STOP_EMITTED=true.
+# This ordering ensures the trap never observes EMITTED=true before
+# the body has actually flushed to stdout (round-2 review feedback #3).
 
 __cerberus_emit_allow() {
     local note="${1:-}"
-    __CERBERUS_STOP_EMITTED="true"
+    local body
     if [ -z "$note" ]; then
-        printf '{"action":"allow"}\n'
-        return 0
-    fi
-    if command -v jq >/dev/null 2>&1; then
-        jq -nc --arg note "$note" '{action:"allow",note:$note}'
+        body='{"action":"allow"}'
+    elif command -v jq >/dev/null 2>&1; then
+        body="$(jq -nc --arg note "$note" '{action:"allow",note:$note}' 2>/dev/null)" \
+            || body='{"action":"allow"}'
     else
         # No jq available: notes used here are static ASCII safe strings.
-        printf '{"action":"allow","note":"%s"}\n' "$note"
+        body="{\"action\":\"allow\",\"note\":\"$note\"}"
     fi
+    printf '%s\n' "$body"
+    __CERBERUS_STOP_EMITTED="true"
 }
 
 __cerberus_emit_continue() {
     local message="$1"
-    __CERBERUS_STOP_EMITTED="true"
+    local body
     if command -v jq >/dev/null 2>&1; then
-        jq -nc --arg msg "$message" '{action:"continue",userMessage:$msg}'
+        body="$(jq -nc --arg msg "$message" '{action:"continue",userMessage:$msg}' 2>/dev/null)" \
+            || body='{"action":"allow"}'
     else
         # Without jq we cannot safely escape the message. Failure-open.
-        printf '{"action":"allow"}\n'
+        body='{"action":"allow"}'
     fi
+    printf '%s\n' "$body"
+    __CERBERUS_STOP_EMITTED="true"
 }
 
 # ---- Drain stdin via background subshell ----------------------------------
@@ -112,6 +158,7 @@ INPUT=""
 if [ ! -t 0 ]; then
     _stdin_drain_out="$(mktemp -t codex-stop-stdin.XXXXXX 2>/dev/null || echo "")"
     if [ -n "$_stdin_drain_out" ]; then
+        __CERBERUS_STOP_TMPFILES+=("$_stdin_drain_out")
         # `<&0` is REQUIRED. Bash redirects backgrounded jobs' stdin
         # away from the parent's piped stdin in some configurations;
         # without this redirect cat reads from /dev/null and returns
@@ -268,12 +315,22 @@ esac
 
 # Helper: invoke `review-gate status --json --session-key <run>` and
 # capture body+rc.
+#
+# Round-2 review feedback #1: spawn status as a backgrounded child and
+# `wait` on its PID so that bash's trap can fire promptly even if the
+# status backend hangs or is slow. A foreground call would defer
+# SIGTERM/INT/HUP until status returned, violating the row-13
+# "MUST kill any wait/status child" requirement.
 __cerberus_call_status() {
     local out_file="$1"
     local err_file="$2"
     local rc=0
     "$REVIEW_GATE_BIN" status --json --session-key "$RUN_KEY" \
-        >"$out_file" 2>"$err_file" || rc=$?
+        >"$out_file" 2>"$err_file" &
+    local status_pid=$!
+    __CERBERUS_STOP_CHILD_PIDS+=("$status_pid")
+    wait "$status_pid" 2>/dev/null
+    rc=$?
     return $rc
 }
 
@@ -369,16 +426,24 @@ __cerberus_decide() {
             fi
             ;;
         resolved)
+            # Plan §Stop Decision Matrix:
+            #   Row 8: resolved + consensus_verdict == "pass" → allow
+            #   Row 9: resolved + consensus_verdict == "fail" → continue
+            # Round-2 review feedback #2: any other consensus
+            # (needs_revision, null/empty, etc.) is NOT a row-9 trigger
+            # — those gates are non-blocking by the canonical predicate
+            # and the user must be able to stop. Allow by default and
+            # only block on an explicit "fail".
             case "$cv" in
-                pass)
-                    # Row 8.
-                    __cerberus_emit_allow ""
-                    ;;
-                *)
-                    # Row 9 (fail or any other terminal verdict).
+                fail)
+                    # Row 9.
                     local msg
                     msg="$(__cerberus_format_resolved_fail_message "$body")"
                     __cerberus_emit_continue "$msg"
+                    ;;
+                *)
+                    # Row 8 (pass / needs_revision / unknown) → allow.
+                    __cerberus_emit_allow ""
                     ;;
             esac
             ;;
@@ -402,6 +467,7 @@ __cerberus_run_wait_then_reeval() {
         __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
         return 0
     fi
+    __CERBERUS_STOP_TMPFILES+=("$wait_out" "$wait_err")
 
     # Use a tight poll interval inside the child so completion mid-wait
     # is detected promptly. Honor an externally-set value if the user
@@ -442,6 +508,7 @@ __cerberus_run_wait_then_reeval() {
         __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
         return 0
     fi
+    __CERBERUS_STOP_TMPFILES+=("$rs_out" "$rs_err")
 
     __cerberus_call_status "$rs_out" "$rs_err"
     rs_rc=$?
@@ -487,6 +554,7 @@ if [ -z "$STATUS_OUT" ] || [ -z "$STATUS_ERR" ]; then
     __cerberus_emit_allow ""
     exit 0
 fi
+__CERBERUS_STOP_TMPFILES+=("$STATUS_OUT" "$STATUS_ERR")
 
 __cerberus_call_status "$STATUS_OUT" "$STATUS_ERR"
 status_rc=$?

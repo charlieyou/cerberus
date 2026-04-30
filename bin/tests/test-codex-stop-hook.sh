@@ -843,6 +843,91 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression — round-2 review #2: resolved + consensus_verdict ==
+# "needs_revision" is NOT a row-9 trigger. Plan §Stop Decision Matrix
+# row 9 is explicitly `consensus_verdict == "fail"`; any other resolved
+# verdict (needs_revision, null, or unknown) is non-blocking and must
+# allow stop. The prior code blocked anything not equal to "pass".
+# ---------------------------------------------------------------------------
+log_test "Regression #3 — resolved + needs_revision (non-FAIL) → allow"
+cR3_home="$TEST_DIR/regress3"
+mkdir -p "$cR3_home"
+cR3_workspace="/tmp/cerberus-regress3"
+cR3_run="regress3-run-001"
+make_registry "$cR3_home" "$cR3_workspace" "$cR3_run" "sess-regress3-001"
+cR3_rd="$(make_review_dir "$cR3_home" "$cR3_workspace" "$cR3_run")"
+write_gate_state "$cR3_rd" "resolved" '{"codex":{}}' '{"verdict":"NEEDS_WORK"}' "$cR3_run"
+cat > "$cR3_rd/reviews/codex.json" <<'EOF'
+{"verdict":"NEEDS_WORK","summary":"non-blocking","findings":[{"title":"x","body":"y","priority":2,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+touch "$cR3_rd/reviews/codex.done"
+cR3_out="$TEST_DIR/cR3.out"
+cR3_err="$TEST_DIR/cR3.err"
+cR3_rc=0
+run_hook "$cR3_home" "$cR3_workspace" "sess-regress3-001" \
+    "$cR3_out" "$cR3_err" \
+    || cR3_rc=$?
+cR3_action="$(jq -r '.action // empty' "$cR3_out" 2>/dev/null || echo "")"
+if [[ "$cR3_rc" -eq 0 && "$cR3_action" == "allow" ]]; then
+    log_pass "Regression #3 — resolved + needs_revision → action:allow"
+else
+    log_fail "Regression #3: rc=$cR3_rc action=$cR3_action body=$(cat "$cR3_out") stderr=$(cat "$cR3_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — round-2 review #1: SIGTERM during a slow status probe
+# must trigger the trap promptly. Inject a stub `review-gate` that sleeps
+# for 30s before returning so the initial status call is in-flight when
+# we deliver SIGTERM. The hook MUST emit the failure-open envelope and
+# exit 0 within seconds — not block until status returns.
+# ---------------------------------------------------------------------------
+log_test "Regression #4 — SIGTERM during slow status probe → prompt allow"
+cR4_home="$TEST_DIR/regress4"
+mkdir -p "$cR4_home"
+cR4_workspace="/tmp/cerberus-regress4"
+cR4_run="regress4-run-001"
+make_registry "$cR4_home" "$cR4_workspace" "$cR4_run" "sess-regress4-001"
+make_review_dir "$cR4_home" "$cR4_workspace" "$cR4_run" >/dev/null
+cR4_stub="$TEST_DIR/cR4-slow-review-gate"
+cat > "$cR4_stub" <<'EOF'
+#!/usr/bin/env bash
+# Simulate a slow status backend: sleep 30s then emit a no-active-gate
+# body. The hook must NOT wait this long under SIGTERM.
+sleep 30
+printf '{"status":"no_active_gate"}\n'
+exit 4
+EOF
+chmod +x "$cR4_stub"
+cR4_out="$TEST_DIR/cR4.out"
+cR4_err="$TEST_DIR/cR4.err"
+cR4_payload="$TEST_DIR/cR4.payload"
+cR4_pid_file="$TEST_DIR/cR4.pid"
+spawn_hook_bg "$cR4_home" "$cR4_workspace" "sess-regress4-001" \
+    "$cR4_out" "$cR4_err" "$cR4_payload" "$cR4_pid_file" \
+    "CERBERUS_REVIEW_GATE_BIN=$cR4_stub"
+cR4_pid="$(cat "$cR4_pid_file")"
+sleep 1
+cR4_t0=$(date +%s)
+kill -TERM "$cR4_pid" 2>/dev/null || true
+# Hook MUST exit within ~5s (signal trap is prompt). If it waits 30s
+# for the stub, the trap was deferred — round-2 finding #1 regressed.
+for _ in $(seq 1 12); do
+    if ! kill -0 "$cR4_pid" 2>/dev/null; then break; fi
+    sleep 0.5
+done
+wait "$cR4_pid" 2>/dev/null
+cR4_rc=$?
+cR4_t1=$(date +%s)
+cR4_elapsed=$((cR4_t1 - cR4_t0))
+cR4_action="$(jq -r '.action // empty' "$cR4_out" 2>/dev/null || echo "")"
+if [[ "$cR4_rc" -eq 0 && "$cR4_action" == "allow" \
+      && "$cR4_elapsed" -le 8 ]]; then
+    log_pass "Regression #4 — SIGTERM during slow status → exit ${cR4_elapsed}s, action:allow"
+else
+    log_fail "Regression #4: rc=$cR4_rc action=$cR4_action elapsed=${cR4_elapsed}s body=$(cat "$cR4_out") stderr=$(cat "$cR4_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Happy path A — script entry point exists, executable.
 # ---------------------------------------------------------------------------
 log_test "Happy A — bin/codex-stop-hook exists, is a regular file, executable"
