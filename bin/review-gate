@@ -2956,7 +2956,9 @@ USAGE
     fi
 
     local temp_file="${state_file}.tmp.$$"
-    trap 'rm -f "${temp_file:-}"' EXIT
+    # T002: include the alias-warning marker in cleanup so the top-level
+    # marker-cleanup EXIT trap (which we clobber here) is not lost.
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
 
     if [[ "$clear" == "true" ]]; then
         jq 'del(.author_context)' "$state_file" > "$temp_file"
@@ -3117,8 +3119,23 @@ USAGE
     fi
 
     if [[ -z "$OWNER_SESSION_ID" ]]; then
-        die "CLAUDE_SESSION_ID is required (or pass --session-id)"
+        # T002: host-neutral fallback. resolve_review_dir() delegates run-key
+        # resolution to __cerberus_resolve_run_key, so any non-empty value
+        # here satisfies its non-empty check. This lets non-Claude callers
+        # invoke `bin/review-gate spawn` directly with only CERBERUS_RUN_KEY.
+        OWNER_SESSION_ID="$(__cerberus_resolve_run_key)"
     fi
+
+    if [[ -z "$OWNER_SESSION_ID" ]]; then
+        die "Session id is required. Set CERBERUS_RUN_KEY or CLAUDE_SESSION_ID, or pass --session-id."
+    fi
+
+    # T002: propagate the full neutral-env block to the reviewer-agent
+    # subprocesses spawned downstream. The five spawn-* wrappers also call
+    # this helper, but `bin/review-gate spawn` can be invoked directly by
+    # non-Claude adapters (Codex stop hook, Amp shell helper, generic CLI),
+    # so the propagation must happen here as well.
+    __cerberus_export_neutral_env_for_subprocess "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH"
 
     # Session-scoped path resolution
     REVIEW_DIR=$(resolve_review_dir "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH")
@@ -4359,6 +4376,15 @@ review_gate_resolve() {
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
 
+    # T002: host-neutral fallback. When CLAUDE_SESSION_ID is unset but a
+    # CERBERUS_RUN_KEY (or REVIEW_GATE_SESSION_KEY alias) is provided,
+    # resolve_review_dir() routes through __cerberus_resolve_run_key
+    # internally, but we still need a non-empty session_id to take the
+    # direct-resolution branch instead of the find_active_gate fallback.
+    if [[ -z "$session_id" ]]; then
+        session_id="$(__cerberus_resolve_run_key)"
+    fi
+
     local state_file=""
 
     if [[ -n "$session_id" ]]; then
@@ -4391,7 +4417,9 @@ review_gate_resolve() {
     timestamp=$(date -Iseconds)
 
     local temp_file="${state_file}.tmp.$$"
-    trap 'rm -f "${temp_file:-}"' EXIT
+    # T002: include the alias-warning marker in the cleanup so the top-level
+    # marker-cleanup trap (which we clobber here) is not lost.
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
 
     # Update shas to current values so subsequent hook runs don't detect "changes"
     # This prevents respawning reviewers after auto_approve when files were edited during review
@@ -4591,7 +4619,13 @@ USAGE
             "$HOME/.cerberus/projects"/*/*/gate-state.json
         )
         if [[ -n "${CERBERUS_STATE_ROOT:-}" && "${CERBERUS_STATE_ROOT:-}" == /* ]]; then
-            state_files+=("${CERBERUS_STATE_ROOT}"/*/*/gate-state.json)
+            # CERBERUS_STATE_ROOT can be used by Claude callers too, in
+            # which case the layout is /<proj>/cerberus/<run>/. Cover both
+            # layouts so the search is host-agnostic.
+            state_files+=(
+                "${CERBERUS_STATE_ROOT}"/*/*/gate-state.json
+                "${CERBERUS_STATE_ROOT}"/*/cerberus/*/gate-state.json
+            )
         fi
         local state_file
         for state_file in "${state_files[@]}"; do
@@ -4888,7 +4922,9 @@ USAGE
         fi
 
         local temp_file="${state_file}.tmp.$$"
-        trap 'rm -f "${temp_file:-}"' EXIT
+        # T002: include the alias-warning marker in cleanup so the top-level
+        # marker-cleanup EXIT trap (which we clobber here) is not lost.
+        trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
         jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
            --arg consensus "$consensus_verdict" \
