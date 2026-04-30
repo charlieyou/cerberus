@@ -4674,16 +4674,26 @@ USAGE
         session_id=""
     fi
 
-    # T003: when --session-key is supplied via flag, set CERBERUS_RUN_KEY
-    # transiently so the resolve_review_dir() path below can find the run.
-    # This implements the run-key lookup parity contract from plan
-    # §Run-key lookup parity (L613-L630): both `wait --session-key K` and
-    # `status --session-key K` resolve the same path via
+    # T003: when --session-key is supplied via flag (and --session-id is
+    # NOT also supplied), set CERBERUS_RUN_KEY transiently so the
+    # resolve_review_dir() path below can find the run. This implements
+    # the run-key lookup parity contract from plan §Run-key lookup parity
+    # (L613-L630): both `wait --session-key K` and `status --session-key
+    # K` resolve the same path via
     # `resolve_review_dir(session_id="", transcript_path)` with
     # CERBERUS_RUN_KEY=K. The glob-based find_state_by_session_key remains
     # as a fallback for cross-host lookups when the project key cannot be
     # inferred from env/transcript_path (the common Codex/Amp case).
-    if [[ "$session_key_from_arg" == "true" && -n "$session_key" ]]; then
+    #
+    # CRITICAL: gate the export on session_id_from_arg too. When both
+    # --session-id S and --session-key K are passed, the session_id
+    # branch below calls resolve_review_dir("$session_id", ...). The
+    # resolver reads __cerberus_resolve_run_key() (= CERBERUS_RUN_KEY)
+    # first, so an unguarded export would silently override the
+    # explicit --session-id S with K. The clearing guard ~10 lines
+    # below preserves session_id specifically for this "both flags
+    # present" case.
+    if [[ "$session_key_from_arg" == "true" && "$session_id_from_arg" != "true" && -n "$session_key" ]]; then
         export CERBERUS_RUN_KEY="$session_key"
     fi
 
@@ -5120,11 +5130,21 @@ USAGE
         session_id="$(basename "$transcript_path" .jsonl)"
     fi
 
-    # When session_key is supplied via --session-key, set CERBERUS_RUN_KEY
-    # transiently so resolve_review_dir() picks it up (parity with `wait`).
-    # Plan §Run-key lookup parity (L613-L630). Empty values are unset per
-    # the ${VAR:-} idiom.
-    if [[ "$session_key_from_arg" == "true" && -n "$session_key" ]]; then
+    # When session_key is supplied via --session-key (and the caller did
+    # NOT also supply --session-id), set CERBERUS_RUN_KEY transiently so
+    # resolve_review_dir() picks it up (parity with `wait`). Plan
+    # §Run-key lookup parity (L613-L630). Empty values are unset per the
+    # ${VAR:-} idiom.
+    #
+    # CRITICAL: gate the export on session_id_from_arg too. When both
+    # --session-id S and --session-key K are passed, the session_id
+    # branch below resolves via resolve_review_dir("$session_id", ...),
+    # and resolve_review_dir reads __cerberus_resolve_run_key() which
+    # takes CERBERUS_RUN_KEY first — so an unguarded export would
+    # silently override the explicit --session-id S with K and look up
+    # the wrong run. The clearing guard immediately below preserves
+    # session_id specifically for the "both flags present" case.
+    if [[ "$session_key_from_arg" == "true" && "$session_id_from_arg" != "true" && -n "$session_key" ]]; then
         export CERBERUS_RUN_KEY="$session_key"
     fi
 
@@ -5254,7 +5274,30 @@ USAGE
             continue
         fi
 
-        if [[ ! -f "$output_file" ]] || ! jq -e . "$output_file" >/dev/null 2>&1; then
+        if [[ ! -f "$output_file" ]]; then
+            reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [{name:$name, status:"complete", verdict:"error"}]')
+            parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [$name]')
+            continue
+        fi
+
+        # Unwrap reviewer JSON via the canonical extract_json() helper so
+        # we honor every model-specific wrapper format (Claude
+        # `--output-format json` metadata wrapper, Codex transcript-tail,
+        # Gemini noisy-preamble) — exactly the way `wait` does. Direct
+        # `jq -r .verdict` on the file would silently report empty for
+        # any of those wrapper shapes, which would drop a real FAIL/PASS
+        # off the canonical status payload (round-1 status review
+        # finding #2). We disable repair_review_output transiently
+        # (REVIEW_REPAIR_ENABLED=false) so a malformed reviewer output
+        # does NOT trigger an external CLI call from inside `status`,
+        # preserving the no-blocking budget and the read-only contract.
+        local result
+        if ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) \
+              || [[ -z "$result" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \
                 '. + [{name:$name, status:"complete", verdict:"error"}]')
@@ -5265,7 +5308,7 @@ USAGE
         fi
 
         local rverdict
-        rverdict=$(jq -r '.verdict // ""' "$output_file" 2>/dev/null || echo "")
+        rverdict=$(printf '%s' "$result" | jq -r '.verdict // ""' 2>/dev/null || echo "")
         local out_verdict_lower="" finding_verdict=""
         case "$rverdict" in
             PASS)
@@ -5300,13 +5343,19 @@ USAGE
             --arg verdict "$out_verdict_lower" \
             '. + [{name:$name, status:"complete", verdict:$verdict}]')
 
-        # Findings — required: priority (int 0-3). Missing/non-int → parse_errors.
-        # `priority` is normalized from the integer to "P0".."P3". `verdict`
-        # on each finding mirrors the issuing reviewer's verdict (uppercase,
-        # NEEDS_WORK→NEEDS_REVISION). `summary` uses .title; optional `details`
-        # carries .body; optional `file_refs` wraps .file_path in an array.
+        # Findings — required: priority. Accept BOTH numeric `0..3`
+        # AND string `"P0".."P3"` per the existing canonical normalizer
+        # in bin/review-gate-hook.sh:1162-1186 (debate aggregation
+        # explicitly does NOT mutate per-reviewer JSONs, so reviewer
+        # output may arrive in either form). Missing or out-of-range
+        # values → parse_errors[]. `priority` is emitted as the
+        # canonical "P0".."P3" string. `verdict` on each finding
+        # mirrors the issuing reviewer's verdict (uppercase,
+        # NEEDS_WORK→NEEDS_REVISION). `summary` uses .title; optional
+        # `details` carries .body; optional `file_refs` wraps
+        # .file_path in an array.
         local rev_findings_json
-        rev_findings_json=$(jq -c '.findings // []' "$output_file" 2>/dev/null || echo "[]")
+        rev_findings_json=$(printf '%s' "$result" | jq -c '.findings // []' 2>/dev/null || echo "[]")
         # Validate it's an array; otherwise treat as parse error.
         if ! printf '%s' "$rev_findings_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
             parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
@@ -5315,38 +5364,49 @@ USAGE
             continue
         fi
 
-        # Process valid findings, tracking parse-error indices for invalid ones.
-        local findings_to_add parse_error_indices
-        findings_to_add=$(printf '%s' "$rev_findings_json" | jq -c \
+        # Single jq pass that:
+        #   - Normalizes priority to a numeric 0..3 (or "invalid")
+        #   - Splits findings into accepted vs parse-error groups
+        # Output: {accepted: [...canonical findings...], errors: [...indices...]}
+        local findings_split
+        findings_split=$(printf '%s' "$rev_findings_json" | jq -c \
             --arg reviewer "$reviewer" \
             --arg verdict "$finding_verdict" \
             '
-            [ to_entries[]
-              | select(.value.priority? // null | type == "number"
-                       and . >= 0 and . <= 3 and . == floor)
-              | .value as $f
-              | {
-                  reviewer: $reviewer,
-                  priority: ("P" + ($f.priority | tostring)),
-                  verdict: $verdict,
-                  summary: ($f.title // "")
-                }
-                + (if ($f.body // "") != "" then {details: $f.body} else {} end)
-                + (if ($f.file_path // null) != null and ($f.file_path // "") != ""
-                   then {file_refs: [$f.file_path]} else {} end)
-            ]
+            def to_pri:
+                if type == "number" then
+                    (if . == 0 or . == 1 or . == 2 or . == 3 then . else null end)
+                elif type == "string" then
+                    (if . == "P0" then 0
+                     elif . == "P1" then 1
+                     elif . == "P2" then 2
+                     elif . == "P3" then 3
+                     else null end)
+                else null end;
+            reduce (to_entries | .[]) as $e (
+                {accepted: [], errors: []};
+                ($e.value.priority? | to_pri) as $pri
+                | if $pri == null then
+                    .errors += ["\($reviewer):finding[\($e.key)]"]
+                  else
+                    .accepted += [
+                      ({
+                        reviewer: $reviewer,
+                        priority: ("P" + ($pri | tostring)),
+                        verdict: $verdict,
+                        summary: ($e.value.title // "")
+                       }
+                       + (if ($e.value.body // "") != "" then {details: $e.value.body} else {} end)
+                       + (if ($e.value.file_path // null) != null and ($e.value.file_path // "") != ""
+                          then {file_refs: [$e.value.file_path]} else {} end)
+                      )
+                    ]
+                  end
+            )
             ')
-        parse_error_indices=$(printf '%s' "$rev_findings_json" | jq -c \
-            --arg reviewer "$reviewer" \
-            '
-            [ to_entries[]
-              | select((.value.priority? // null | type) != "number"
-                       or (.value.priority? // -1) < 0
-                       or (.value.priority? // -1) > 3
-                       or ((.value.priority? // -1) | floor) != (.value.priority? // -1))
-              | "\($reviewer):finding[\(.key)]"
-            ]
-            ')
+        local findings_to_add parse_error_indices
+        findings_to_add=$(printf '%s' "$findings_split" | jq -c '.accepted')
+        parse_error_indices=$(printf '%s' "$findings_split" | jq -c '.errors')
         findings_json=$(printf '%s' "$findings_json" | jq -c \
             --argjson add "$findings_to_add" \
             '. + $add')

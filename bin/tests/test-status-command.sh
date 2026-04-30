@@ -438,6 +438,156 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: round-1 review #2 — string priority "P0".."P3" must be
+# accepted alongside numeric 0..3. The canonical normalizer in
+# bin/review-gate-hook.sh:1162-1186 explicitly accepts both forms; the
+# status aggregator must too, otherwise a reviewer emitting `priority:
+# "P1"` would have its blocking finding silently routed to parse_errors.
+# ---------------------------------------------------------------------------
+log_test "Regression: status accepts string \"P0\".\"P3\" priority forms"
+cR1_dir=$(make_review_dir "regress-string-prio-proj" "regress-string-prio-run")
+cat > "$cR1_dir/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "awaiting_decision",
+  "trigger_source": "test",
+  "artifact": {"path": "$cR1_dir/latest.md", "sha256": ""},
+  "reviewers": {"codex": {}},
+  "consensus": null,
+  "decision": null,
+  "owner": {"session_key": "regress-string-prio-run"},
+  "created_at": "2026-04-30T00:00:00Z",
+  "iteration": 0
+}
+EOF
+cat > "$cR1_dir/reviews/codex.json" <<'EOF'
+{
+  "verdict": "FAIL",
+  "summary": "string-priority finding",
+  "findings": [
+    {"title":"P0 string","body":"x","priority":"P0","file_path":null,"line_start":null,"line_end":null},
+    {"title":"P3 string","body":"y","priority":"P3","file_path":null,"line_start":null,"line_end":null}
+  ]
+}
+EOF
+touch "$cR1_dir/reviews/codex.done"
+cR1_out="$TEST_DIR/cR1.out"
+cR1_err="$TEST_DIR/cR1.err"
+run_status "regress-string-prio-proj" "regress-string-prio-run" "$cR1_out" "$cR1_err"
+cR1_rc=$?
+cR1_n=$(jq -r '.aggregated_findings | length' "$cR1_out" 2>/dev/null || echo 0)
+cR1_p0=$(jq -r '.aggregated_findings[0].priority' "$cR1_out" 2>/dev/null || echo "")
+cR1_p3=$(jq -r '.aggregated_findings[1].priority' "$cR1_out" 2>/dev/null || echo "")
+cR1_pe=$(jq -r '.parse_errors | length' "$cR1_out" 2>/dev/null || echo "")
+if [[ "$cR1_rc" -eq 0 && "$cR1_n" == "2" && "$cR1_p0" == "P0" && "$cR1_p3" == "P3" && "$cR1_pe" == "0" ]]; then
+    log_pass "Regression: string priority forms accepted as P0/P3, no parse_errors"
+else
+    log_fail "Regression: string priority rc=$cR1_rc n=$cR1_n p0=$cR1_p0 p3=$cR1_p3 pe=$cR1_pe body=$(cat "$cR1_out")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression: round-1 review #1 — Claude `--output-format json` reviewer
+# files are wrapped in {result: "..."} metadata. status must unwrap via
+# extract_json (matching `wait`), not read .verdict directly. Otherwise a
+# completed FAIL from Claude/Gemini disappears from the canonical payload.
+# ---------------------------------------------------------------------------
+log_test "Regression: status unwraps Claude --output-format json wrapper"
+cR2_dir=$(make_review_dir "regress-claude-wrap-proj" "regress-claude-wrap-run")
+cat > "$cR2_dir/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "awaiting_decision",
+  "trigger_source": "test",
+  "artifact": {"path": "$cR2_dir/latest.md", "sha256": ""},
+  "reviewers": {"claude": {}},
+  "consensus": null,
+  "decision": null,
+  "owner": {"session_key": "regress-claude-wrap-run"},
+  "created_at": "2026-04-30T00:00:00Z",
+  "iteration": 0
+}
+EOF
+# Claude --output-format json wraps the actual review in {.result} as a
+# stringified JSON. extract_json's claude branch reads .result and unwraps.
+cat > "$cR2_dir/reviews/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"FAIL\",\"summary\":\"wrapper test\",\"findings\":[{\"title\":\"wrapper hit\",\"body\":\"the wrapper hid this finding\",\"priority\":1,\"file_path\":\"src/x.c\",\"line_start\":1,\"line_end\":1}]}"
+}
+EOF
+touch "$cR2_dir/reviews/claude.done"
+cR2_out="$TEST_DIR/cR2.out"
+cR2_err="$TEST_DIR/cR2.err"
+run_status "regress-claude-wrap-proj" "regress-claude-wrap-run" "$cR2_out" "$cR2_err"
+cR2_rc=$?
+cR2_cv=$(jq -r '.consensus_verdict' "$cR2_out" 2>/dev/null || echo "")
+cR2_n=$(jq -r '.aggregated_findings | length' "$cR2_out" 2>/dev/null || echo 0)
+cR2_pri=$(jq -r '.aggregated_findings[0].priority' "$cR2_out" 2>/dev/null || echo "")
+cR2_rev_verdict=$(jq -r '.reviewers[0].verdict' "$cR2_out" 2>/dev/null || echo "")
+if [[ "$cR2_rc" -eq 0 && "$cR2_cv" == "fail" && "$cR2_n" == "1" \
+      && "$cR2_pri" == "P1" && "$cR2_rev_verdict" == "fail" ]]; then
+    log_pass "Regression: Claude wrapper unwrapped; FAIL + P1 finding visible"
+else
+    log_fail "Regression: Claude wrapper rc=$cR2_rc cv=$cR2_cv n=$cR2_n pri=$cR2_pri rev=$cR2_rev_verdict body=$(cat "$cR2_out") stderr=$(cat "$cR2_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression: round-1 review #2 (the [2]) — when both --session-id S and
+# --session-key K are passed, status MUST resolve under S, not K. Plant
+# state under run "S" only; pass --session-id S --session-key K and
+# verify the response describes S, not "no_active_gate".
+# ---------------------------------------------------------------------------
+log_test "Regression: --session-id S --session-key K resolves under S"
+cR3_proj="regress-both-flags-proj"
+cR3_run_real="regress-real-S"
+cR3_run_decoy="regress-decoy-K"
+cR3_dir=$(make_review_dir "$cR3_proj" "$cR3_run_real")
+cat > "$cR3_dir/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "resolved",
+  "trigger_source": "test",
+  "artifact": {"path": "$cR3_dir/latest.md", "sha256": ""},
+  "reviewers": {"codex": {}},
+  "consensus": {"verdict": "PASS"},
+  "decision": {"action": "proceed", "decided_at": "2026-04-30T00:00:00Z"},
+  "owner": {"session_key": "$cR3_run_real"},
+  "created_at": "2026-04-30T00:00:00Z",
+  "iteration": 0
+}
+EOF
+cat > "$cR3_dir/reviews/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"OK","findings":[]}
+EOF
+touch "$cR3_dir/reviews/codex.done"
+cR3_out="$TEST_DIR/cR3.out"
+cR3_err="$TEST_DIR/cR3.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST="generic"
+    export CERBERUS_PROJECT_KEY="$cR3_proj"
+    "$REVIEW_GATE" status --json --session-id "$cR3_run_real" --session-key "$cR3_run_decoy"
+) >"$cR3_out" 2>"$cR3_err"
+cR3_rc=$?
+cR3_rk=$(jq -r '.run_key' "$cR3_out" 2>/dev/null || echo "")
+cR3_rd=$(jq -r '.review_dir' "$cR3_out" 2>/dev/null || echo "")
+cR3_status=$(jq -r '.status // empty' "$cR3_out" 2>/dev/null || echo "")
+if [[ "$cR3_rc" -eq 0 && "$cR3_rk" == "$cR3_run_real" \
+      && "$cR3_rd" == "$cR3_dir" && "$cR3_status" != "no_active_gate" ]]; then
+    log_pass "Regression: --session-id wins over --session-key when both set"
+else
+    log_fail "Regression: rc=$cR3_rc rk=$cR3_rk rd=$cR3_rd status=$cR3_status body=$(cat "$cR3_out") stderr=$(cat "$cR3_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo
