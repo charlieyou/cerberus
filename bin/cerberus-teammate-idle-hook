@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Suppress duplicate idle notifications from single-use Cerberus implementers.
+# Suppress duplicate idle notifications from Cerberus implementers when task
+# evidence has not changed since the last idle notification.
 
 set -euo pipefail
 
@@ -20,6 +21,57 @@ stop_teammate() {
     local reason="$1"
     jq -cn --arg reason "$reason" '{continue:false, stopReason:$reason}'
     exit 0
+}
+
+hash_file() {
+    local path="$1"
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{ print $1 }'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{ print $1 }'
+    else
+        cksum "$path" | awk '{ print $1 }'
+    fi
+}
+
+append_epoch() {
+    epoch+="$1"$'\n'
+}
+
+append_marker_evidence() {
+    local label="$1"
+    local path="$2"
+
+    if [[ -e "$path" ]]; then
+        append_epoch "marker:${label}=1"
+        strong_evidence="1"
+    else
+        append_epoch "marker:${label}=0"
+    fi
+}
+
+append_file_evidence() {
+    local label="$1"
+    local path="$2"
+    local digest=""
+
+    if [[ -f "$path" ]]; then
+        if digest="$(hash_file "$path" 2>/dev/null)"; then
+            append_epoch "file:${label}=sha256:${digest}"
+            strong_evidence="1"
+        else
+            append_epoch "file:${label}=unreadable"
+        fi
+    else
+        append_epoch "file:${label}=missing"
+    fi
+}
+
+cleanup_idle_lock() {
+    if [[ -n "${idle_lock:-}" ]]; then
+        rmdir "$idle_lock" 2>/dev/null || true
+    fi
 }
 
 event_name="$(json_get '.hook_event_name // ""')"
@@ -59,17 +111,87 @@ team_hash="${BASH_REMATCH[1]}"
 if [[ ! "$teammate_name" =~ ^impl-(T[0-9]+)$ ]]; then
     exit 0
 fi
+task_id="${BASH_REMATCH[1]}"
 
 state_root="${TMPDIR:-/tmp}/cerberus-task-completed-hook/${team_hash}"
 marker_root="${state_root}/.teammate-idle"
-marker="${marker_root}/${teammate_name}.seen"
+state_dir="${state_root}/${task_id}"
+state_file="${state_dir}/state.json"
 
-mkdir -p "$marker_root" 2>/dev/null || exit 0
-
-if mkdir "$marker" 2>/dev/null; then
-    date -u '+%Y-%m-%dT%H:%M:%SZ' > "${marker}/first_seen_at" 2>/dev/null || true
-    printf '%s\n' "$hook_input" > "${marker}/first_event.json" 2>/dev/null || true
+# If Cerberus task state is unavailable, allow the idle notification through.
+# A noisy duplicate is safer than hiding a meaningful post-human-input signal.
+if [[ ! -f "$state_file" ]] || ! jq -e . "$state_file" >/dev/null 2>&1; then
     exit 0
 fi
 
-stop_teammate "Suppressing repeated idle notifications from ${teammate_name} in ${team_name}; Cerberus implementers are single-use."
+state_task_id="$(jq -r '.task_id // ""' "$state_file" 2>/dev/null || printf '')"
+state_team_hash="$(jq -r '.team_hash // ""' "$state_file" 2>/dev/null || printf '')"
+if [[ "$state_task_id" != "$task_id" || "$state_team_hash" != "$team_hash" ]]; then
+    exit 0
+fi
+
+cwd="$(json_get '.cwd // ""')"
+repo_root="$(jq -r '.repo_root // ""' "$state_file" 2>/dev/null || printf '')"
+repo_head=""
+if [[ -n "$repo_root" ]]; then
+    repo_head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf '')"
+fi
+if [[ -z "$repo_head" && -n "$cwd" ]]; then
+    repo_head="$(git -C "$cwd" rev-parse HEAD 2>/dev/null || printf '')"
+fi
+
+epoch=""
+strong_evidence="0"
+append_epoch "schema=v2"
+append_epoch "team_hash=${team_hash}"
+append_epoch "teammate=${teammate_name}"
+append_epoch "task_id=${task_id}"
+append_epoch "state_task_id=${state_task_id}"
+append_epoch "state_team_hash=${state_team_hash}"
+append_epoch "state_claude_task_id=$(jq -r '.claude_task_id // ""' "$state_file" 2>/dev/null || printf '')"
+append_epoch "state_round=$(jq -r '.round // ""' "$state_file" 2>/dev/null || printf '')"
+append_epoch "state_max_rounds=$(jq -r '.max_rounds // ""' "$state_file" 2>/dev/null || printf '')"
+append_epoch "state_baseline_sha=$(jq -r '.baseline_sha // ""' "$state_file" 2>/dev/null || printf '')"
+append_epoch "repo_head=${repo_head}"
+if [[ -n "$repo_head" ]]; then
+    strong_evidence="1"
+fi
+
+append_marker_evidence "completion_intent" "${state_dir}/completion_intent"
+append_marker_evidence "verified_pass" "${state_dir}/verified_pass"
+append_marker_evidence "reviewed_pass" "${state_dir}/reviewed_pass"
+append_marker_evidence "exhausted" "${state_dir}/exhausted"
+append_marker_evidence "verify_failed" "${state_dir}/verify_failed"
+append_file_evidence "verified_head" "${state_dir}/verified_head"
+append_file_evidence "reviewed_head" "${state_dir}/reviewed_head"
+append_file_evidence "last_error" "${state_dir}/last_error"
+append_file_evidence "task_commits.txt" "${state_dir}/task_commits.txt"
+append_file_evidence "wait.json" "${state_dir}/wait.json"
+append_file_evidence "lead_epoch" "${state_dir}/lead_epoch"
+
+if [[ "$strong_evidence" != "1" ]]; then
+    exit 0
+fi
+
+idle_dir="${marker_root}/${teammate_name}"
+idle_lock="${idle_dir}.lock"
+last_epoch="${idle_dir}/last_epoch.txt"
+
+mkdir -p "$marker_root" 2>/dev/null || exit 0
+if ! mkdir "$idle_lock" 2>/dev/null; then
+    exit 0
+fi
+trap cleanup_idle_lock EXIT
+mkdir -p "$idle_dir" 2>/dev/null || exit 0
+
+if [[ -f "$last_epoch" ]] && cmp -s <(printf '%s' "$epoch") "$last_epoch"; then
+    stop_teammate "Suppressing repeated idle notification from ${teammate_name} in ${team_name}; Cerberus task evidence has not changed since the previous idle epoch."
+fi
+
+if printf '%s' "$epoch" > "${last_epoch}.tmp" 2>/dev/null && mv "${last_epoch}.tmp" "$last_epoch" 2>/dev/null; then
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "${idle_dir}/last_seen_at" 2>/dev/null || true
+    printf '%s\n' "$hook_input" > "${idle_dir}/last_event.json" 2>/dev/null || true
+    exit 0
+fi
+
+exit 0

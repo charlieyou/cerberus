@@ -52,7 +52,7 @@ Agent({ ..., subagent_type: "implementer", model: "<anything-other-than-opus>", 
 - Completion is serialized: only one implementer may be granted `PROCEED_TO_COMPLETE T###` at a time, and the lead must drain other active implementers to a clean committed state before that grant.
 - Never ask teammates to stash, reset, checkout, clean, rebase, amend, squash, or otherwise manipulate another agent's changes or commits. Each implementer may commit only its own task-scoped work.
 - The Critical Implementer Model Contract above is mandatory for every original task and every synthetic `epic-gap` remediation task.
-- Implementer teammates are single-use. After a teammate reaches a terminal idle and its outcome is classified, send that teammate a shutdown request and wait for it to shut down. Do not send it further implementation guidance; the plugin's `TeammateIdle` hook is only a fallback for duplicate idle notifications from teammates that have not shut down yet.
+- Implementer teammates are single-use after a terminal outcome is classified. Send that teammate a shutdown request and wait for it to shut down. The plugin's `TeammateIdle` hook suppresses only repeated idle events whose Cerberus task evidence has not changed; a later idle from the same `impl-T###` can still be meaningful after human input, new commits, exhaustion markers, verification/review markers, or error-state changes.
 
 ## Phase 0: Preflight
 
@@ -232,6 +232,7 @@ claude_task_id="<returned-task-id>"
 state_dir="${TMPDIR:-/tmp}/cerberus-task-completed-hook/${team_hash}/${task_id}"
 task_context_path="${state_root}/task-contexts/${task_id}.md"
 baseline_sha=$(git rev-parse HEAD)
+repo_root=$(git rev-parse --show-toplevel)
 mkdir -p "$state_dir"
 if [ ! -f "$task_context_path" ]; then
   echo "missing task context for ${task_id}: ${task_context_path}" >&2
@@ -243,11 +244,12 @@ jq -n \
   --arg team_hash "$team_hash" \
   --arg phase "<phase name>" \
   --arg baseline_sha "$baseline_sha" \
+  --arg repo_root "$repo_root" \
   --arg task_state_dir "$state_dir" \
   --arg task_context_path "$task_context_path" \
   --arg verify_script_path "$verify_script_path" \
   --argjson max_rounds "$max_review_rounds" \
-  '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, phase:$phase, baseline_sha:$baseline_sha, round:0, max_rounds:$max_rounds, task_state_dir:$task_state_dir, task_context_path:$task_context_path, verify_script_path:$verify_script_path}' \
+  '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, phase:$phase, baseline_sha:$baseline_sha, repo_root:$repo_root, round:0, max_rounds:$max_rounds, task_state_dir:$task_state_dir, task_context_path:$task_context_path, verify_script_path:$verify_script_path}' \
   > "${state_dir}/state.json"
 git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "${state_dir}/untracked_baseline.txt"
 ```
@@ -267,6 +269,17 @@ Agent({
 
 When a teammate goes idle after sending `STATUS: READY_FOR_COMPLETION T###`, mark it `ready_for_completion`. Do not treat READY as task success. The task has not passed until the lead later grants completion, the hook runs, and Phase 4 classifies the result as `success`.
 
+Before sending any lead message that can make a later same-`HEAD` idle meaningful, bump the lead-controlled idle evidence file. This includes forwarding human input after `STATUS: NEEDS_HUMAN`, asking the same teammate to retry or continue without first requiring a new commit, and granting `PROCEED_TO_COMPLETE`:
+
+```bash
+{
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+  printf '%s\n' "$RANDOM"
+} > "${state_dir}/lead_epoch"
+```
+
+The `lead_epoch` file lives only in hook state, not in the repository. It lets the `TeammateIdle` hook distinguish a meaningful post-human-input idle from unchanged duplicate idle spam when no commit or review marker changed.
+
 To grant completion to one ready teammate, first drain every other active implementer in this team to a safe point: send `PAUSE: another task is entering completion review; finish only your current task-scoped commit if it is already staged, otherwise stop tool use, do not edit files, do not commit, do not stash, and wait for the lead.` Wait until they are idle/paused. Confirm `git status --porcelain --untracked-files=no` is clean and record `head_before_completion=$(git rev-parse HEAD)`. Also run the selected task's untracked delta gate before granting completion:
 
 ```bash
@@ -276,7 +289,7 @@ comm -23 <(LC_ALL=C sort "${state_dir}/untracked_current.txt") <(LC_ALL=C sort "
 
 If another implementer has uncommitted tracked changes, ask that same owner to either commit only its own task-scoped work with its trailer and send READY, or report `STATUS: NEEDS_HUMAN`; never ask it to stash or revert. If new untracked files appear in the selected task's delta, do not grant completion; ask the owner, if known, to add intentional files to its own task commit or remove its own generated artifacts. If ownership is unclear, classify as `infra-failure` or `needs-human` rather than pushing cleanup to the selected implementer. If the tree cannot be drained cleanly or `HEAD` changes after the drain check but before the grant, rerun the drain gate; if it cannot stabilize, classify the run as `infra-failure` and stop scheduling.
 
-After the drain gate passes, send only the selected ready teammate: `PROCEED_TO_COMPLETE T### — touch completion_intent and call TaskUpdate(status:'completed') now. Do not edit, amend, stash, reset, checkout, restore, clean, rebase, or touch another task's commits.` On the first `TeammateIdle` after this grant, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, `${state_dir}/task_commits.txt`, and messages from the teammate. Do not wait for additional idle notifications from the same teammate. Classify the outcome with Phase 4. After classification, send a shutdown request to that teammate and wait for shutdown; Cerberus implementers are never reused, and the idle hook only terminates repeated idle firings if a teammate has not shut down yet.
+After the drain gate passes, bump `${state_dir}/lead_epoch`, then send only the selected ready teammate: `PROCEED_TO_COMPLETE T### — touch completion_intent and call TaskUpdate(status:'completed') now. Do not edit, amend, stash, reset, checkout, restore, clean, rebase, or touch another task's commits.` On the first `TeammateIdle` after this grant, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, `${state_dir}/task_commits.txt`, and messages from the teammate. Classify the outcome with Phase 4. If a later idle from the same teammate is delivered because task evidence changed after human input, inspect and classify that new epoch too; unchanged duplicate idles may be suppressed by the hook. After terminal classification, send a shutdown request to that teammate and wait for shutdown; Cerberus implementers are never reused.
 
 ## Phase 4: Outcome Classification
 
@@ -284,7 +297,7 @@ Classify the completing task into exactly one category.
 
 Before evaluating task status or hook markers, enforce the Critical Implementer Model Contract. If the actual `Agent` tool input for this teammate did not include top-level `model: "opus"`, used a non-`opus` value, or objective runtime/tool/transcript metadata shows the teammate is running as a non-Opus model, classify the task as `infra-failure` with reason `implementer spawned with non-opus model`, even if the task status is `completed` and verification/review markers exist.
 
-- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the resolved project verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits from `${state_dir}/task_commits.txt` when present and record `baseline_sha..HEAD` only as the integration range, delete only the per-task hook `state_dir`, keep the canonical `task_context_path`, then shut down the completed teammate. If every original task in this execution phase is `passed` and no teammate remains `running`, `ready_for_completion`, or `completing`, run Phase 5 before scheduling the next phase.
+- **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the resolved project verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits from `${state_dir}/task_commits.txt` when present and record `baseline_sha..HEAD` only as the integration range, keep the canonical `task_context_path`, then release the completed teammate via the Completed Teammate Release steps. If every original task in this execution phase is `passed` and no teammate remains `running`, `ready_for_completion`, or `completing`, run Phase 5 before scheduling the next phase.
 - **needs-human**: teammate sent `STATUS: NEEDS_HUMAN T###` while the Claude task remains `in_progress`, or `exhausted` exists while the task remains `in_progress`. Mark failed, retain `state_dir`, stop scheduling.
 - **unverified-failure**: task status is `completed` but `verified_pass` or `reviewed_pass` is absent, `verified_head` or `reviewed_head` does not equal current `HEAD`, or task status is `completed` while `exhausted` exists. Missing `verified_pass` means the resolved project verification gate did not run or did not pass before completion; missing `reviewed_pass` means code review did not run or did not pass; head mismatch means the current code differs from what was verified or reviewed. The completed-plus-exhausted case should be impossible in the normal hook path, but the lead defends against stale/tampered state or runtime variance. Mark failed, retain `state_dir`, stop scheduling.
 - **infra-failure**: `last_error` exists, or the Critical Implementer Model Contract was violated for this teammate. Mark failed, retain `state_dir`, include raw `last_error` when present and any model-contract violation evidence in the final report, stop scheduling.
@@ -313,7 +326,7 @@ Run this only after a provisional `success` and before deleting `state_dir`.
 
 ### Completed Teammate Release
 
-After a success passes the post-task clean-tree gate and is finalized, send a shutdown request to the completed teammate and wait for it to shut down. Continue scheduling safe same-phase pending tasks while respecting `max_parallel`; do not schedule later-phase tasks until Phase 5 passes for the current phase. The teammate has already produced the one idle signal needed for classification, is task-bound by name, and will not be reused. If Claude Code emits another idle event before shutdown completes, the `TeammateIdle` hook terminates that repeat notification.
+After a success passes the post-task clean-tree gate and is finalized, send a shutdown request to the completed teammate and wait for it to shut down. Only after shutdown completes, delete the per-task hook `state_dir`; keep the canonical `task_context_path`. Continue scheduling safe same-phase pending tasks while respecting `max_parallel`; do not schedule later-phase tasks until Phase 5 passes for the current phase. The teammate has already produced the idle signal needed for the current evidence epoch, is task-bound by name, and will not be reused. If Claude Code emits another idle event before shutdown completes without any task-evidence change, the `TeammateIdle` hook terminates that repeat notification.
 
 On any non-success outcome, send pause requests to every other active teammate, then send a shutdown request to the failed teammate after classification. Do not unblock dependents and do not schedule independent tasks. Failed task commits remain on the current branch; never run `git reset --hard`, `git stash`, or destructive cleanup automatically.
 
@@ -523,4 +536,4 @@ Report:
 - For failures: baseline SHA, retained state directory, raw `last_error` if present, and manual recovery options such as `git reset --hard <baseline_sha>` or `git revert <commit_range>`.
 - Epic verification verdicts and findings for each completed execution phase, or why any phase verification was skipped.
 - Retry note: rerunning `/cerberus:run-team` is safe after fixing the root cause because each invocation gets a fresh `team_hash`; stale state dirs remain only for debugging.
-- Cleanup note: successful task hook state dirs are deleted automatically, but persistent task contexts remain under `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/task-contexts/` until the run is cleaned up. Failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Teammates whose terminal outcomes have been classified receive shutdown requests and should be shut down before the lead continues. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done. The installed `TeammateIdle` hook remains a fallback for duplicate-idle suppression if shutdown has not completed yet.
+- Cleanup note: successful task hook state dirs are deleted automatically, but persistent task contexts remain under `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/task-contexts/` until the run is cleaned up. Failed state dirs remain at `${TMPDIR:-/tmp}/cerberus-task-completed-hook/<team_hash>/<task_id>/`. Teammates whose terminal outcomes have been classified receive shutdown requests and should be shut down before the lead continues. Leave the team intact by default so the user can inspect it; tell the user they may run `TeamDelete` manually when done. The installed `TeammateIdle` hook remains a fallback for unchanged duplicate-idle suppression if shutdown has not completed yet.
