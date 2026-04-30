@@ -1297,9 +1297,34 @@ during phase spikes:
   required vs optional fields, and slash-command/skill semantics
   (Tier-1 workflows: review-code, review-plan, review-spec, ask,
   status, clear-gate). Blocks Phase 1 implementation.
+  - **OQ-1 resolved (2026-04-30, best-effort, T006):** No public
+    versioned schema for `.codex-plugin/plugin.json` was available at
+    spike time, so the resolution is best-effort, modeled on
+    `.claude-plugin/plugin.json` plus an explicit `skills[]` array
+    (Codex packaging is skills-only). Required: `name`, `version`,
+    `description`, `skills[]`. Each skill: `name`, `path`,
+    `description` (+ optional `arguments[]`). All six Tier-1 workflows
+    ship as **skills** (no separate slash-command declaration).
+    Sample manifest and skill→backend mapping in
+    [`docs/CODEX.md` §Phase 1 Spike Findings](CODEX.md#phase-1-spike-findings).
+    T007 marks the manifest **best-effort** with `version: "1.0.0"`
+    and a sibling note; revisit when an authoritative schema lands.
 - **OQ-2 (Phase 1 spike):** Whether Codex exposes a stable plugin-install
   path env var. If not, document the manual hook-template edit step in
   `docs/CODEX.md`.
+  - **OQ-2 resolved (2026-04-30, T006):** **No** stable Codex-provided
+    env var equivalent to `CLAUDE_PLUGIN_ROOT` is documented as of
+    2026-04-30. Adopted fallback: `templates/codex-hooks.json` ships
+    with the documented placeholder `<CERBERUS_INSTALL_ROOT>`, which
+    the user replaces with their absolute install-root path during the
+    second install step. The shared backend continues to read
+    `CERBERUS_ROOT` (with `CLAUDE_PLUGIN_ROOT` fallback) via
+    `__cerberus_resolve_root`, so users who prefer to set
+    `CERBERUS_ROOT` in their shell profile work without editing the
+    template. If a future Codex release publishes a stable env var,
+    the template defaults are updated and the manual-edit path becomes
+    a documented fallback. Detail in
+    [`docs/CODEX.md` §Phase 1 Spike Findings](CODEX.md#phase-1-spike-findings).
 - **OQ-3 (Phase 2 spike):** Whether Amp `ctx.thread.id` is durable in
   both command handlers and lifecycle events. The plan already designs
   for the no-durable-thread-id case, so this spike informs default-path
