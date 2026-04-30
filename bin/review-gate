@@ -71,9 +71,26 @@ __cerberus_resolve_run_key() {
 
 # __cerberus_resolve_root — return the effective plugin/repo root.
 # Precedence: CERBERUS_ROOT > CLAUDE_PLUGIN_ROOT > "" (caller falls back to
-# the script-directory-derived PLUGIN_ROOT computed below).
+# the script-directory-derived PLUGIN_ROOT computed below). Mirrors the
+# alias precedence rule from the env contract (plan §Alias precedence
+# rule, L557-L559): when both are set non-empty and differ, CERBERUS_*
+# wins and a single stderr warning is emitted.
 __cerberus_resolve_root() {
-    echo "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+    local cer="${CERBERUS_ROOT:-}"
+    local leg="${CLAUDE_PLUGIN_ROOT:-}"
+    if [ -n "$cer" ] && [ -n "$leg" ] && [ "$cer" != "$leg" ]; then
+        # Once-per-process guard, file-marker fallback under bash 3.2 (same
+        # pattern as __cerberus_resolve_run_key above). IMPORTANT: write to
+        # stderr, not log() / stdout — this helper is used in $(...) and any
+        # stdout output would corrupt the returned root.
+        local _root_marker="${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$"
+        if [ ! -e "$_root_marker" ] && [ -z "${__CERBERUS_ROOT_ALIAS_WARNED:-}" ]; then
+            echo "warning: CERBERUS_ROOT != CLAUDE_PLUGIN_ROOT; using CERBERUS_ROOT" >&2
+            : > "$_root_marker" 2>/dev/null || true
+        fi
+        export __CERBERUS_ROOT_ALIAS_WARNED=1
+    fi
+    echo "${cer:-${leg:-}}"
 }
 
 # __cerberus_export_neutral_env_for_subprocess <fallback-sid> <fallback-tp>
@@ -821,8 +838,8 @@ USAGE
     fi
 
     # --- Session metadata ---
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     if [[ -z "$session_id" && -n "$transcript_path" ]]; then
         session_id="$(basename "$transcript_path" .jsonl)"
@@ -1349,8 +1366,8 @@ review_gate_spawn_plan_review() {
     local debate_seed=""
 
     # --- Session metadata ---
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1751,8 +1768,8 @@ review_gate_spawn_spec_review() {
     local debate_seed=""
 
     # --- Session metadata ---
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2092,8 +2109,8 @@ review_gate_spawn_epic_verify() {
     local debate_seed=""
 
     # --- Session metadata ---
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2504,8 +2521,8 @@ review_gate_spawn_ask() {
     local artifact_only="false"
     local -a positionals=()
 
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2817,8 +2834,8 @@ USAGE
 }
 
 review_gate_artifact_path() {
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2856,8 +2873,8 @@ USAGE
 }
 
 review_gate_author_context() {
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
     local clear="false"
     local context=""
 
@@ -2988,8 +3005,8 @@ review_gate_spawn() {
     # --- Session metadata ---
     OWNER_SESSION_KEY="$(__cerberus_resolve_run_key)"
     OWNER_SOURCE="${REVIEW_GATE_SESSION_SOURCE:-}"
-    OWNER_SESSION_ID="${CLAUDE_SESSION_ID:-}"
-    OWNER_TRANSCRIPT_PATH="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    OWNER_SESSION_ID="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    OWNER_TRANSCRIPT_PATH="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     local artifact_arg=""
     local agents_csv=""
@@ -4484,8 +4501,8 @@ review_gate_resolve() {
         shift
     done
 
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-}}"
 
     # T002: host-neutral fallback. When CLAUDE_SESSION_ID is unset but a
     # CERBERUS_RUN_KEY (or REVIEW_GATE_SESSION_KEY alias) is provided,
@@ -4611,8 +4628,8 @@ review_gate_wait() {
     local finalize="false"
     local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
     local session_key="$(__cerberus_resolve_run_key)"
-    local session_id="${CLAUDE_SESSION_ID:-}"
-    local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
     local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"
     local session_key_from_arg="false"
     local session_id_from_arg="false"
@@ -5110,7 +5127,7 @@ USAGE
 review_gate_status() {
     local json_mode="false"
     local session_key="$(__cerberus_resolve_run_key)"
-    local session_id="${CLAUDE_SESSION_ID:-${CERBERUS_SESSION_ID:-}}"
+    local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
     local session_key_from_arg="false"
     local session_id_from_arg="false"
