@@ -1,33 +1,196 @@
 #!/usr/bin/env bash
-# bin/codex-session-init — Codex SessionStart adapter (Phase 1 stub).
+# bin/codex-session-init — Codex SessionStart adapter (T008).
 #
-# Final responsibility (T008): read Codex SessionStart JSON from stdin,
-# compute project_key, atomically write
+# Reads Codex `SessionStart` JSON from stdin and atomically writes the
+# session registry at:
+#
 #   ~/.cerberus/runtime/codex/<workspace-key>/active-session.json
-# per the registry schema (plan §Data Model, L478-L508) using the atomic
-# write algorithm (plan L509-L523).
 #
-# This file is a Phase-1 SKELETON (T007). It establishes:
-#   - the script entry point Codex's SessionStart hook will invoke,
-#   - shebang + strict-mode flags,
-#   - stdin consumption (so callers can pipe Codex JSON without errors),
-#   - a deterministic JSON output marker that integration tests can key on
-#     to confirm the right script was wired.
+# per the registry schema v1 (plan §Data Model, L478-L508) using the
+# atomic-write algorithm (plan L509-L529). The `<workspace-key>` is the
+# `project_key` produced by `get_project_hash` (sourced from
+# `bin/review-gate-lib.sh`), keyed off the Codex-supplied workspace path
+# (`workspace_root` / `cwd`) when present, otherwise the current working
+# directory.
 #
-# The full registry write logic lands in T008. Until then, this stub
-# emits {"status":"not_implemented"} so any harness or hook config that
-# pipes JSON in receives valid JSON back and a clean exit 0.
+# Run-key precedence (plan §Phase 1 work, L905-L913):
+#   1. CERBERUS_RUN_KEY (canonical neutral env)
+#   2. REVIEW_GATE_SESSION_KEY (back-compat alias)
+#   3. Existing registry's run_key when same Codex session id (Case 2:
+#      a SessionStart refresh preserves the original run_key so reviewers
+#      reattach to the same review_dir).
+#   4. Codex session id (default).
+#
+# Atomic-write algorithm (plan L509-L523, identical to existing
+# `bin/review-gate-lib.sh` `iteration.json` writer):
+#   1. mkdir -p parent dir
+#   2. Build JSON via jq -n (validates structure during construction)
+#   3. Write to <file>.tmp.$$ (PID suffix; & jobs and subshells get
+#      distinct PIDs — plan L1013).
+#   4. jq empty <tmp> validation; on failure remove tmp, exit non-zero.
+#   5. mv <tmp> <file> — POSIX rename(2) is atomic on the same filesystem.
+#   6. On any error path BEFORE the mv, remove the tmp file.
+#
+# Signal-kill atomicity invariant: this script intentionally does NOT
+# install an EXIT trap that removes the tmp file. If the writer is
+# killed between step 3 and step 5, the tmp file remains as an orphan
+# `*.tmp.$$` and `active-session.json` is either absent or contains the
+# previous valid content. This matches the plan's atomic-write
+# invariant (plan L1146-L1147) and is exercised by Case 6.
+#
+# Concurrent registry writes for the same workspace are last-writer-wins
+# by design (plan L525-L526). Older runs remain accessible by explicit
+# --session-key / CERBERUS_RUN_KEY.
 
 set -euo pipefail
 
-# Drain stdin so upstream hooks block on read close, not on us never
-# consuming. We don't need the body in the stub, but consuming it
-# matches the final T008 contract and prevents EPIPE on the producer.
-_stdin_body=""
-if [ ! -t 0 ]; then
-    _stdin_body=$(cat || true)
-fi
-unset _stdin_body
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-printf '{"status":"not_implemented","task":"T008"}\n'
+# Source review-gate-lib.sh for get_project_hash (plan §Reuse, L116-L118).
+# shellcheck source=./review-gate-lib.sh
+source "$SCRIPT_DIR/review-gate-lib.sh"
+
+__codex_init_log() {
+    echo "codex-session-init: $*" >&2
+}
+
+# ---- 1. Read + validate stdin JSON --------------------------------------
+INPUT=""
+if [ ! -t 0 ]; then
+    INPUT="$(cat || true)"
+fi
+
+if [ -z "$INPUT" ]; then
+    __codex_init_log "no JSON on stdin"
+    exit 2
+fi
+
+if ! printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
+    __codex_init_log "malformed JSON on stdin"
+    exit 2
+fi
+
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty')"
+# Codex SessionStart payloads have used both `workspace_root` and `cwd`
+# in the wild; accept either, prefer the explicit workspace_root.
+WORKSPACE_ROOT="$(printf '%s' "$INPUT" | jq -r '.workspace_root // .cwd // empty')"
+TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
+
+if [ -z "$SESSION_ID" ]; then
+    __codex_init_log "missing required field 'session_id' in stdin JSON"
+    exit 2
+fi
+
+if [ -z "$WORKSPACE_ROOT" ]; then
+    WORKSPACE_ROOT="$(pwd)"
+fi
+
+# ---- 2. Compute project_key ---------------------------------------------
+# Reuse get_project_hash (plan §Reuse). The function honors
+# CERBERUS_PROJECT_KEY first, then transcript_path, then
+# CLAUDE_PROJECT_DIR / git / cwd. We override CLAUDE_PROJECT_DIR for
+# the duration of the call so the workspace_root from Codex's payload
+# anchors the hash even when no transcript_path / CERBERUS_PROJECT_KEY
+# is set. CLAUDE_PROJECT_DIR is the existing project-root env in
+# get_project_hash; setting it on this single call does not leak into
+# the script's environment.
+PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" get_project_hash "$TRANSCRIPT_PATH")"
+
+case "$PROJECT_KEY" in
+    ""|.|..)
+        __codex_init_log "invalid project_key '$PROJECT_KEY' (empty, '.', or '..')"
+        exit 2
+        ;;
+    */*)
+        __codex_init_log "invalid project_key '$PROJECT_KEY' (must not contain '/')"
+        exit 2
+        ;;
+esac
+
+# ---- 3. Resolve run_key --------------------------------------------------
+ENV_RUN_KEY="${CERBERUS_RUN_KEY:-${REVIEW_GATE_SESSION_KEY:-}}"
+RUN_KEY="$ENV_RUN_KEY"
+if [ -z "$RUN_KEY" ]; then
+    RUN_KEY="$SESSION_ID"
+fi
+
+# Validate run_key (path-traversal rejection — same surface as
+# resolve_review_dir).
+case "$RUN_KEY" in
+    */*|.|..)
+        __codex_init_log "invalid run_key '$RUN_KEY' (must not contain '/' or be '.'/'..')"
+        exit 2
+        ;;
+esac
+
+# ---- 4. Registry-refresh path: preserve run_key when same session_id ----
+REGISTRY_DIR="$HOME/.cerberus/runtime/codex/$PROJECT_KEY"
+REGISTRY_FILE="$REGISTRY_DIR/active-session.json"
+
+# Only consult the existing registry to preserve run_key when the env
+# did NOT explicitly override. If user supplied CERBERUS_RUN_KEY /
+# REVIEW_GATE_SESSION_KEY, that wins unconditionally.
+if [ -z "$ENV_RUN_KEY" ] && [ -f "$REGISTRY_FILE" ]; then
+    PREV_SESSION_ID="$(jq -r '.session_id // empty' "$REGISTRY_FILE" 2>/dev/null || true)"
+    if [ "$PREV_SESSION_ID" = "$SESSION_ID" ]; then
+        PREV_RUN_KEY="$(jq -r '.run_key // empty' "$REGISTRY_FILE" 2>/dev/null || true)"
+        if [ -n "$PREV_RUN_KEY" ]; then
+            # Re-validate (defensive: prior writer's run_key is
+            # ostensibly already validated, but registry could be
+            # corrupt or hand-edited).
+            case "$PREV_RUN_KEY" in
+                */*|.|..) ;;
+                *) RUN_KEY="$PREV_RUN_KEY" ;;
+            esac
+        fi
+    fi
+fi
+
+# ---- 5. Build registry JSON via jq + atomic write -----------------------
+mkdir -p "$REGISTRY_DIR"
+
+LAST_SEEN="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+TMP_FILE="$REGISTRY_FILE.tmp.$$"
+
+if ! jq -n \
+    --argjson schema_version 1 \
+    --arg host "codex" \
+    --arg workspace_root "$WORKSPACE_ROOT" \
+    --arg project_key "$PROJECT_KEY" \
+    --arg session_id "$SESSION_ID" \
+    --arg codex_session_id "$SESSION_ID" \
+    --arg run_key "$RUN_KEY" \
+    --arg transcript_path "$TRANSCRIPT_PATH" \
+    --arg last_seen "$LAST_SEEN" \
+    '{
+        schema_version: $schema_version,
+        host: $host,
+        workspace_root: $workspace_root,
+        project_key: $project_key,
+        session_id: $session_id,
+        codex_session_id: $codex_session_id,
+        run_key: $run_key,
+        transcript_path: $transcript_path,
+        last_seen: $last_seen
+    }' > "$TMP_FILE" 2>/dev/null; then
+    __codex_init_log "failed to build registry JSON via jq"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+
+if ! jq empty "$TMP_FILE" >/dev/null 2>&1; then
+    __codex_init_log "tmp registry validation failed (jq empty)"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+
+# Test-only knob: pause between temp creation and mv so Case 6 can
+# kill the writer in the atomic-write race window. Disabled by default;
+# only enabled by bin/tests/test-codex-session-registry.sh.
+if [ -n "${CERBERUS_TEST_PRE_MV_SLEEP:-}" ]; then
+    sleep "$CERBERUS_TEST_PRE_MV_SLEEP"
+fi
+
+mv "$TMP_FILE" "$REGISTRY_FILE"
+
 exit 0
