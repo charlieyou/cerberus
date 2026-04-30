@@ -47,10 +47,51 @@ Invoke the shared backend with `CERBERUS_HOST=codex` exported.
 
 ```bash
 export CERBERUS_HOST=codex
-if [ "$#" -lt 1 ]; then
-    echo "review-plan: a plan path is required (Codex v1 has no plan registry)" >&2
+
+# Verify a plan-path-shaped positional arg is present BEFORE handing off to
+# the backend. The backend's `spawn-plan-review` falls back to the most-recent
+# plan in `$HOME/.claude/plans/` when no path is supplied, which violates the
+# Codex v1 contract that a missing path is a clear user error. We mirror the
+# backend's path-detection heuristic (existing file, `/`-prefixed,
+# `./`/`../`-prefixed, `.md`-suffixed, or contains `/`) so any positional
+# the backend would accept as a plan path also passes this guard, and any
+# bare flag-only or free-text-only invocation fails fast.
+__looks_like_plan_path() {
+    [ -f "$1" ] && return 0
+    case "$1" in
+        /*|./*|../*|*/*|*.md) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+have_plan_path=0
+i=1
+while [ "$i" -le "$#" ]; do
+    a="${!i}"
+    case "$a" in
+        --agents|--max-rounds|--mode|--consensus|--context-file|--focus|--session-id|--transcript-path)
+            i=$((i + 2)); continue ;;
+        --debate|-h|--help)
+            i=$((i + 1)); continue ;;
+        --)
+            # Backend treats everything after `--` as forced focus, never path.
+            break ;;
+        --*=*|-*)
+            i=$((i + 1)); continue ;;
+        *)
+            if __looks_like_plan_path "$a"; then
+                have_plan_path=1
+                break
+            fi
+            i=$((i + 1)); continue ;;
+    esac
+done
+
+if [ "$have_plan_path" -eq 0 ]; then
+    echo "review-plan: a plan path is required (Codex v1 has no plan registry; pass an explicit path/to/plan.md)" >&2
     exit 2
 fi
+
 "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/bin/review-gate" spawn-plan-review "$@"
 ```
 

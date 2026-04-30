@@ -46,10 +46,48 @@ Invoke the shared backend with `CERBERUS_HOST=codex` exported.
 
 ```bash
 export CERBERUS_HOST=codex
-if [ "$#" -lt 1 ]; then
-    echo "review-spec: a spec path is required (Codex v1 has no spec registry)" >&2
+
+# Verify a spec-path-shaped positional arg is present BEFORE handing off to
+# the backend. The backend already dies with "Spec path is required" when no
+# path is supplied, but a fast pre-flight check produces a clearer Codex-side
+# error and is symmetric with the review-plan guard. We mirror the backend's
+# path-detection heuristic so any positional the backend would accept as a
+# spec path also passes this guard.
+__looks_like_spec_path() {
+    [ -f "$1" ] && return 0
+    case "$1" in
+        /*|./*|../*|*/*|*.md) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+have_spec_path=0
+i=1
+while [ "$i" -le "$#" ]; do
+    a="${!i}"
+    case "$a" in
+        --agents|--max-rounds|--mode|--consensus|--context-file|--session-id|--transcript-path)
+            i=$((i + 2)); continue ;;
+        --debate|-h|--help)
+            i=$((i + 1)); continue ;;
+        --)
+            i=$((i + 1)); continue ;;
+        --*=*|-*)
+            i=$((i + 1)); continue ;;
+        *)
+            if __looks_like_spec_path "$a"; then
+                have_spec_path=1
+                break
+            fi
+            i=$((i + 1)); continue ;;
+    esac
+done
+
+if [ "$have_spec_path" -eq 0 ]; then
+    echo "review-spec: a spec path is required (Codex v1 has no spec registry; pass an explicit path/to/spec.md)" >&2
     exit 2
 fi
+
 "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/bin/review-gate" spawn-spec-review "$@"
 ```
 
