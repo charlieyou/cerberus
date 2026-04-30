@@ -189,7 +189,7 @@ inherit the env var from `SessionStart`.
 | `review-spec` | `bin/review-gate spawn-spec-review <spec-path> [flags]` | `<spec-path>` | `--mode`, `--consensus`, `--agents`, `--max-rounds`, `--debate` |
 | `ask` | `bin/review-gate spawn-ask <question>` then `wait --json --finalize` | none | `--debate`, `--mode`, `--agents`, `--max-rounds`, `--consensus`, `--context-file`, `--prompt-file`, `--` to escape leading dashes |
 | `status` | `bin/review-gate status --json` | none | `--session-key <K>` to inspect a non-active run |
-| `clear-gate` | `bin/review-gate resolve --reason "manual clear from Codex"` | none | `--session-key <K>` to clear a non-active run |
+| `clear-gate` | `bin/review-gate resolve --reason "manual clear from Codex"` | none | (none — `bin/review-gate resolve` only accepts `--reason`; to target a non-active run, set `CERBERUS_RUN_KEY=<K>` in the environment before invoking) |
 
 ### `review-code`
 
@@ -219,20 +219,39 @@ flag.
 
 ### `status`
 
-Read-only. Emits a single JSON document on stdout. Top-level keys you
-can rely on: `status` (one of `no_active_gate`, `pending`, `passed`,
-`failed`, `cleared`, `error`, `unknown`), `host` (`codex` for runs
-created from Codex), `run_key`. Exit codes match the shared backend:
-`0` = body emitted, `4` = no active gate, anything else = backend
-failure (body still valid JSON). The skill **never** mutates state —
-this is the contract verified by `bin/tests/test-status-command.sh`.
+Read-only. Emits a single JSON document on stdout. The body has two
+distinct shapes depending on what the resolver finds:
+
+- **Active gate** (canonical body): top-level keys include
+  `schema_version`, `host` (`codex` for runs created from Codex),
+  `project_key`, `run_key`, `review_dir`, `gate_status` (one of
+  `pending`, `awaiting_decision`, `resolved`, or `unknown`),
+  `consensus_verdict` (one of `pass`, `fail`, `needs_revision`, or
+  JSON `null`), `reviewers`, `pending_reviewers`,
+  `aggregated_findings`, `parse_errors`.
+- **Special / error body**: a smaller body keyed off `status` instead
+  of `gate_status`. The two values you'll observe are
+  `{"status":"no_active_gate"}` (exit 4) and
+  `{"status":"unknown","error":"malformed_state"}` (exit 0,
+  failure-open path).
+
+Exit codes match the shared backend: `0` = body emitted (active gate
+or malformed-state failure-open), `4` = no active gate, anything else
+= backend failure (body still valid JSON). The skill **never**
+mutates state — this is the contract verified by
+`bin/tests/test-status-command.sh`.
 
 ### `clear-gate`
 
 Operator escape hatch. Resolves the active gate so the session can
-stop without completing the review cycle. Pass `--session-key <K>` to
-target a specific (non-active) run. The resolution reason is recorded
-as `manual clear from Codex` so audit trails make the source of the
+stop without completing the review cycle. The skill takes no
+arguments. To target a non-active run, set `CERBERUS_RUN_KEY=<K>` in
+the environment before invoking — `bin/review-gate resolve` only
+accepts `--reason` on its CLI; the run identity is read via
+`__cerberus_resolve_run_key` (which honors `CERBERUS_RUN_KEY`,
+`REVIEW_GATE_SESSION_KEY`, and `CLAUDE_SESSION_ID` in that
+precedence). The resolution reason is recorded as `manual clear from
+Codex` so audit trails make the source of the
 clear unambiguous.
 
 ## Stop-Hook Wait Knob (`CERBERUS_CODEX_STOP_WAIT_SECONDS`)
@@ -317,8 +336,10 @@ contains an absolute path (or the literal `${CERBERUS_ROOT}`) in every
 
 ### `CERBERUS_ROOT` and `CLAUDE_PLUGIN_ROOT` both set, pointing at different installs
 
-**Symptom:** A stderr warning of the form `CERBERUS_ROOT differs from
-CLAUDE_PLUGIN_ROOT alias; CERBERUS_ROOT wins` appears once per process.
+**Symptom:** A stderr warning of the literal form
+`warning: CERBERUS_ROOT != CLAUDE_PLUGIN_ROOT; using CERBERUS_ROOT`
+appears once per process (emitted by
+`bin/review-gate:88`).
 
 **Fix:** This is intentional — `CERBERUS_ROOT` always wins. The
 warning is informational. Either unset `CLAUDE_PLUGIN_ROOT` if you
@@ -355,9 +376,19 @@ cat ~/.cerberus/runtime/codex/<workspace-key>/active-session.json
 rm ~/.cerberus/runtime/codex/<workspace-key>/active-session.json
 ```
 
-If you want to target a specific (non-active) run, pass
-`--session-key <run-key>` directly to `bin/review-gate status` /
-`resolve` rather than relying on the registry.
+If you want to target a specific (non-active) run, the two
+subcommands take it in different ways. `bin/review-gate status` accepts
+the flag directly: `status --json --session-key <run-key>`.
+`bin/review-gate resolve` does **not** parse `--session-key` — it only
+accepts `--reason` — so to clear a non-active run, set
+`CERBERUS_RUN_KEY=<run-key>` in the environment before invoking
+`resolve`. Example:
+
+```bash
+CERBERUS_RUN_KEY=<run-key> \
+    "$CERBERUS_ROOT/bin/review-gate" resolve \
+        --reason "manual clear from Codex"
+```
 
 ### `Cerberus: Status` works but `Cerberus: Clear Gate` doesn't resolve the run I expected
 
@@ -365,12 +396,16 @@ If you want to target a specific (non-active) run, pass
 you're inspecting.
 
 **Fix:** `clear-gate` resolves the run identified by the active
-session registry. If the registry was written for a different
-session, pass `--session-key <K>` explicitly:
+session registry, which is read via `__cerberus_resolve_run_key`. If
+the registry was written for a different session, override the run
+identity by exporting `CERBERUS_RUN_KEY=<K>` in the shell that invokes
+the skill (or in the equivalent host-side env block). `resolve` does
+not accept `--session-key` on its CLI:
 
 ```bash
-"$CERBERUS_ROOT/bin/review-gate" resolve --session-key <K> \
-    --reason "manual clear from Codex"
+CERBERUS_RUN_KEY=<K> \
+    "$CERBERUS_ROOT/bin/review-gate" resolve \
+        --reason "manual clear from Codex"
 ```
 
 ### Stop hook timing out
@@ -424,9 +459,12 @@ CI gate.
    - Re-emits the "still running" allow with the same wait timeout
      fallback message.
 6. **`Cerberus: Status` after completion.** When the panel finishes,
-   invoke `status`. Confirm the JSON has `status` = `pending` /
-   `passed` / `failed` / `awaiting_decision` and the expected
-   `aggregated_findings` array.
+   invoke `status`. The body is the canonical active-gate shape:
+   confirm `gate_status` is one of `pending`, `awaiting_decision`, or
+   `resolved`; that `consensus_verdict` is one of `pass`, `fail`,
+   `needs_revision`, or JSON `null`; and that `aggregated_findings`
+   is the expected array. (The smaller special-body shape keyed off
+   `status` only appears for `no_active_gate` / `malformed_state`.)
 7. **`Cerberus: Clear Gate`.** Invoke `clear-gate`. Confirm
    `gate-state.json.status` flips to `resolved` with reason
    `manual clear from Codex`.
