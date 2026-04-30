@@ -1329,6 +1329,36 @@ during phase spikes:
   both command handlers and lifecycle events. The plan already designs
   for the no-durable-thread-id case, so this spike informs default-path
   behavior, not architecture.
+  - **OQ-3 resolved (2026-04-30, best-effort, T012):** Decision tree
+    branch **"stable in commands, not in lifecycle."** Static
+    inspection of the published Amp CLI bundle (version
+    `0.0.1777572045-g97f3b8`) shows Amp propagates the live thread id
+    to subprocess tools via the `AMP_THREAD_ID` and
+    `AMP_CURRENT_THREAD_ID` environment variables (literal write
+    sites: `AMP_THREAD_ID: J?.thread?.id || ""`). Thread ids use the
+    `T-<uuid7>` form and are durable across CLI restarts (`amp
+    threads continue <id>`), tool invocations within a thread, and
+    settings reloads (thread state persists under
+    `~/.amp/file-changes/T-<uuid7>/`). T013/T014 use
+    `process.env.AMP_THREAD_ID` (validated against the `T-<uuid7>`
+    shape) as the default run key; the workspace-scoped persisted
+    UUID at `~/.cerberus/runtime/amp/<workspace-key>/active-session.json`
+    remains the correct fallback for empty/missing/malformed thread
+    ids (still implemented, **not** dead code). **Divergence flag:**
+    the plan §Host Assumptions L153-L163 framing ("TypeScript plugin
+    under `.amp/plugins/`, `amp.registerCommand`, `session.start`/
+    `agent.start`/`agent.end`/`tool.call`/`tool.result` lifecycle
+    events, `PLUGINS=all amp`") is **not present** in the inspected
+    Amp build. The actual extension surface is the **Amp Toolbox**
+    (subprocess scripts driven by `TOOLBOX_ACTION=describe|execute`,
+    generated via `amp tools make`) and **Skills** (`amp skill add`).
+    No public lifecycle-callback surface exists — the plan's
+    "lifecycle handlers out of v1 scope" remains correct on substance
+    but for a different reason. T013 should re-target the plan's
+    `.amp/plugins/cerberus.ts` skeleton to the toolbox-tool surface
+    (six tools mirroring the six review commands) and read the run
+    key from `process.env.AMP_THREAD_ID`. Detail and evidence in
+    [`docs/AMP.md` §Phase 2 Spike Findings](AMP.md#phase-2-spike-findings).
 - **OQ-4 (Phase 3):** Whether to introduce a neutral plan registry
   (`~/.cerberus/projects/<key>/plans/latest.txt`) to give Codex/Amp
   parity with Claude's "review-plan with no arg" UX.
