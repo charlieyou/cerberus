@@ -13,9 +13,20 @@ if [[ -f "$_REVIEW_GATE_LIB_DIR/telemetry-lib.sh" ]]; then
     source "$_REVIEW_GATE_LIB_DIR/telemetry-lib.sh" 2>/dev/null || true
 fi
 
-# Get project hash from transcript path or calculate from project root
+# Get project hash from transcript path or calculate from project root.
+# Host-neutral extension: when CERBERUS_PROJECT_KEY is set and non-empty it is
+# echoed verbatim and existing fallbacks are skipped. Empty strings are treated
+# as unset (matches the existing ${VAR:-} idiom — see plan §Alias precedence).
+# Validation of the returned key (path-traversal rejection) lives in
+# resolve_review_dir() so the validation surface is a single chokepoint.
 get_project_hash() {
     local transcript_path="${1:-}"
+
+    # Neutral override (plan L360-L363).
+    if [[ -n "${CERBERUS_PROJECT_KEY:-}" ]]; then
+        echo "$CERBERUS_PROJECT_KEY"
+        return 0
+    fi
 
     if [[ -n "$transcript_path" ]]; then
         local dir_name
@@ -30,20 +41,129 @@ get_project_hash() {
     echo "$project_root" | sed 's|^/|-|' | tr '/' '-'
 }
 
-# Resolve the review directory for a session
+# Resolve the review directory for a session.
+#
+# Host-neutral resolver — implements the algorithm from plan §State Resolution
+# Algorithm (L300-L353). When no CERBERUS_* env is set the result is byte-for-
+# byte equivalent to the legacy Claude path (~/.claude/projects/<hash>/cerberus
+# /<session-id>). Per Phase 0 plan, this resolver is the single chokepoint for
+# host detection, state-root selection, project-key validation, and run-key
+# fallback.
+#
+# Arguments:
+#   $1  session_id      legacy positional run-key fallback (used by the Claude
+#                       path when neither CERBERUS_RUN_KEY nor
+#                       REVIEW_GATE_SESSION_KEY is set)
+#   $2  transcript_path optional transcript path, fed to get_project_hash()
+#
+# Validation failures (invalid CERBERUS_HOST, non-absolute CERBERUS_STATE_ROOT,
+# path-traversal in run/project key) emit a single log() line on stderr and
+# return 1. Empty CERBERUS_STATE_ROOT is treated as unset per the "empty as
+# unset" rule (plan §Alias precedence). T004 wires the negative-path
+# diagnostics into bin/review-gate's state-creation surface; T001 only
+# enforces resolver-level validation here.
 resolve_review_dir() {
     local session_id="${1:-}"
     local transcript_path="${2:-}"
 
-    local project_hash
-    project_hash=$(get_project_hash "$transcript_path")
-
-    local base_dir="$HOME/.claude/projects/$project_hash/cerberus"
-
-    if [[ -n "$session_id" ]]; then
-        echo "$base_dir/$session_id"
+    # Step 1: resolve effective run key.
+    # Delegate to __cerberus_resolve_run_key when bin/review-gate has loaded
+    # it (the canonical definition lives near the top of bin/review-gate).
+    # When the lib is sourced standalone (test fixtures, future helpers) we
+    # fall back to direct env reads with the same precedence — but no
+    # alias-mismatch warning here, because the warning is owned by
+    # __cerberus_resolve_run_key and guarded by __CERBERUS_ALIAS_WARNED to
+    # avoid double-firing across the helper and this fallback.
+    local run_key=""
+    if declare -f __cerberus_resolve_run_key >/dev/null 2>&1; then
+        run_key="$(__cerberus_resolve_run_key)"
     else
-        echo "$base_dir"
+        run_key="${CERBERUS_RUN_KEY:-${REVIEW_GATE_SESSION_KEY:-}}"
+    fi
+    if [[ -z "$run_key" ]]; then
+        run_key="$session_id"
+    fi
+
+    # Step 1b: validate run-key (path-traversal rejection). An empty run_key
+    # is allowed and yields the project-base path; only reject explicit unsafe
+    # forms.
+    if [[ -n "$run_key" ]]; then
+        case "$run_key" in
+            */*|.|..)
+                log "review-gate: invalid run key '$run_key' (must not contain '/' or be '.'/'..')"
+                return 1
+                ;;
+        esac
+    fi
+
+    # Step 2: resolve effective host.
+    # Auto-detect: CLAUDE_* env, OR a non-empty transcript_path positional
+    # arg (which Claude callers pass even without exporting CLAUDE_* — this
+    # is what the existing test fixtures rely on for byte-for-byte parity).
+    # Plan §Phase 0 row 7 covers the default-generic case explicitly with no
+    # CLAUDE_* AND no transcript_path arg.
+    local host="${CERBERUS_HOST:-}"
+    if [[ -z "$host" ]]; then
+        if [[ -n "${CLAUDE_SESSION_ID:-}" || -n "${CLAUDE_TRANSCRIPT_PATH:-}" \
+              || -n "${CLAUDE_PROJECT_DIR:-}" || -n "$transcript_path" ]]; then
+            host="claude"
+        else
+            host="generic"
+        fi
+    fi
+    case "$host" in
+        claude|codex|amp|generic) ;;
+        *)
+            log "review-gate: invalid CERBERUS_HOST='$host' (expected one of claude|codex|amp|generic)"
+            return 1
+            ;;
+    esac
+
+    # Step 3: resolve state root.
+    local state_root
+    local custom_root="${CERBERUS_STATE_ROOT:-}"
+    if [[ -n "$custom_root" ]]; then
+        # Reject literal ~ (no shell-side expansion in this env path) and any
+        # non-absolute path. Empty strings are unset (handled by ${VAR:-}).
+        if [[ "$custom_root" == "~"* || "$custom_root" != /* ]]; then
+            log "review-gate: invalid CERBERUS_STATE_ROOT='$custom_root' (must be an absolute path; literal '~' is not expanded)"
+            return 1
+        fi
+        state_root="$custom_root"
+    elif [[ "$host" == "claude" ]]; then
+        state_root="$HOME/.claude/projects"
+    else
+        state_root="$HOME/.cerberus/projects"
+    fi
+
+    # Step 4: resolve project key.
+    local project_key
+    project_key=$(get_project_hash "$transcript_path")
+    case "$project_key" in
+        ""|.|..)
+            log "review-gate: invalid project key '$project_key' (must not be empty, '.', or '..')"
+            return 1
+            ;;
+        */*)
+            log "review-gate: invalid project key '$project_key' (must not contain '/')"
+            return 1
+            ;;
+    esac
+
+    # Step 5: build path. Claude keeps the legacy "/cerberus" infix for
+    # byte-for-byte compatibility; neutral hosts use the flatter neutral
+    # layout described in plan §Data Model.
+    local base
+    if [[ "$host" == "claude" ]]; then
+        base="$state_root/$project_key/cerberus"
+    else
+        base="$state_root/$project_key"
+    fi
+
+    if [[ -n "$run_key" ]]; then
+        echo "$base/$run_key"
+    else
+        echo "$base"
     fi
 }
 

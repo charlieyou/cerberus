@@ -23,6 +23,44 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
+# =============================================================================
+# Centralized host-neutral env helpers
+# =============================================================================
+# Defined BEFORE sourcing review-gate-lib.sh so that resolve_review_dir() in
+# the lib can delegate to __cerberus_resolve_run_key. The same helpers are
+# the single source of truth for ~25 read sites that previously read
+# ${REVIEW_GATE_SESSION_KEY:-} / ${CLAUDE_PLUGIN_ROOT:-} directly; T002
+# routes those sites through these helpers as a mechanical refactor.
+#
+# Plan reference: §API/Interface Design (L543-L600).
+
+# __cerberus_resolve_run_key — return the effective Cerberus run key.
+# Precedence: CERBERUS_RUN_KEY > REVIEW_GATE_SESSION_KEY > "" (caller falls
+# back to a positional session_id when both are unset/empty). When the two
+# alias env vars are both set and disagree, emit a SINGLE warning to stderr
+# guarded by the once-per-process __CERBERUS_ALIAS_WARNED sentinel.
+#
+# IMPORTANT: write the warning DIRECTLY to stderr (not via log()) because
+# this helper is invoked inside command substitution at many call sites; any
+# stdout output here would corrupt the returned run key.
+__cerberus_resolve_run_key() {
+    local cer="${CERBERUS_RUN_KEY:-}"
+    local leg="${REVIEW_GATE_SESSION_KEY:-}"
+    if [ -n "$cer" ] && [ -n "$leg" ] && [ "$cer" != "$leg" ] \
+       && [ -z "${__CERBERUS_ALIAS_WARNED:-}" ]; then
+        echo "warning: CERBERUS_RUN_KEY != REVIEW_GATE_SESSION_KEY; using CERBERUS_RUN_KEY" >&2
+        export __CERBERUS_ALIAS_WARNED=1
+    fi
+    echo "${cer:-${leg:-}}"
+}
+
+# __cerberus_resolve_root — return the effective plugin/repo root.
+# Precedence: CERBERUS_ROOT > CLAUDE_PLUGIN_ROOT > "" (caller falls back to
+# the script-directory-derived PLUGIN_ROOT computed above).
+__cerberus_resolve_root() {
+    echo "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+}
+
 # Load shared helpers
 source "$SCRIPT_DIR/review-gate-lib.sh"
 source "$SCRIPT_DIR/review-gate-models.sh"
