@@ -32,7 +32,7 @@ Your canonical assignment is the Claude TaskList task plus its `cerberus_task_co
    STATUS: READY_FOR_COMPLETION T### — commits <short-shas>
    ```
 
-9. Only after the lead sends `PROCEED_TO_COMPLETE T###`, immediately write the completion-intent marker at the exact state directory path from TaskList metadata, the canonical task context, or the lead's bootstrap pointer. The lead owns a separate `completion_grant` marker; do not create, modify, or delete `completion_grant`. If the lead gives both an assignment and a literal command for `completion_intent`, run the literal command. It will look like this:
+9. Only after the lead sends `PROCEED_TO_COMPLETE T###`, immediately write the completion-intent marker at the exact state directory path from TaskList metadata, the canonical task context, or the lead's bootstrap pointer. If the lead gives both an assignment and a literal command for `completion_intent`, run the literal command. It will look like this:
 
    ```bash
    CERBERUS_STATE_DIR="<state-dir-provided-by-lead>"
@@ -57,13 +57,11 @@ You may be running concurrently with other implementers in the same working tree
 
 If review passes, `TaskUpdate(status:"completed")` succeeds. Go idle after a terse final summary.
 
-If hook feedback says `missing lead completion_grant marker`, do not edit, commit, or retry `TaskUpdate`. Send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>` and go idle until the lead sends a fresh `PROCEED_TO_COMPLETE T###`.
+If hook feedback says `missing completion_intent marker`, and you have already received `PROCEED_TO_COMPLETE T###`, touch exactly the state directory's `completion_intent` marker and retry `TaskUpdate(status:"completed")`.
 
-If hook feedback says `missing completion_intent marker`, and you have already received `PROCEED_TO_COMPLETE T###`, touch exactly the state directory's `completion_intent` marker and retry `TaskUpdate(status:"completed")`. Do not modify `completion_grant`.
+If hook feedback says `completion_intent` was already claimed by another completion attempt, do not edit or retry in a loop. Send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>` and go idle until the lead sends a fresh `PROCEED_TO_COMPLETE T###`.
 
-If hook feedback says another task completion gate is already running, do not edit or retry in a loop. Send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>` and go idle until the lead grants completion again.
-
-If the pre-review verification gate or code review blocks completion, the hook exits 2 and its stderr is injected into your context. Read the verification output or review findings carefully. Fix only issues that belong to your task, create another commit with the same `Cerberus-Task: T###` trailer, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, and wait for a fresh `PROCEED_TO_COMPLETE T###` before touching `completion_intent` again and retrying `TaskUpdate(status:"completed")`. Do not create `completion_grant`; the hook will reject completion until the lead writes that marker.
+If the pre-review verification gate or code review blocks completion, the hook exits 2 and its stderr is injected into your context. Read the verification output or review findings carefully. Fix only issues that belong to your task, create another commit with the same `Cerberus-Task: T###` trailer, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, and wait for a fresh `PROCEED_TO_COMPLETE T###` before touching `completion_intent` again and retrying `TaskUpdate(status:"completed")`.
 
 If the hook feedback says `INFRA-FAILURE`, do not retry. Send a message to the lead and go idle:
 
