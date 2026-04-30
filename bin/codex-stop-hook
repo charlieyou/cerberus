@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# bin/codex-stop-hook — Codex Stop adapter (Phase 1 stub).
+#
+# Final responsibility (T009): read Codex Stop JSON from stdin, look up
+# the active run via the session registry, run
+# `review-gate status --json --session-key <run>`, and map the result to
+# a Codex hook response per the Stop Decision Matrix
+# (plan §Codex Stop Decision Matrix, L732-L766).
+#
+# This file is a Phase-1 SKELETON (T007). The matrix logic lands in
+# T009; this stub is the failure-open default (always emit
+# {"action":"allow"} and exit 0).
+#
+# Why install signal traps from day one (T007 not T009):
+#   - Plan §Phase 1 exit criteria require the Stop adapter to fail open
+#     under SIGINT/SIGTERM/SIGHUP starting from the first commit that
+#     introduces this file. If we deferred trap installation to T009, a
+#     Codex deployment that picked up the stub between T007 and T009
+#     could hang forever on a stuck stub.
+#   - The trap implementation here is intentionally minimal: emit allow,
+#     kill any child processes whose PIDs we recorded, exit 0. T009
+#     extends `__cerberus_stop_safe_exit` with PID tracking for
+#     spawned `wait` children but the contract (always emit valid JSON,
+#     always exit 0) does not change.
+
+set -euo pipefail
+
+# Track child PIDs spawned during execution so the signal handler can
+# kill them on the way out. T007 stub spawns no children, but the slot
+# is live so T009's wait-spawn path can populate it without restructuring
+# the trap.
+__CERBERUS_STOP_CHILD_PIDS=()
+
+__cerberus_stop_safe_exit() {
+    # Best-effort: kill any tracked children. Ignore failures; this
+    # handler must never re-enter or block.
+    local pid
+    for pid in "${__CERBERUS_STOP_CHILD_PIDS[@]:-}"; do
+        if [ -n "${pid:-}" ]; then
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+    done
+    # Failure-open: emit allow and exit 0. Plan §Stop Decision Matrix
+    # row 13. The note distinguishes the trap path from the normal
+    # stub path so integration tests can tell them apart.
+    printf '{"action":"allow","note":"signal_trap"}\n'
+    exit 0
+}
+
+trap '__cerberus_stop_safe_exit' INT TERM HUP
+
+# Drain stdin so upstream hooks see EOF on their write end and don't
+# stall. T009 will parse this body for the session id; the stub just
+# discards it.
+_stdin_body=""
+if [ ! -t 0 ]; then
+    _stdin_body=$(cat || true)
+fi
+unset _stdin_body
+
+# Failure-open default for Phase 1 skeleton. T009 replaces this with
+# the full Stop Decision Matrix.
+printf '{"action":"allow","note":"not_implemented","task":"T009"}\n'
+exit 0

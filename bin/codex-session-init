@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# bin/codex-session-init — Codex SessionStart adapter (Phase 1 stub).
+#
+# Final responsibility (T008): read Codex SessionStart JSON from stdin,
+# compute project_key, atomically write
+#   ~/.cerberus/runtime/codex/<workspace-key>/active-session.json
+# per the registry schema (plan §Data Model, L478-L508) using the atomic
+# write algorithm (plan L509-L523).
+#
+# This file is a Phase-1 SKELETON (T007). It establishes:
+#   - the script entry point Codex's SessionStart hook will invoke,
+#   - shebang + strict-mode flags,
+#   - stdin consumption (so callers can pipe Codex JSON without errors),
+#   - a deterministic JSON output marker that integration tests can key on
+#     to confirm the right script was wired.
+#
+# The full registry write logic lands in T008. Until then, this stub
+# emits {"status":"not_implemented"} so any harness or hook config that
+# pipes JSON in receives valid JSON back and a clean exit 0.
+
+set -euo pipefail
+
+# Drain stdin so upstream hooks block on read close, not on us never
+# consuming. We don't need the body in the stub, but consuming it
+# matches the final T008 contract and prevents EPIPE on the producer.
+_stdin_body=""
+if [ ! -t 0 ]; then
+    _stdin_body=$(cat || true)
+fi
+unset _stdin_body
+
+printf '{"status":"not_implemented","task":"T008"}\n'
+exit 0

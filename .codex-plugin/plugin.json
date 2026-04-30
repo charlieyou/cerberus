@@ -1,0 +1,49 @@
+{
+  "name": "cerberus",
+  "version": "1.0.0",
+  "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude. (Codex packaging — schema is best-effort per docs/CODEX.md §Phase 1 Spike Findings; revisit when Codex publishes an authoritative manifest schema.)",
+  "author": {
+    "name": "charlieyou"
+  },
+  "repository": "https://github.com/charlieyou/cerberus",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "plan-review",
+    "multi-model",
+    "quality-gate",
+    "cerberus"
+  ],
+  "skills": [
+    {
+      "name": "review-code",
+      "path": "skills/cerberus/review-code.md",
+      "description": "Spawn a multi-model code review (Codex + Gemini + Claude consensus)."
+    },
+    {
+      "name": "review-plan",
+      "path": "skills/cerberus/review-plan.md",
+      "description": "Spawn a multi-model plan review. Requires an explicit plan path."
+    },
+    {
+      "name": "review-spec",
+      "path": "skills/cerberus/review-spec.md",
+      "description": "Spawn a multi-model spec review. Requires an explicit spec path."
+    },
+    {
+      "name": "ask",
+      "path": "skills/cerberus/ask.md",
+      "description": "Ask the Cerberus panel an open-ended question."
+    },
+    {
+      "name": "status",
+      "path": "skills/cerberus/status.md",
+      "description": "Show current review-gate status (read-only)."
+    },
+    {
+      "name": "clear-gate",
+      "path": "skills/cerberus/clear-gate.md",
+      "description": "Manually clear the active review gate."
+    }
+  ]
+}
