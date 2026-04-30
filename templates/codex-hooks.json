@@ -1,0 +1,58 @@
+{
+  "_install_instructions": [
+    "templates/codex-hooks.json — User-installed Codex lifecycle hook template (two-step install).",
+    "",
+    "STEP 1. Locate your Cerberus install root — the directory containing bin/, skills/,",
+    "        .codex-plugin/, etc. (e.g. ~/code/cerberus, /opt/cerberus).",
+    "",
+    "STEP 2. Replace EVERY occurrence of the placeholder <CERBERUS_INSTALL_ROOT> below",
+    "        with the absolute path to that install root, then copy the resulting JSON",
+    "        into Codex's hooks configuration file (typically ~/.codex/hooks.json or",
+    "        the platform equivalent — see docs/CODEX.md §Configure Hooks for the exact",
+    "        target path).",
+    "",
+    "        Example (POSIX shell):",
+    "          sed 's|<CERBERUS_INSTALL_ROOT>|/Users/me/code/cerberus|g' \\",
+    "              templates/codex-hooks.json > ~/.codex/hooks.json",
+    "",
+    "        Alternative: users who set CERBERUS_ROOT in their shell profile may instead",
+    "        replace the placeholder with ${CERBERUS_ROOT} and rely on env-var expansion",
+    "        at hook-invocation time (Codex's hook runner expands shell-style variables",
+    "        in the same way Claude's runner expands ${CLAUDE_PLUGIN_ROOT}). The shared",
+    "        backend reads CERBERUS_ROOT first via __cerberus_resolve_root, so this path",
+    "        is supported without further changes.",
+    "",
+    "OQ-2 RESOLUTION (docs/CODEX.md §Phase 1 Spike Findings, 2026-04-30): no stable",
+    "Codex-provided env var equivalent to Claude's CLAUDE_PLUGIN_ROOT is documented as",
+    "of authoring. The placeholder approach is the documented fallback. If a future",
+    "Codex release ships a stable env var (e.g. CODEX_PLUGIN_ROOT), update this template",
+    "to default to ${CODEX_PLUGIN_ROOT} and demote the placeholder to fallback.",
+    "",
+    "OUT OF SCOPE (Phase 1, plan §L811-L812): this template intentionally registers",
+    "ONLY the SessionStart and Stop lifecycle hooks. Claude-only team-automation",
+    "lifecycle hooks are deferred to Phase 4 and are not wired up here."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-session-init"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-stop-hook",
+            "timeout": 2100
+          }
+        ]
+      }
+    ]
+  }
+}
