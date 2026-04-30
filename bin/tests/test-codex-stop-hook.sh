@@ -751,6 +751,98 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression — round-1 review #1: CERBERUS_PROJECT_KEY env honored for
+# registry lookup. codex-session-init writes the registry under the
+# env-supplied project_key when CERBERUS_PROJECT_KEY is set; the Stop
+# hook MUST use the same key. If the hook recomputes a workspace-derived
+# key it will treat the registry as missing and emit a false allow even
+# when there's a blocking gate.
+# ---------------------------------------------------------------------------
+log_test "Regression #1 — CERBERUS_PROJECT_KEY env honored for registry lookup"
+cR1_home="$TEST_DIR/regress1"
+mkdir -p "$cR1_home"
+cR1_workspace="/tmp/cerberus-regress1"
+cR1_pk="team-alpha-explicit"           # NOT what workspace-derive would produce
+cR1_run="regress1-run-001"
+# Plant registry under the explicit project_key.
+cR1_reg_dir="$cR1_home/.cerberus/runtime/codex/$cR1_pk"
+mkdir -p "$cR1_reg_dir"
+jq -nc \
+    --argjson schema_version 1 \
+    --arg ws "$cR1_workspace" --arg pk "$cR1_pk" \
+    --arg sid "sess-regress1-001" --arg run "$cR1_run" \
+    '{schema_version:$schema_version, host:"codex", workspace_root:$ws,
+      project_key:$pk, session_id:$sid, codex_session_id:$sid,
+      run_key:$run, transcript_path:"", last_seen:"2026-04-30T00:00:00Z"}' \
+    > "$cR1_reg_dir/active-session.json"
+# Plant a blocking-finding fixture under the explicit-PK review_dir.
+cR1_rd="$cR1_home/.cerberus/projects/$cR1_pk/$cR1_run"
+mkdir -p "$cR1_rd/reviews"
+write_gate_state "$cR1_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR1_run"
+cat > "$cR1_rd/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"blocking","findings":[{"title":"x","body":"y","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+touch "$cR1_rd/reviews/codex.done"
+cR1_out="$TEST_DIR/cR1.out"
+cR1_err="$TEST_DIR/cR1.err"
+cR1_rc=0
+run_hook "$cR1_home" "$cR1_workspace" "sess-regress1-001" \
+    "$cR1_out" "$cR1_err" \
+    "CERBERUS_PROJECT_KEY=$cR1_pk" \
+    || cR1_rc=$?
+cR1_action="$(jq -r '.action // empty' "$cR1_out" 2>/dev/null || echo "")"
+cR1_msg="$(jq -r '.userMessage // empty' "$cR1_out" 2>/dev/null || echo "")"
+if [[ "$cR1_rc" -eq 0 && "$cR1_action" == "continue" && -n "$cR1_msg" ]]; then
+    log_pass "Regression #1 — CERBERUS_PROJECT_KEY env honored; row-6 continue fired"
+else
+    log_fail "Regression #1: rc=$cR1_rc action=$cR1_action msg='$cR1_msg' body=$(cat "$cR1_out") stderr=$(cat "$cR1_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — round-1 review #2: CERBERUS_STATE_ROOT honored for the
+# Row 3 run-dir pre-check. With a custom state root the registry lives
+# under $HOME/.cerberus/runtime/codex/<pk>/ (always) but the review dir
+# lives under $CERBERUS_STATE_ROOT/<pk>/<run>/. Hardcoding
+# $HOME/.cerberus/projects/... would emit a false "no review dir" allow.
+# ---------------------------------------------------------------------------
+log_test "Regression #2 — CERBERUS_STATE_ROOT honored for run-dir lookup"
+cR2_home="$TEST_DIR/regress2"
+mkdir -p "$cR2_home"
+cR2_workspace="/tmp/cerberus-regress2"
+cR2_run="regress2-run-001"
+cR2_state_root="$TEST_DIR/regress2-state"  # absolute path required
+mkdir -p "$cR2_state_root"
+# Registry stays under $HOME/.cerberus/runtime/codex/...
+make_registry "$cR2_home" "$cR2_workspace" "$cR2_run" "sess-regress2-001"
+# Plant the review_dir under CERBERUS_STATE_ROOT, NOT under the default
+# $HOME/.cerberus/projects.
+cR2_pk="$(expected_project_key "$cR2_workspace")"
+cR2_rd="$cR2_state_root/$cR2_pk/$cR2_run"
+mkdir -p "$cR2_rd/reviews"
+write_gate_state "$cR2_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR2_run"
+cat > "$cR2_rd/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"blocking","findings":[{"title":"a","body":"b","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+touch "$cR2_rd/reviews/codex.done"
+cR2_out="$TEST_DIR/cR2.out"
+cR2_err="$TEST_DIR/cR2.err"
+cR2_rc=0
+run_hook "$cR2_home" "$cR2_workspace" "sess-regress2-001" \
+    "$cR2_out" "$cR2_err" \
+    "CERBERUS_STATE_ROOT=$cR2_state_root" \
+    || cR2_rc=$?
+cR2_action="$(jq -r '.action // empty' "$cR2_out" 2>/dev/null || echo "")"
+cR2_note="$(jq -r '.note // empty' "$cR2_out" 2>/dev/null || echo "")"
+cR2_msg="$(jq -r '.userMessage // empty' "$cR2_out" 2>/dev/null || echo "")"
+# Pass conditions: action=continue AND no "no review dir" note.
+if [[ "$cR2_rc" -eq 0 && "$cR2_action" == "continue" \
+      && "$cR2_note" != *"no review dir"* && -n "$cR2_msg" ]]; then
+    log_pass "Regression #2 — CERBERUS_STATE_ROOT honored; row-6 continue fired"
+else
+    log_fail "Regression #2: rc=$cR2_rc action=$cR2_action note='$cR2_note' msg='$cR2_msg' body=$(cat "$cR2_out") stderr=$(cat "$cR2_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Happy path A — script entry point exists, executable.
 # ---------------------------------------------------------------------------
 log_test "Happy A — bin/codex-stop-hook exists, is a regular file, executable"

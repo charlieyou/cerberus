@@ -159,30 +159,54 @@ if [ -z "$WORKSPACE_ROOT" ]; then
 fi
 
 # ---- Compute project_key via review-gate-lib.sh ---------------------------
-# Source review-gate-lib.sh purely to access `get_project_hash`. Failure
-# to source is treated as failure-open per the matrix invariant.
+# Source review-gate-lib.sh purely to access `get_project_hash` and
+# `resolve_review_dir`. Failure to source is treated as failure-open per
+# the matrix invariant.
 if ! source "$SCRIPT_DIR/review-gate-lib.sh" 2>/dev/null; then
     __cerberus_stop_log "failed to source review-gate-lib.sh; failing open"
     __cerberus_emit_allow ""
     exit 0
 fi
 
-# get_project_hash precedence: CERBERUS_PROJECT_KEY (env) wins; else
-# transcript-path-derived; else CLAUDE_PROJECT_DIR / git / pwd. We anchor
-# the hash to the Codex-supplied workspace_root by setting
-# CLAUDE_PROJECT_DIR for the call (mirrors codex-session-init).
-PROJECT_KEY=""
-PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" \
-    CERBERUS_PROJECT_KEY="" \
-    get_project_hash "$TRANSCRIPT_PATH" 2>/dev/null || true)"
-
+# project_key precedence MUST match codex-session-init's writer side
+# (round-1 review feedback): CERBERUS_PROJECT_KEY env wins. If a Codex
+# session started with `CERBERUS_PROJECT_KEY=team-a` exported, the
+# registry was written under `~/.cerberus/runtime/codex/team-a/...`,
+# and Codex inherits that env into the Stop hook too. Forcing
+# `CERBERUS_PROJECT_KEY=""` here would recompute a workspace-derived
+# key, miss the registry, and emit `{"action":"allow"}` even when the
+# real run has a blocking gate — defeating the matrix.
+PROJECT_KEY="${CERBERUS_PROJECT_KEY:-}"
 if [ -z "$PROJECT_KEY" ]; then
-    __cerberus_stop_log "could not derive project_key; failing open"
-    __cerberus_emit_allow ""
-    exit 0
+    # No env override → derive from Codex-supplied workspace_root /
+    # cwd (anchored via CLAUDE_PROJECT_DIR for the single call;
+    # mirrors codex-session-init's derivation path).
+    PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" \
+        get_project_hash "$TRANSCRIPT_PATH" 2>/dev/null || true)"
 fi
 
+# Validate project_key shape (path-traversal rejection). resolve_review_dir
+# enforces the same rule; we reject up-front so the Row 2 / Row 3
+# pre-checks below cannot accidentally peek into a sibling directory.
+case "$PROJECT_KEY" in
+    ""|.|..)
+        __cerberus_stop_log "invalid project_key '$PROJECT_KEY'; failing open"
+        __cerberus_emit_allow ""
+        exit 0
+        ;;
+    */*)
+        __cerberus_stop_log "invalid project_key '$PROJECT_KEY' (contains '/'); failing open"
+        __cerberus_emit_allow ""
+        exit 0
+        ;;
+esac
+
 # ---- Row 2: registry file missing -----------------------------------------
+# The Codex session registry layout is fixed at
+# `~/.cerberus/runtime/codex/<project_key>/active-session.json`; it is
+# NOT influenced by CERBERUS_STATE_ROOT (that variable controls the
+# review-state root, not the runtime registry — see codex-session-init
+# L127 for the writer side). Mirror that exactly here.
 REGISTRY_FILE="$HOME/.cerberus/runtime/codex/$PROJECT_KEY/active-session.json"
 if [ ! -f "$REGISTRY_FILE" ]; then
     __cerberus_emit_allow ""
@@ -202,9 +226,35 @@ if [ -z "$RUN_KEY" ]; then
     exit 0
 fi
 
+# Validate run_key shape (defense in depth: registry could be hand-edited
+# or carry a key written by an older incompatible writer).
+case "$RUN_KEY" in
+    .|..|*/*)
+        __cerberus_stop_log "invalid run_key '$RUN_KEY' from registry; failing open"
+        __cerberus_emit_allow ""
+        exit 0
+        ;;
+esac
+
+# Export the env review-gate (and resolve_review_dir below) needs to
+# locate the run. CERBERUS_STATE_ROOT — if set on the parent — is
+# inherited automatically and honored by resolve_review_dir. The hook
+# is already in its own process so exporting here scopes only to this
+# invocation and any children it spawns.
+export CERBERUS_HOST="codex"
+export CERBERUS_PROJECT_KEY="$PROJECT_KEY"
+export CERBERUS_RUN_KEY="$RUN_KEY"
+
 # ---- Row 3: registry present but <run-key>/ missing -----------------------
-RUN_DIR="$HOME/.cerberus/projects/$PROJECT_KEY/$RUN_KEY"
-if [ ! -d "$RUN_DIR" ]; then
+# Use resolve_review_dir for the run-dir lookup (round-1 review
+# feedback): the user may set CERBERUS_STATE_ROOT to point at a custom
+# state root, in which case the run dir is at
+# `$CERBERUS_STATE_ROOT/<pk>/<run>/` rather than the default
+# `$HOME/.cerberus/projects/<pk>/<run>/`. Hardcoding the default would
+# bypass blocking findings stored under the custom root.
+RUN_DIR=""
+RUN_DIR="$(resolve_review_dir "" "$TRANSCRIPT_PATH" 2>/dev/null || true)"
+if [ -z "$RUN_DIR" ] || [ ! -d "$RUN_DIR" ]; then
     __cerberus_emit_allow "no review dir"
     exit 0
 fi
@@ -215,12 +265,6 @@ case "$WAIT_SECONDS_RAW" in
     ''|*[!0-9]*) WAIT_SECONDS=0 ;;
     *)           WAIT_SECONDS="$WAIT_SECONDS_RAW" ;;
 esac
-
-# Export the env review-gate needs to resolve our run. The hook is
-# already in its own process; exporting here scopes only to this
-# invocation and any children it spawns.
-export CERBERUS_HOST="codex"
-export CERBERUS_PROJECT_KEY="$PROJECT_KEY"
 
 # Helper: invoke `review-gate status --json --session-key <run>` and
 # capture body+rc.
