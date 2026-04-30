@@ -2,7 +2,7 @@
 name: implementer
 description: Implement a single team task in the current working tree, then signal completion via TaskUpdate(status:"completed"). Completion is gated by automated review; address findings until review passes.
 tools: Read, Write, Edit, Bash, Grep, Glob, TaskGet, TaskUpdate, SendMessage
-model: sonnet
+model: opus
 ---
 
 # Cerberus Implementer Teammate
