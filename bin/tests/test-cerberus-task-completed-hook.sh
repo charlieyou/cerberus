@@ -75,6 +75,12 @@ VERIFY
     printf '%s' "$state_dir"
 }
 
+grant_completion() {
+    local state_dir="$1"
+
+    touch "$state_dir/completion_grant" "$state_dir/completion_intent"
+}
+
 make_review_repo() {
     local repo="$1"
     mkdir -p "$repo"
@@ -138,7 +144,7 @@ if [[ "$status" -ne 2 || ! -f "$last_error" || "$output" != *"INFRA-FAILURE: mis
 fi
 log_pass "missing state blocks completion"
 
-log_test "prefixed task with state but no completion_intent blocks"
+log_test "prefixed task with state but no completion_grant blocks"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 state_dir=$(write_state)
 set +e
@@ -146,23 +152,48 @@ output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 2 || "$round" != "0" || "$output" != *"missing completion_intent marker"* ]]; then
-    log_fail "expected no-intent event to block without changing round, status=$status round=$round output=$output"
+if [[ "$status" -ne 2 || "$round" != "0" || "$output" != *"missing lead completion_grant marker"* ]]; then
+    log_fail "expected no-grant event to block without changing round, status=$status round=$round output=$output"
 fi
-log_pass "no-intent event blocks completion"
+log_pass "no-grant event blocks completion"
 
-log_test "completion lock contention blocks without consuming intent"
-rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
-state_dir=$(write_state)
-mkdir "$TMP_ROOT/cerberus-task-completed-hook/abc123/completion.lock"
+log_test "premature completion_intent without completion_grant is consumed"
 touch "$state_dir/completion_intent"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 2 || "$round" != "0" || ! -e "$state_dir/completion_intent" || "$output" != *"another task completion gate is already running"* ]]; then
-    log_fail "expected completion lock contention to block without consuming intent, status=$status round=$round output=$output"
+if [[ "$status" -ne 2 || "$round" != "0" || -e "$state_dir/completion_intent" || "$output" != *"missing lead completion_grant marker"* ]]; then
+    log_fail "expected premature intent without grant to block and be consumed, status=$status round=$round output=$output"
+fi
+log_pass "premature intent without grant is consumed"
+
+log_test "completion_grant without completion_intent blocks and preserves grant"
+touch "$state_dir/completion_grant"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 2 || "$round" != "0" || ! -e "$state_dir/completion_grant" || "$output" != *"missing completion_intent marker"* ]]; then
+    log_fail "expected grant without intent to block and preserve grant, status=$status round=$round output=$output"
+fi
+rm -f "$state_dir/completion_grant"
+log_pass "grant without intent blocks completion"
+
+log_test "completion lock contention blocks without consuming grant or intent"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+state_dir=$(write_state)
+mkdir "$TMP_ROOT/cerberus-task-completed-hook/abc123/completion.lock"
+grant_completion "$state_dir"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 2 || "$round" != "0" || ! -e "$state_dir/completion_grant" || ! -e "$state_dir/completion_intent" || "$output" != *"another task completion gate is already running"* ]]; then
+    log_fail "expected completion lock contention to block without consuming grant/intent, status=$status round=$round output=$output"
 fi
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123/completion.lock"
 log_pass "completion lock contention is retryable"
@@ -170,6 +201,7 @@ log_pass "completion lock contention is retryable"
 log_test "state directory comparison tolerates trailing slash in TMPDIR"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 state_dir=$(write_state)
+touch "$state_dir/completion_grant"
 set +e
 output=$(printf '{"hook_event_name":"TaskCompleted","task_subject":"%s","cwd":"%s","session_id":"test-session","transcript_path":"%s/transcript.jsonl"}' \
     "[CERBERUS-IMPL/abc123] T001 - test" "$PWD" "$TEST_DIR" \
@@ -182,7 +214,7 @@ fi
 log_pass "trailing-slash TMPDIR does not trigger state-dir mismatch"
 
 log_test "explicit completion without tagged commits blocks and increments round"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
@@ -194,12 +226,15 @@ fi
 if [[ -e "$state_dir/completion_intent" ]]; then
     log_fail "expected completion_intent to be consumed"
 fi
+if [[ -e "$state_dir/completion_grant" ]]; then
+    log_fail "expected completion_grant to be consumed"
+fi
 log_pass "missing tagged commit blocks completion"
 
 log_test "final blocking attempt writes exhausted marker"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
 state_dir=$(write_state 1)
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
@@ -211,13 +246,13 @@ fi
 log_pass "final failed attempt marks exhausted"
 
 log_test "post-exhaustion retry blocks instead of looping"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 2 || "$round" != "1" || ! -f "$state_dir/exhausted" || -e "$state_dir/completion_intent" || "$output" != *"Already exhausted"* ]]; then
+if [[ "$status" -ne 2 || "$round" != "1" || ! -f "$state_dir/exhausted" || -e "$state_dir/completion_grant" || -e "$state_dir/completion_intent" || "$output" != *"Already exhausted"* ]]; then
     log_fail "expected exhausted retry to block without looping, status=$status round=$round output=$output"
 fi
 log_pass "post-exhaustion retry blocks without looping"
@@ -228,7 +263,7 @@ repo="$TEST_DIR/pass-repo"
 make_review_repo "$repo"
 baseline=$(cat "$repo/baseline")
 state_dir=$(write_state 3 "$baseline" "$repo")
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 fake_plugin="$TEST_DIR/fake-plugin-pass"
 make_fake_review_gate "$fake_plugin"
 set +e
@@ -243,7 +278,21 @@ accepted_commits="$TMP_ROOT/cerberus-task-completed-hook/abc123/accepted_task_co
 if [[ "$status" -ne 0 || "$round" != "1" || ! -f "$state_dir/reviewed_pass" ]] || ! awk -v sha="$pass_sha" -v task="T001" '$1 == sha && $2 == task { found=1 } END { exit found ? 0 : 1 }' "$accepted_commits"; then
     log_fail "expected PASS review to allow completion, status=$status round=$round output=$output"
 fi
+if [[ -e "$state_dir/completion_grant" || -e "$state_dir/completion_intent" ]]; then
+    log_fail "expected PASS review to consume grant and intent"
+fi
 log_pass "PASS review allows completion"
+
+log_test "duplicate TaskCompleted for reviewed HEAD is idempotent without fresh grant"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" "$repo" 2>&1)
+status=$?
+set -e
+round_after_duplicate=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 0 || -n "$output" || "$round_after_duplicate" != "1" ]]; then
+    log_fail "expected duplicate reviewed-head completion to pass without fresh grant, status=$status round=$round_after_duplicate output=$output"
+fi
+log_pass "reviewed-head duplicate completion is idempotent"
 
 log_test "unlaunched task commits block even when task context exists"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
@@ -263,7 +312,7 @@ git -C "$repo" commit -q -m "T002: add two" -m "Cerberus-Task: T002"
 state_dir=$(write_state 3 "$baseline" "$repo")
 mkdir -p "$TMP_ROOT/cerberus-task-completed-hook/abc123/task-contexts"
 printf 'context for T002\n' > "$TMP_ROOT/cerberus-task-completed-hook/abc123/task-contexts/T002.md"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" "$repo" 2>&1)
 status=$?
@@ -294,7 +343,7 @@ t002_sha=$(git -C "$repo" rev-parse HEAD)
 state_dir=$(write_state 3 "$baseline" "$repo")
 mkdir -p "$TMP_ROOT/cerberus-task-completed-hook/abc123/T002"
 jq -n --arg baseline_sha "$baseline" '{baseline_sha:$baseline_sha}' > "$TMP_ROOT/cerberus-task-completed-hook/abc123/T002/state.json"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 fake_plugin="$TEST_DIR/fake-plugin-interleaved"
 make_fake_review_gate "$fake_plugin"
 args_file="$TEST_DIR/interleaved-review.args"
@@ -330,7 +379,7 @@ git -C "$repo" commit -q -m "T002: add two" -m "Cerberus-Task: T002"
 t002_sha=$(git -C "$repo" rev-parse HEAD)
 state_dir=$(write_state 3 "$baseline" "$repo")
 printf '%s\t%s\n' "$t002_sha" T002 > "$TMP_ROOT/cerberus-task-completed-hook/abc123/accepted_task_commits.txt"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 fake_plugin="$TEST_DIR/fake-plugin-accepted-interleaved"
 make_fake_review_gate "$fake_plugin"
 args_file="$TEST_DIR/accepted-interleaved-review.args"
@@ -362,7 +411,7 @@ printf 'unknown\n' > "$repo/unknown.txt"
 git -C "$repo" add unknown.txt
 git -C "$repo" commit -q -m "T999: add unknown" -m "Cerberus-Task: T999"
 state_dir=$(write_state 3 "$baseline" "$repo")
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 set +e
 output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" "$repo" 2>&1)
 status=$?
@@ -381,7 +430,7 @@ baseline=$(cat "$repo/baseline")
 state_dir=$(write_state 3 "$baseline" "$repo")
 jq '.round = 2' "$state_dir/state.json" > "$state_dir/state.json.tmp"
 mv "$state_dir/state.json.tmp" "$state_dir/state.json"
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 fake_plugin="$TEST_DIR/fake-plugin-final-pass"
 make_fake_review_gate "$fake_plugin"
 set +e
@@ -402,7 +451,7 @@ repo="$TEST_DIR/fail-repo"
 make_review_repo "$repo"
 baseline=$(cat "$repo/baseline")
 state_dir=$(write_state 1 "$baseline" "$repo")
-touch "$state_dir/completion_intent"
+grant_completion "$state_dir"
 fake_plugin="$TEST_DIR/fake-plugin-fail"
 make_fake_review_gate "$fake_plugin"
 wait_json='{"status":"complete","consensus_verdict":"NEEDS_WORK","aggregated_findings":[{"priority":"P1","file_path":"hello.txt","line_start":1,"body":"broken behavior"}]}'

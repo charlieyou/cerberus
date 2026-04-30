@@ -157,6 +157,7 @@ if [[ -n "$repo_head" ]]; then
     strong_evidence="1"
 fi
 
+append_marker_evidence "completion_grant" "${state_dir}/completion_grant"
 append_marker_evidence "completion_intent" "${state_dir}/completion_intent"
 append_marker_evidence "verified_pass" "${state_dir}/verified_pass"
 append_marker_evidence "reviewed_pass" "${state_dir}/reviewed_pass"

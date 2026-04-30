@@ -198,7 +198,7 @@ run_verification_gate() {
         block "$(
             {
                 printf 'CERBERUS VERIFY: BLOCKED before code review for task %s.\n' "$task_id"
-                printf 'The user-confirmed verification gate failed with exit code %s. Fix the issue, commit the fix with Cerberus-Task: %s, touch completion_intent again, and retry TaskUpdate(status:'"'"'completed'"'"').\n' "$verify_rc" "$task_id"
+                printf 'The user-confirmed verification gate failed with exit code %s. Fix the issue, commit the fix with Cerberus-Task: %s, send STATUS: READY_FOR_COMPLETION %s, wait for a fresh PROCEED_TO_COMPLETE, then touch completion_intent and retry TaskUpdate(status:'"'"'completed'"'"').\n' "$verify_rc" "$task_id" "$task_id"
                 printf 'Verification log: %s\n\n' "$verify_log"
                 printf 'Last 200 log lines:\n'
                 tail -200 "$verify_log" 2>/dev/null || true
@@ -352,14 +352,21 @@ cd "$repo_root"
 current_head="$(git rev-parse HEAD 2>/dev/null || true)"
 verified_head="$(cat "${state_dir}/verified_head" 2>/dev/null || true)"
 reviewed_head="$(cat "${state_dir}/reviewed_head" 2>/dev/null || true)"
+# Duplicate TaskCompleted fires for the already-reviewed HEAD are idempotent:
+# the original accepted completion consumed completion_grant/completion_intent.
 if [[ -f "${state_dir}/verified_pass" && -f "${state_dir}/reviewed_pass" && -n "$current_head" && "$verified_head" == "$current_head" && "$reviewed_head" == "$current_head" ]]; then
     exit 0
 fi
 
-if [[ ! -f "${state_dir}/completion_intent" ]]; then
-    block "CERBERUS VERIFY: missing completion_intent marker for ${task_id}. Before marking the task completed, run: touch \"${state_dir}/completion_intent\". Then retry TaskUpdate(status:'completed')."
+if [[ ! -f "${state_dir}/completion_grant" ]]; then
+    rm -f "${state_dir}/completion_intent"
+    block "CERBERUS VERIFY: missing lead completion_grant marker for ${task_id}. Do not mark the task completed until the lead sends PROCEED_TO_COMPLETE ${task_id}. Do not create completion_grant yourself; send STATUS: READY_FOR_COMPLETION ${task_id} and go idle."
 fi
-rm -f "${state_dir}/completion_intent"
+
+if [[ ! -f "${state_dir}/completion_intent" ]]; then
+    block "CERBERUS VERIFY: missing completion_intent marker for ${task_id}. After the lead grants PROCEED_TO_COMPLETE, run: touch \"${state_dir}/completion_intent\". Then retry TaskUpdate(status:'completed')."
+fi
+rm -f "${state_dir}/completion_grant" "${state_dir}/completion_intent"
 
 round="$(jq -r '.round // 0' "$state_file" 2>/dev/null || printf '0')"
 max_rounds="$(jq -r '.max_rounds // 5' "$state_file" 2>/dev/null || printf '5')"
@@ -447,7 +454,7 @@ if [[ -z "$commits_for_task" ]]; then
     if [[ -f "${state_dir}/exhausted" ]]; then
         block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
     fi
-    block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Make at least one commit with the required trailer before retrying TaskUpdate(status:'completed'). Round ${next_round} of ${max_rounds}."
+    block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Make at least one commit with the required trailer, send STATUS: READY_FOR_COMPLETION ${task_id}, wait for a fresh PROCEED_TO_COMPLETE, then retry TaskUpdate(status:'completed'). Round ${next_round} of ${max_rounds}."
 fi
 
 if [[ -n "$invalid_commits" ]]; then
@@ -457,7 +464,7 @@ if [[ -n "$invalid_commits" ]]; then
     if [[ -f "${state_dir}/exhausted" ]]; then
         block "Commits in ${commit_range} include commits without a valid known Cerberus-Task trailer. Other known task commits are allowed in parallel runs, but untagged, ambiguous, or unknown task commits are not: ${invalid_commits}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). If the invalid commits are not yours, SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
     fi
-    block "Commits in ${commit_range} include commits without a valid known Cerberus-Task trailer. Other known task commits are allowed in parallel runs, but untagged, ambiguous, or unknown task commits are not: ${invalid_commits}. Fix only your own commits; do not amend, squash, or edit another agent's commits. If the invalid commits are not yours, SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle. Round ${next_round} of ${max_rounds}."
+    block "Commits in ${commit_range} include commits without a valid known Cerberus-Task trailer. Other known task commits are allowed in parallel runs, but untagged, ambiguous, or unknown task commits are not: ${invalid_commits}. Fix only your own commits; do not amend, squash, or edit another agent's commits. If the invalid commits are not yours, SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle. Otherwise send STATUS: READY_FOR_COMPLETION ${task_id}, wait for a fresh PROCEED_TO_COMPLETE, then retry TaskUpdate(status:'completed'). Round ${next_round} of ${max_rounds}."
 fi
 
 printf '%s' "$commits_for_task" > "${state_dir}/task_commits.txt"

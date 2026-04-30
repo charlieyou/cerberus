@@ -282,6 +282,36 @@ if [[ "$status" -ne 0 || "$continue_value" != "false" ]]; then
 fi
 log_pass "lead epoch creates a same-HEAD idle epoch"
 
+log_test "completion_grant evidence allows same-HEAD idle once"
+repo="$TEST_DIR/completion-grant-repo"
+make_repo "$repo"
+state_dir=$(write_idle_state abc123 T011 "$repo")
+event=$(idle_event abc123 impl-T011 "$repo")
+set +e
+output=$(run_hook_json "$event" 2>&1)
+status=$?
+set -e
+if [[ "$status" -ne 0 || -n "$output" ]]; then
+    log_fail "expected pre-grant idle to be allowed, status=$status output=$output"
+fi
+touch "$state_dir/completion_grant"
+set +e
+output=$(run_hook_json "$event" 2>&1)
+status=$?
+set -e
+if [[ "$status" -ne 0 || -n "$output" ]]; then
+    log_fail "expected completion_grant marker to allow same-HEAD idle, status=$status output=$output"
+fi
+set +e
+output=$(run_hook_json "$event" 2>&1)
+status=$?
+set -e
+continue_value=$(printf '%s' "$output" | jq -r 'if has("continue") then (.continue | tostring) else "" end' 2>/dev/null || true)
+if [[ "$status" -ne 0 || "$continue_value" != "false" ]]; then
+    log_fail "expected repeated completion_grant idle to suppress, status=$status output=$output"
+fi
+log_pass "completion_grant creates a same-HEAD idle epoch"
+
 log_test "verify_failed evidence allows same-HEAD idle once"
 repo="$TEST_DIR/verify-failed-repo"
 make_repo "$repo"

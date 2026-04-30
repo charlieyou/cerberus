@@ -27,9 +27,11 @@ Agent({
   subagent_type: "implementer",
   model: "opus",
   description: "T### implement <subject>",
-  prompt: "<task assignment>"
+  prompt: "<idempotent bootstrap pointer>"
 })
 ```
+
+The `Agent.prompt` is not the canonical assignment. Agent-team delivery can surface the spawn prompt later as a normal teammate message, even after the teammate has already acted. Keep the prompt short and idempotent; put the real assignment in the TaskList task metadata, persistent task context file, and `implementer` agent workflow.
 
 Do not copy or execute these invalid spawn shapes; fix them before execution:
 
@@ -174,6 +176,17 @@ cat > "$task_context_path" <<'TASK_CONTEXT'
 
 The TaskCompleted hook will run this script after teammate completion and before code review:
 <verify_script_path>
+
+## Teammate Startup Contract
+
+This file and the TaskList metadata are the canonical assignment for `impl-T###`. The `Agent.prompt` is only a bootstrap pointer and may arrive again later as a normal message. If such a bootstrap message arrives after work has started, after `STATUS: READY_FOR_COMPLETION`, after `STATUS: NEEDS_HUMAN`, or after task completion, the implementer must not restart or duplicate work.
+
+- Cerberus task ID: `T###`
+- Teammate name: `impl-T###`
+- State directory: `<state_dir>`
+- Verification script: `<verify_script_path>`
+- Completion protocol: commit task-scoped work with `Cerberus-Task: T###`, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, wait for `PROCEED_TO_COMPLETE T###`, touch only `<state_dir>/completion_intent`, then call `TaskUpdate(status:'completed')`.
+- Lead-owned completion gate: the lead writes `<state_dir>/completion_grant` before sending `PROCEED_TO_COMPLETE`. Implementers must not create, modify, or delete `completion_grant`.
 TASK_CONTEXT
 ```
 
@@ -207,7 +220,7 @@ Inputs: `task_id`, `claude_task_id`, `phase_name`, `task_context_path`, `state_d
 
 1. Write `${state_dir}/state.json` with `task_id`, `claude_task_id`, `team_hash`, `phase`, `baseline_sha`, `round: 0`, `max_rounds`, `task_state_dir`, `task_context_path`, and `verify_script_path`.
 2. Snapshot `${state_dir}/untracked_baseline.txt`.
-3. Spawn exactly one fresh Opus teammate named `impl-T###` using an `Agent` call whose top-level arguments include `model: "opus"`. Copy the Phase 3 call shape rather than reconstructing it from memory. The teammate gets the standard collaboration contract: claim the task, implement only the task context, commit only its own task-scoped work with `Cerberus-Task: T###`, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, wait for `PROCEED_TO_COMPLETE T###`, touch `completion_intent`, then call `TaskUpdate(status:'completed')`.
+3. Spawn exactly one fresh Opus teammate named `impl-T###` using an `Agent` call whose top-level arguments include `model: "opus"`. Copy the Phase 3 call shape rather than reconstructing it from memory. The teammate's full collaboration contract is already in the TaskList metadata, persistent task context, and `implementer` agent workflow. The `Agent.prompt` is only an idempotent bootstrap pointer and must be safe if delivered late or repeated.
 4. Mark the local task state `running` and remember the teammate name, state dir, baseline SHA, task context path, and Claude task ID.
 5. Never reuse the teammate for another task.
 
@@ -254,7 +267,7 @@ jq -n \
 git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "${state_dir}/untracked_baseline.txt"
 ```
 
-Spawn a fresh Opus teammate for the task. Use this call shape exactly: the top-level `model: "opus"` field is mandatory and must not be replaced by a prompt sentence, omitted, or downgraded.
+Spawn a fresh Opus teammate for the task. Use this call shape exactly: the top-level `model: "opus"` field is mandatory and must not be replaced by a prompt sentence, omitted, or downgraded. Keep the prompt as a bootstrap pointer only; do not put the full assignment or task body in `Agent.prompt`.
 
 ```text
 Agent({
@@ -263,7 +276,7 @@ Agent({
   subagent_type: "implementer",
   model: "opus",
   description: "T### implement <subject>",
-  prompt: "You are assigned CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. Task spec: <task_context_path>. Read that file once at startup; it is the canonical task body. State dir: <state_dir>. The lead-resolved verification gate is <verify_script_path>; the TaskCompleted hook will run it before code review and will block completion if it fails. You may set CERBERUS_STATE_DIR='<state_dir>' for convenience. Claim the task with TaskUpdate(owner:'impl-T###', status:'in_progress'), implement only this task, and commit only your own task-scoped work with trailer Cerberus-Task: T###. You may be running in parallel with other implementers: do not edit other agents' changes, do not stash, do not reset/checkout/restore/clean/rebase shared work, and stage only your own files. After your commits are ready, send exactly STATUS: READY_FOR_COMPLETION T### — commits <short-shas> and go idle. Do not call TaskUpdate(status:'completed') until the lead sends PROCEED_TO_COMPLETE T###. After that grant, make no further edits, run exactly touch \"<state_dir>/completion_intent\", then call TaskUpdate(status:'completed'). Follow the implementer agent rules."
+  prompt: "CERBERUS_BOOTSTRAP_ONLY for impl-T### / CERBERUS_TASK_ID=T###. Claude task id: <claude_task_id>. Canonical task spec: <task_context_path>. State dir: <state_dir>. Verification gate: <verify_script_path>. Read TaskGet(<claude_task_id>) and follow the implementer agent workflow plus the task context. This bootstrap can be delivered again later as a normal lead message; if you have already claimed or started T###, sent READY_FOR_COMPLETION or NEEDS_HUMAN, attempted completion, or the task is completed, do not restart work—reconcile current task/state and go idle or report status. This is not permission to complete; wait for PROCEED_TO_COMPLETE T### before touching completion_intent or calling TaskUpdate(status:'completed')."
 })
 ```
 
@@ -289,13 +302,29 @@ comm -23 <(LC_ALL=C sort "${state_dir}/untracked_current.txt") <(LC_ALL=C sort "
 
 If another implementer has uncommitted tracked changes, ask that same owner to either commit only its own task-scoped work with its trailer and send READY, or report `STATUS: NEEDS_HUMAN`; never ask it to stash or revert. If new untracked files appear in the selected task's delta, do not grant completion; ask the owner, if known, to add intentional files to its own task commit or remove its own generated artifacts. If ownership is unclear, classify as `infra-failure` or `needs-human` rather than pushing cleanup to the selected implementer. If the tree cannot be drained cleanly or `HEAD` changes after the drain check but before the grant, rerun the drain gate; if it cannot stabilize, classify the run as `infra-failure` and stop scheduling.
 
-After the drain gate passes, bump `${state_dir}/lead_epoch`, then send only the selected ready teammate: `PROCEED_TO_COMPLETE T### — touch completion_intent and call TaskUpdate(status:'completed') now. Do not edit, amend, stash, reset, checkout, restore, clean, rebase, or touch another task's commits.` On the first `TeammateIdle` after this grant, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, `${state_dir}/task_commits.txt`, and messages from the teammate. Classify the outcome with Phase 4. If a later idle from the same teammate is delivered because task evidence changed after human input, inspect and classify that new epoch too; unchanged duplicate idles may be suppressed by the hook. After terminal classification, send a shutdown request to that teammate and wait for shutdown; Cerberus implementers are never reused.
+After the drain gate passes, bump `${state_dir}/lead_epoch`, write the lead-owned completion grant, then send only the selected ready teammate `PROCEED_TO_COMPLETE`:
+
+```bash
+{
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+  printf '%s\n' "$RANDOM"
+} > "${state_dir}/lead_epoch"
+
+{
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+  printf 'lead_granted=1\n'
+} > "${state_dir}/completion_grant"
+```
+
+Send: `PROCEED_TO_COMPLETE T### — run: touch "<state_dir>/completion_intent"; then call TaskUpdate(status:'completed') now. Do not edit, amend, stash, reset, checkout, restore, clean, rebase, modify completion_grant, or touch another task's commits.` The implementer touches only `completion_intent`; `completion_grant` is lead-owned and the `TaskCompleted` hook requires it before accepting a completion attempt. On the first `TeammateIdle` after this grant, inspect `TaskGet(<claude_task_id>)`, marker files in `state_dir`, `${state_dir}/task_commits.txt`, and messages from the teammate. If the hook blocked and the teammate sent a fresh `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>` while the Claude task remains `in_progress`, return the task to `ready_for_completion` and run the drain/grant path again; do not treat that idle as terminal failure. Otherwise classify the terminal outcome with Phase 4. If a later idle from the same teammate is delivered because task evidence changed after human input, inspect and classify that new epoch too; unchanged duplicate idles may be suppressed by the hook. After terminal classification, send a shutdown request to that teammate and wait for shutdown; Cerberus implementers are never reused.
 
 ## Phase 4: Outcome Classification
 
 Classify the completing task into exactly one category.
 
 Before evaluating task status or hook markers, enforce the Critical Implementer Model Contract. If the actual `Agent` tool input for this teammate did not include top-level `model: "opus"`, used a non-`opus` value, or objective runtime/tool/transcript metadata shows the teammate is running as a non-Opus model, classify the task as `infra-failure` with reason `implementer spawned with non-opus model`, even if the task status is `completed` and verification/review markers exist.
+
+Before terminal classification, handle the non-terminal retry state. If the Claude task remains `in_progress`, no `last_error` or `exhausted` marker exists, and the teammate's latest relevant message is `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, do not mark the task failed. Mark local state `ready_for_completion`, require a fresh drain gate, write a fresh `completion_grant`, and send a fresh `PROCEED_TO_COMPLETE T###` using the grant flow above. This is the normal path after a verification or review block where the implementer fixed the issue and is ready for another serialized completion attempt.
 
 - **success**: Claude task status is `completed`, no `exhausted`, no `last_error`, `verified_pass` and `reviewed_pass` exist, and `verified_head` plus `reviewed_head` both equal `git rev-parse HEAD`. `verified_pass` proves the resolved project verification gate ran before code review; `reviewed_pass` proves Cerberus review ran to PASS or non-blocking NEEDS_WORK; the head files prove both gates covered the current code. Before finalizing success, run the post-task clean-tree gate below. If the gate passes, mark the Cerberus task passed, record commits from `${state_dir}/task_commits.txt` when present and record `baseline_sha..HEAD` only as the integration range, keep the canonical `task_context_path`, then release the completed teammate via the Completed Teammate Release steps. If every original task in this execution phase is `passed` and no teammate remains `running`, `ready_for_completion`, or `completing`, run Phase 5 before scheduling the next phase.
 - **needs-human**: teammate sent `STATUS: NEEDS_HUMAN T###` while the Claude task remains `in_progress`, or `exhausted` exists while the task remains `in_progress`. Mark failed, retain `state_dir`, stop scheduling.
@@ -457,7 +486,7 @@ Create a synthetic Cerberus remediation task for the gaps and run it through the
 2. Create a Claude TaskList task with subject `[CERBERUS-IMPL/<team_hash>] T### — Fix epic verification gaps for <phase name>` and metadata containing `cerberus_task_id`, `cerberus_team_hash`, `cerberus_state_dir`, `cerberus_task_context_path`, `cerberus_phase`, `cerberus_files: []`, and `cerberus_depends` set to all completed task IDs through this phase.
 3. Write `${state_root}/task-contexts/T###.md` containing the completed phase names, verifier target, full `phase_verify_json`, aggregated findings, relevant completed-phase criteria or plan/spec links, current `HEAD`, and instructions to fix only the verifier gaps without starting later-phase work.
 4. Write `state.json` exactly like a normal task, with `task_id` set to the synthetic ID, `baseline_sha` set to the current `HEAD`, `task_context_path` pointing to the gap context, and `verify_script_path` pointing to the run's project verification script. Snapshot `untracked_baseline.txt` before spawning.
-5. Spawn a fresh Opus implementer named `impl-T###` with the same mandatory `Agent` shape as normal tasks, including top-level `model: "opus"`. It has the same READY/PROCEED completion contract: claim the synthetic task, fix only the verifier gaps, commit every remediation commit with `Cerberus-Task: T###`, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, wait for `PROCEED_TO_COMPLETE T###`, touch `completion_intent`, then call `TaskUpdate(status:'completed')`.
+5. Spawn a fresh Opus implementer named `impl-T###` with the same mandatory bootstrap-only `Agent` shape as normal tasks, including top-level `model: "opus"`. It has the same READY/PROCEED completion contract from the task context and implementer workflow: claim the synthetic task, fix only the verifier gaps, commit every remediation commit with `Cerberus-Task: T###`, send `STATUS: READY_FOR_COMPLETION T### — commits <short-shas>`, wait for `PROCEED_TO_COMPLETE T###`, touch only `completion_intent`, then call `TaskUpdate(status:'completed')`.
 6. Wait for the remediation teammate to send READY, grant `PROCEED_TO_COMPLETE T###` only after the drain gate passes, then classify it with Phase 4 after the hook fires. If it is not `success`, stop scheduling and report the remediation failure category. If it succeeds, shut it down, record its task commits and integration range, and rerun Phase 5 for the same execution phase.
 
 Use this context template for every `epic-gap` task:
@@ -511,6 +540,7 @@ Fix only the implementation gaps reported by phase-level epic verification for c
 - Commit every remediation commit with trailer `Cerberus-Task: T###`.
 - Do not call `TaskUpdate(status: "completed")` until the lead sends `PROCEED_TO_COMPLETE T###`.
 - Before `TaskUpdate(status: "completed")`, run `touch "<state_dir>/completion_intent"`.
+- Do not create, modify, or delete `completion_grant`; the lead owns that marker.
 - The normal TaskCompleted hook will run the project verification gate and Cerberus code review.
 ````
 
