@@ -14,7 +14,7 @@ Cerberus runs as a plugin/skill set in any of the following host environments. T
 |------|--------|---------|------|
 | Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
 | Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/cerberus/*.md` | [`docs/CODEX.md`](docs/CODEX.md) |
-| Amp | Phase 2 (planned) | `.amp/plugins/cerberus.ts` | `docs/AMP.md` (added in Phase 2) |
+| Amp CLI | Phase 2 (release-ready, pending cross-host manual smoke) | `.amp/toolbox/cerberus.sh` (Amp Toolbox tool dispatching six commands) | [`docs/AMP.md`](docs/AMP.md) |
 | `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
 
 Existing Claude users do not need to change anything: the legacy `CLAUDE_*` env vars and `~/.claude/projects/...` state paths remain byte-for-byte identical.
@@ -527,7 +527,7 @@ The Codex/Amp port ships in three sequential, independently shippable, independe
 |---|---|---|
 | Cerberus vX (Phase 0) | Shared backend host neutralization. New `status --json` subcommand. New `CERBERUS_*` env contract with full back-compat. | Existing Claude `bin/tests/*.sh` + new neutral-state + `status` tests. No host adapter changes. |
 | Cerberus vX+1 (Phase 1) | Codex port: `.codex-plugin/plugin.json`, skills, `templates/codex-hooks.json`, `bin/codex-session-init`, `bin/codex-stop-hook`, `docs/CODEX.md`. | Phase 0 tests + Codex tests + manual Codex smoke checks. |
-| Cerberus vX+2 (Phase 2) | Amp port: `.amp/plugins/cerberus.ts` + `docs/AMP.md`. | Phase 0/1 tests + Amp tests + manual Amp smoke checks. |
+| Cerberus vX+2 (Phase 2) | Amp port: `.amp/toolbox/cerberus.sh` + `docs/AMP.md`. | Phase 0/1 tests + Amp tests + manual Amp smoke checks. |
 
 Phase 3 (generator workflow ports) and Phase 4 (team automation revisit) ship in subsequent releases as scope and external host maturity allow. Phase 0 ships behind no flag because it's strictly additive; the regression suite (Claude tests) is the gate, and `CERBERUS_HOST=generic` mode in CI exercises the neutral path before any host adapter is shipped.
 
