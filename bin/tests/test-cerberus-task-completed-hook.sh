@@ -96,6 +96,9 @@ make_fake_review_gate() {
 set -euo pipefail
 case "${1:-}" in
   spawn-code-review)
+    if [[ -n "${FAKE_REVIEW_ARGS_FILE:-}" ]]; then
+        printf '%s\n' "$*" > "$FAKE_REVIEW_ARGS_FILE"
+    fi
     exit 0
     ;;
   wait)
@@ -147,6 +150,22 @@ if [[ "$status" -ne 2 || "$round" != "0" || "$output" != *"missing completion_in
     log_fail "expected no-intent event to block without changing round, status=$status round=$round output=$output"
 fi
 log_pass "no-intent event blocks completion"
+
+log_test "completion lock contention blocks without consuming intent"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+state_dir=$(write_state)
+mkdir "$TMP_ROOT/cerberus-task-completed-hook/abc123/completion.lock"
+touch "$state_dir/completion_intent"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 2 || "$round" != "0" || ! -e "$state_dir/completion_intent" || "$output" != *"another task completion gate is already running"* ]]; then
+    log_fail "expected completion lock contention to block without consuming intent, status=$status round=$round output=$output"
+fi
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123/completion.lock"
+log_pass "completion lock contention is retryable"
 
 log_test "state directory comparison tolerates trailing slash in TMPDIR"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
@@ -219,10 +238,140 @@ output=$(printf '{"hook_event_name":"TaskCompleted","task_subject":"%s","cwd":"%
 status=$?
 set -e
 round=$(jq -r '.round' "$state_dir/state.json")
-if [[ "$status" -ne 0 || "$round" != "1" || ! -f "$state_dir/reviewed_pass" ]]; then
+pass_sha=$(git -C "$repo" rev-parse HEAD)
+accepted_commits="$TMP_ROOT/cerberus-task-completed-hook/abc123/accepted_task_commits.txt"
+if [[ "$status" -ne 0 || "$round" != "1" || ! -f "$state_dir/reviewed_pass" ]] || ! awk -v sha="$pass_sha" -v task="T001" '$1 == sha && $2 == task { found=1 } END { exit found ? 0 : 1 }' "$accepted_commits"; then
     log_fail "expected PASS review to allow completion, status=$status round=$round output=$output"
 fi
 log_pass "PASS review allows completion"
+
+log_test "unlaunched task commits block even when task context exists"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+repo="$TEST_DIR/unlaunched-interleaved-repo"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email test@example.com
+git -C "$repo" config user.name Test
+git -C "$repo" commit --allow-empty -q -m init
+baseline=$(git -C "$repo" rev-parse HEAD)
+printf 'one\n' > "$repo/one.txt"
+git -C "$repo" add one.txt
+git -C "$repo" commit -q -m "T001: add one" -m "Cerberus-Task: T001"
+printf 'two\n' > "$repo/two.txt"
+git -C "$repo" add two.txt
+git -C "$repo" commit -q -m "T002: add two" -m "Cerberus-Task: T002"
+state_dir=$(write_state 3 "$baseline" "$repo")
+mkdir -p "$TMP_ROOT/cerberus-task-completed-hook/abc123/task-contexts"
+printf 'context for T002\n' > "$TMP_ROOT/cerberus-task-completed-hook/abc123/task-contexts/T002.md"
+touch "$state_dir/completion_intent"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" "$repo" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 2 || "$round" != "1" || "$output" != *"Cerberus-Task: T002"* || "$output" != *"not launched before this commit"* ]]; then
+    log_fail "expected unlaunched T002 commit to block despite context, status=$status round=$round output=$output"
+fi
+log_pass "unlaunched task commits are not allowed by context alone"
+
+log_test "known interleaved task commits are allowed and only current task commits are reviewed"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+repo="$TEST_DIR/interleaved-repo"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email test@example.com
+git -C "$repo" config user.name Test
+git -C "$repo" commit --allow-empty -q -m init
+baseline=$(git -C "$repo" rev-parse HEAD)
+printf 'one\n' > "$repo/one.txt"
+git -C "$repo" add one.txt
+git -C "$repo" commit -q -m "T001: add one" -m "Cerberus-Task: T001"
+t001_sha=$(git -C "$repo" rev-parse HEAD)
+printf 'two\n' > "$repo/two.txt"
+git -C "$repo" add two.txt
+git -C "$repo" commit -q -m "T002: add two" -m "Cerberus-Task: T002"
+t002_sha=$(git -C "$repo" rev-parse HEAD)
+state_dir=$(write_state 3 "$baseline" "$repo")
+mkdir -p "$TMP_ROOT/cerberus-task-completed-hook/abc123/T002"
+jq -n --arg baseline_sha "$baseline" '{baseline_sha:$baseline_sha}' > "$TMP_ROOT/cerberus-task-completed-hook/abc123/T002/state.json"
+touch "$state_dir/completion_intent"
+fake_plugin="$TEST_DIR/fake-plugin-interleaved"
+make_fake_review_gate "$fake_plugin"
+args_file="$TEST_DIR/interleaved-review.args"
+set +e
+output=$(printf '{"hook_event_name":"TaskCompleted","task_subject":"%s","cwd":"%s","session_id":"test-session","transcript_path":"%s/transcript.jsonl"}' \
+    "[CERBERUS-IMPL/abc123] T001 - test" "$repo" "$TEST_DIR" \
+    | TMPDIR="$TMP_ROOT" CLAUDE_PLUGIN_ROOT="$fake_plugin" FAKE_REVIEW_ARGS_FILE="$args_file" FAKE_WAIT_JSON='{"status":"complete","consensus_verdict":"PASS","aggregated_findings":[]}' "$HOOK" 2>&1)
+status=$?
+set -e
+task_commits=$(cat "$state_dir/task_commits.txt")
+review_args=$(cat "$args_file")
+if [[ "$status" -ne 0 || "$task_commits" != *"$t001_sha"* || "$task_commits" == *"$t002_sha"* || "$review_args" != *"--commit $t001_sha"* || "$review_args" == *"$t002_sha"* ]]; then
+    log_fail "expected interleaved T002 commit to be allowed but excluded from T001 review, status=$status task_commits=$task_commits review_args=$review_args output=$output"
+fi
+log_pass "interleaved known task commits do not break T001 completion"
+
+log_test "previously accepted interleaved task commits are allowed after state cleanup"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+repo="$TEST_DIR/accepted-interleaved-repo"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email test@example.com
+git -C "$repo" config user.name Test
+git -C "$repo" commit --allow-empty -q -m init
+baseline=$(git -C "$repo" rev-parse HEAD)
+printf 'one\n' > "$repo/one.txt"
+git -C "$repo" add one.txt
+git -C "$repo" commit -q -m "T001: add one" -m "Cerberus-Task: T001"
+t001_sha=$(git -C "$repo" rev-parse HEAD)
+printf 'two\n' > "$repo/two.txt"
+git -C "$repo" add two.txt
+git -C "$repo" commit -q -m "T002: add two" -m "Cerberus-Task: T002"
+t002_sha=$(git -C "$repo" rev-parse HEAD)
+state_dir=$(write_state 3 "$baseline" "$repo")
+printf '%s\t%s\n' "$t002_sha" T002 > "$TMP_ROOT/cerberus-task-completed-hook/abc123/accepted_task_commits.txt"
+touch "$state_dir/completion_intent"
+fake_plugin="$TEST_DIR/fake-plugin-accepted-interleaved"
+make_fake_review_gate "$fake_plugin"
+args_file="$TEST_DIR/accepted-interleaved-review.args"
+set +e
+output=$(printf '{"hook_event_name":"TaskCompleted","task_subject":"%s","cwd":"%s","session_id":"test-session","transcript_path":"%s/transcript.jsonl"}' \
+    "[CERBERUS-IMPL/abc123] T001 - test" "$repo" "$TEST_DIR" \
+    | TMPDIR="$TMP_ROOT" CLAUDE_PLUGIN_ROOT="$fake_plugin" FAKE_REVIEW_ARGS_FILE="$args_file" FAKE_WAIT_JSON='{"status":"complete","consensus_verdict":"PASS","aggregated_findings":[]}' "$HOOK" 2>&1)
+status=$?
+set -e
+review_args=$(cat "$args_file")
+if [[ "$status" -ne 0 || "$review_args" != *"--commit $t001_sha"* || "$review_args" == *"$t002_sha"* ]]; then
+    log_fail "expected accepted T002 commit to be allowed but excluded from T001 review, status=$status review_args=$review_args output=$output"
+fi
+log_pass "accepted interleaved task commits remain allowed after state cleanup"
+
+log_test "unknown interleaved task commits block completion"
+rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"
+repo="$TEST_DIR/unknown-interleaved-repo"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email test@example.com
+git -C "$repo" config user.name Test
+git -C "$repo" commit --allow-empty -q -m init
+baseline=$(git -C "$repo" rev-parse HEAD)
+printf 'one\n' > "$repo/one.txt"
+git -C "$repo" add one.txt
+git -C "$repo" commit -q -m "T001: add one" -m "Cerberus-Task: T001"
+printf 'unknown\n' > "$repo/unknown.txt"
+git -C "$repo" add unknown.txt
+git -C "$repo" commit -q -m "T999: add unknown" -m "Cerberus-Task: T999"
+state_dir=$(write_state 3 "$baseline" "$repo")
+touch "$state_dir/completion_intent"
+set +e
+output=$(run_hook "[CERBERUS-IMPL/abc123] T001 - test" "$repo" 2>&1)
+status=$?
+set -e
+round=$(jq -r '.round' "$state_dir/state.json")
+if [[ "$status" -ne 2 || "$round" != "1" || "$output" != *"Cerberus-Task: T999"* || "$output" != *"not launched before this commit"* ]]; then
+    log_fail "expected unknown interleaved task commit to block, status=$status round=$round output=$output"
+fi
+log_pass "unknown interleaved task commits block completion"
 
 log_test "PASS on final allowed round does not mark exhausted"
 rm -rf "$TMP_ROOT/cerberus-task-completed-hook/abc123"

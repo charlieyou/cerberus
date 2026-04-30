@@ -136,5 +136,5 @@ T001 -> T002
 ## Notes
 
 - Total tasks: N
-- Execution model: strictly serial in `/cerberus:run-team` initial cut
+- Execution model: `/cerberus:run-team` may run independent same-phase tasks in parallel when dependencies and file scopes are safe; completion/review remains serialized
 - Each implementer commit must include a `Cerberus-Task: T###` trailer

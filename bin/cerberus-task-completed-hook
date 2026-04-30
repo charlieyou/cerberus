@@ -32,6 +32,8 @@ round="0"
 max_rounds="0"
 owned_task="0"
 verification_author_context=""
+completion_lock=""
+completion_lock_acquired="0"
 
 json_get() {
     local filter="$1"
@@ -93,6 +95,23 @@ block() {
     exit 2
 }
 
+cleanup_completion_lock() {
+    if [[ "${completion_lock_acquired:-0}" == "1" && -n "${completion_lock:-}" ]]; then
+        rmdir "$completion_lock" 2>/dev/null || true
+    fi
+}
+
+acquire_completion_lock() {
+    local team_state_root
+
+    team_state_root="$(dirname "$state_dir")"
+    completion_lock="${team_state_root}/completion.lock"
+    if ! mkdir "$completion_lock" 2>/dev/null; then
+        block "CERBERUS VERIFY: another task completion gate is already running for team ${team_hash}. Do not edit, stash, reset, amend, or retry immediately. Wait for the lead to grant completion again, then retry TaskUpdate(status:'completed')."
+    fi
+    completion_lock_acquired="1"
+}
+
 capture_untracked_paths() {
     local output_path="$1"
     git status --porcelain -z | tr '\0' '\n' | awk '/^\?\? / { print substr($0, 4) }' > "$output_path"
@@ -114,7 +133,7 @@ ensure_committed_tree_clean() {
     if [[ -n "$tracked_status" ]]; then
         touch "${state_dir}/verify_failed" 2>/dev/null || true
         printf '%s\n' "$tracked_status" > "${state_dir}/dirty-tracked-${phase}.txt" 2>/dev/null || true
-        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nTracked files are modified outside commits, so reviewers would not see the same code being verified.\nCommit or revert these changes, then touch completion_intent and retry TaskUpdate(status:'completed').\n\n%s" "$task_id" "$tracked_status")"
+        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nTracked files are modified outside commits, so reviewers would not see the same code being verified.\nIf these changes are yours, commit intentional work with Cerberus-Task: %s before retrying. If they may belong to another agent, send STATUS: NEEDS_HUMAN %s - dirty tree belongs to another task and go idle.\n\n%s" "$task_id" "$task_id" "$task_id" "$tracked_status")"
     fi
 
     if [[ ! -f "${state_dir}/untracked_baseline.txt" ]]; then
@@ -128,7 +147,7 @@ ensure_committed_tree_clean() {
     if [[ -n "$new_paths" ]]; then
         touch "${state_dir}/verify_failed" 2>/dev/null || true
         printf '%s\n' "$new_paths" > "${state_dir}/new-untracked-${phase}.txt" 2>/dev/null || true
-        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nNew untracked files appeared outside commits, so reviewers would not see the full verified change.\nAdd intentional files to the task commit, remove generated files, or add an ignore rule before retrying TaskUpdate(status:'completed').\n\n%s" "$task_id" "$new_paths")"
+        block "$(printf "CERBERUS VERIFY: BLOCKED before code review for task %s.\nNew untracked files appeared outside commits, so reviewers would not see the full verified change.\nIf these files are yours, add intentional files to your task commit or remove your own generated artifacts before retrying. If they may belong to another agent, send STATUS: NEEDS_HUMAN %s - untracked files belong to another task and go idle.\n\n%s" "$task_id" "$task_id" "$new_paths")"
     fi
 }
 
@@ -163,6 +182,7 @@ run_verification_gate() {
     CERBERUS_TEAM_HASH="$team_hash" \
     CERBERUS_STATE_DIR="$state_dir" \
     CERBERUS_COMMIT_RANGE="$commit_range" \
+    CERBERUS_TASK_COMMITS="$task_commits_space" \
     CERBERUS_BASELINE_SHA="$baseline_sha" \
     CERBERUS_TASK_CONTEXT_PATH="$task_context_path" \
         bash "$verify_script_path" >>"$verify_log" 2>&1 || verify_rc=$?
@@ -218,6 +238,7 @@ on_err() {
 }
 
 trap on_err ERR
+trap cleanup_completion_lock EXIT
 
 hook_input="$(cat)"
 
@@ -309,6 +330,8 @@ if [[ -n "$state_task_state_dir" && "$(canonical_path "$state_task_state_dir")" 
     block "INFRA-FAILURE: Cerberus state directory metadata does not match state file. Send NEEDS_HUMAN to lead and go idle."
 fi
 
+acquire_completion_lock
+
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then
     write_last_error "git_error: hook cwd is missing or not a directory: ${cwd}"
     block "INFRA-FAILURE: hook did not receive a valid repository cwd for ${task_id}. Send NEEDS_HUMAN to lead and go idle."
@@ -376,7 +399,47 @@ if [[ -z "$candidate_head" ]]; then
 fi
 commit_range="${baseline_sha}..${candidate_head}"
 
-commits_for_task="$(git log --pretty='%H %(trailers:key=Cerberus-Task,valueonly,separator=%x20)' "$commit_range" | awk -v t="$task_id" '$2 == t { print $1 }' || true)"
+team_state_root="$(dirname "$state_dir")"
+accepted_commits_path="${team_state_root}/accepted_task_commits.txt"
+commits_for_task=""
+invalid_commits=""
+while IFS=$'\t' read -r commit_sha task_trailers; do
+    accepted_task=""
+    other_baseline_sha=""
+    other_state_file=""
+
+    if [[ -z "$commit_sha" ]]; then
+        continue
+    fi
+    task_trailers="${task_trailers//$'\r'/}"
+
+    if [[ -z "$task_trailers" ]]; then
+        invalid_commits+="${commit_sha} missing Cerberus-Task trailer"$'\n'
+    elif [[ "$task_trailers" == *","* || "$task_trailers" == *" "* || "$task_trailers" == *$'\t'* ]]; then
+        invalid_commits+="${commit_sha} has multiple or ambiguous Cerberus-Task trailers: ${task_trailers}"$'\n'
+    elif [[ "$task_trailers" == "$task_id" ]]; then
+        commits_for_task+="${commit_sha}"$'\n'
+    elif [[ "$task_trailers" =~ ^T[0-9]+$ ]]; then
+        if [[ -f "$accepted_commits_path" ]] && awk -v sha="$commit_sha" '$1 == sha { found=1 } END { exit found ? 0 : 1 }' "$accepted_commits_path"; then
+            accepted_task="1"
+        fi
+
+        other_state_file="${team_state_root}/${task_trailers}/state.json"
+        if [[ -z "$accepted_task" && -f "$other_state_file" ]]; then
+            other_baseline_sha="$(jq -r '.baseline_sha // ""' "$other_state_file" 2>/dev/null || printf '')"
+            if [[ -n "$other_baseline_sha" && "$other_baseline_sha" != "$commit_sha" ]] && git merge-base --is-ancestor "$other_baseline_sha" "$commit_sha" 2>/dev/null; then
+                accepted_task="1"
+            fi
+        fi
+
+        if [[ -z "$accepted_task" ]]; then
+            invalid_commits+="${commit_sha} has Cerberus-Task: ${task_trailers}, but that task was not launched before this commit and the commit was not previously accepted"$'\n'
+        fi
+    else
+        invalid_commits+="${commit_sha} has unknown Cerberus-Task trailer: ${task_trailers}"$'\n'
+    fi
+done < <(git log --reverse --pretty='%H%x09%(trailers:key=Cerberus-Task,valueonly,separator=%x2c)' "$commit_range")
+
 if [[ -z "$commits_for_task" ]]; then
     increment_round
     mark_exhausted_if_needed
@@ -387,16 +450,24 @@ if [[ -z "$commits_for_task" ]]; then
     block "No commits found tagged 'Cerberus-Task: ${task_id}' since baseline ${baseline_sha}. Make at least one commit with the required trailer before retrying TaskUpdate(status:'completed'). Round ${next_round} of ${max_rounds}."
 fi
 
-untagged_in_range="$(git log --pretty='%H %(trailers:key=Cerberus-Task,valueonly,separator=%x20)' "$commit_range" | awk -v t="$task_id" 'NF == 1 || $2 != t { print $1 }' || true)"
-if [[ -n "$untagged_in_range" ]]; then
+if [[ -n "$invalid_commits" ]]; then
     increment_round
     mark_exhausted_if_needed
     next_round=$((round + 1))
     if [[ -f "${state_dir}/exhausted" ]]; then
-        block "Commits in ${commit_range} are missing the required Cerberus-Task: ${task_id} trailer or carry a different task trailer: ${untagged_in_range}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
+        block "Commits in ${commit_range} include commits without a valid known Cerberus-Task trailer. Other known task commits are allowed in parallel runs, but untagged, ambiguous, or unknown task commits are not: ${invalid_commits}. Round ${next_round} of ${max_rounds}; review rounds are now exhausted. Do not retry TaskUpdate(status:'completed'). If the invalid commits are not yours, SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle."
     fi
-    block "Commits in ${commit_range} are missing the required Cerberus-Task: ${task_id} trailer or carry a different task trailer: ${untagged_in_range}. Amend/squash so every commit in the range belongs to ${task_id}, then retry. Round ${next_round} of ${max_rounds}."
+    block "Commits in ${commit_range} include commits without a valid known Cerberus-Task trailer. Other known task commits are allowed in parallel runs, but untagged, ambiguous, or unknown task commits are not: ${invalid_commits}. Fix only your own commits; do not amend, squash, or edit another agent's commits. If the invalid commits are not yours, SendMessage NEEDS_HUMAN ${task_id} to the lead and go idle. Round ${next_round} of ${max_rounds}."
 fi
+
+printf '%s' "$commits_for_task" > "${state_dir}/task_commits.txt"
+task_commits_space="$(printf '%s' "$commits_for_task" | awk 'NF { printf "%s%s", sep, $1; sep=" " }')"
+review_commits=()
+while IFS= read -r commit_sha; do
+    if [[ -n "$commit_sha" ]]; then
+        review_commits+=("$commit_sha")
+    fi
+done <<< "$commits_for_task"
 
 if [[ "$(git rev-parse HEAD)" != "$candidate_head" ]]; then
     write_last_error "head_changed: HEAD changed after trailer validation from ${candidate_head} to $(git rev-parse HEAD)"
@@ -419,12 +490,20 @@ session_key="cerberus-impl-${team_hash}-${task_id}-round${round}"
 spawn_stdout="${state_dir}/spawn.stdout"
 spawn_stderr="${state_dir}/spawn.stderr"
 spawn_rc=0
+review_author_context="$(
+    {
+        printf '%s\n\n' "$verification_author_context"
+        printf 'Current Cerberus task: %s\n' "$task_id"
+        printf 'Current task commits: %s\n\n' "$task_commits_space"
+        printf 'Parallel run note: the full repository HEAD may also contain commits from other known Cerberus tasks in this team. Review only the task context and task commits above; do not require this implementer to edit another task unless it directly breaks this task or integration.\n'
+    }
+)"
 REVIEW_GATE_SESSION_KEY="$session_key" \
-REVIEW_GATE_AUTHOR_CONTEXT="$verification_author_context" \
+REVIEW_GATE_AUTHOR_CONTEXT="$review_author_context" \
     "$REVIEW_GATE" spawn-code-review \
     --max-rounds 0 --consensus majority --mode fast \
     --context-file "$task_context_path" \
-    "$commit_range" >"$spawn_stdout" 2>"$spawn_stderr" || spawn_rc=$?
+    --commit "${review_commits[@]}" >"$spawn_stdout" 2>"$spawn_stderr" || spawn_rc=$?
 
 if [[ "$spawn_rc" -ne 0 ]]; then
     {
@@ -455,6 +534,11 @@ fi
 
 if [[ "$verdict" == "PASS" || ( "$verdict" == "NEEDS_WORK" && "$has_blockers" -eq 0 ) ]]; then
     increment_round
+    while IFS= read -r commit_sha; do
+        if [[ -n "$commit_sha" ]]; then
+            printf '%s\t%s\n' "$commit_sha" "$task_id" >> "$accepted_commits_path"
+        fi
+    done <<< "$commits_for_task"
     printf '%s\n' "$review_head" > "${state_dir}/reviewed_head"
     touch "${state_dir}/reviewed_pass"
     exit 0
