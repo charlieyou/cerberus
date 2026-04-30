@@ -4502,7 +4502,7 @@ review_gate_resolve() {
     done
 
     local session_id="${CERBERUS_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
-    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
 
     # T002: host-neutral fallback. When CLAUDE_SESSION_ID is unset but a
     # CERBERUS_RUN_KEY (or REVIEW_GATE_SESSION_KEY alias) is provided,
