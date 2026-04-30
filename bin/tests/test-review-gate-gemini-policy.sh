@@ -266,3 +266,97 @@ if [[ "$gemini_args" == *"--skip-trust"* || "$gemini_args" == *"--skipTrust"* ]]
 fi
 
 log_pass "gemini repair uses policy-based read-only invocation"
+
+# ---------------------------------------------------------------------------
+# Cross-host policy verification (Phase 0, plan L1041 / L1289)
+#
+# Asserts that `config/gemini-readonly-policy.toml` continues to bound the
+# Gemini reviewer's tool/file access when invoked under non-Claude
+# CERBERUS_HOST values. The Codex and Amp adapters do NOT need to exist for
+# this check; CERBERUS_HOST is just a label the resolver consumes for
+# state-path selection.
+# ---------------------------------------------------------------------------
+
+assert_cross_host_policy() {
+    local host_label="$1"
+
+    log_test "spawn_reviewer with CERBERUS_HOST=$host_label still applies read-only policy"
+
+    # Wipe per-reviewer state and recorded fake-gemini args between cases so
+    # the assertions are independent.
+    rm -f "$REVIEWS_DIR/gemini.json" \
+          "$REVIEWS_DIR/gemini.done" \
+          "$REVIEWS_DIR/gemini.failed" \
+          "$GEMINI_ARGS_FILE" \
+          "$GEMINI_SETTINGS_FILE" \
+          "$GEMINI_POLICY_FILE"
+
+    env \
+        PATH="$FAKE_BIN:$PATH" \
+        PLUGIN_ROOT="$PLUGIN_ROOT" \
+        REVIEWS_DIR="$REVIEWS_DIR" \
+        GEMINI_MODEL="$GEMINI_MODEL" \
+        CODEX_MODEL="$CODEX_MODEL" \
+        CLAUDE_MODEL="$CLAUDE_MODEL" \
+        PROMPT_FILE="$PROMPT_FILE" \
+        SCHEMA_FILE="$SCHEMA_FILE" \
+        CERBERUS_HOST="$host_label" \
+        CERBERUS_RUN_KEY="cross-host-${host_label}" \
+        "$RUNNER_BASH" -c '
+            source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
+            source "$PLUGIN_ROOT/bin/review-gate-models.sh"
+            spawn_reviewer gemini gemini "$PROMPT_FILE" "$SCHEMA_FILE"
+        '
+
+    for ((i = 0; i < 40; i++)); do
+        if [[ -f "$REVIEWS_DIR/gemini.done" || -f "$REVIEWS_DIR/gemini.failed" ]]; then
+            break
+        fi
+        "$SLEEP_BIN" 0.1
+    done
+
+    if [[ -f "$REVIEWS_DIR/gemini.failed" ]]; then
+        local output=""
+        if [[ -f "$REVIEWS_DIR/gemini.json" ]]; then
+            output=$("$CAT_BIN" "$REVIEWS_DIR/gemini.json")
+        fi
+        log_fail "gemini reviewer failed under CERBERUS_HOST=$host_label; output: $output"
+    fi
+
+    if [[ ! -f "$REVIEWS_DIR/gemini.done" ]]; then
+        log_fail "expected gemini.done under CERBERUS_HOST=$host_label"
+    fi
+
+    local cross_args
+    cross_args=$("$CAT_BIN" "$GEMINI_ARGS_FILE")
+    if [[ "$cross_args" != *"--policy "* ]]; then
+        log_fail "CERBERUS_HOST=$host_label: gemini missing --policy flag, got: $cross_args"
+    fi
+    if [[ "$cross_args" != *"--admin-policy "* ]]; then
+        log_fail "CERBERUS_HOST=$host_label: gemini missing --admin-policy flag, got: $cross_args"
+    fi
+    if [[ "$cross_args" == *"--allowed-tools"* ]]; then
+        log_fail "CERBERUS_HOST=$host_label: gemini should not receive deprecated --allowed-tools, got: $cross_args"
+    fi
+    if [[ "$cross_args" == *"--skip-trust"* || "$cross_args" == *"--skipTrust"* ]]; then
+        log_fail "CERBERUS_HOST=$host_label: gemini should not receive skip-trust flags, got: $cross_args"
+    fi
+
+    local cross_settings
+    cross_settings=$("$CAT_BIN" "$GEMINI_SETTINGS_FILE")
+    if [[ "$cross_settings" != "$PLUGIN_ROOT/config/gemini-readonly-settings.json" ]]; then
+        log_fail "CERBERUS_HOST=$host_label: settings path drifted, got: $cross_settings"
+    fi
+
+    local cross_policy
+    cross_policy=$("$CAT_BIN" "$GEMINI_POLICY_FILE")
+    if [[ "$cross_policy" != "$PLUGIN_ROOT/config/gemini-readonly-policy.toml" ]]; then
+        log_fail "CERBERUS_HOST=$host_label: policy path drifted, got: $cross_policy"
+    fi
+
+    log_pass "policy applied cleanly under CERBERUS_HOST=$host_label"
+}
+
+assert_cross_host_policy generic
+assert_cross_host_policy codex
+assert_cross_host_policy amp

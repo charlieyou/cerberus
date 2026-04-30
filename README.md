@@ -6,6 +6,19 @@ Multi-model consensus review system that gates Claude Code session termination u
 
 ![Cerberus](cerberus.png)
 
+## Supported Hosts
+
+Cerberus runs as a plugin/skill set in any of the following host environments. The shared backend (`bin/review-gate`, `bin/generate`, debate, telemetry) is identical across hosts; only the lifecycle adapters differ.
+
+| Host | Status | Adapter | Docs |
+|------|--------|---------|------|
+| Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
+| Codex CLI | Phase 1 (in progress) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/cerberus/*.md` | `docs/CODEX.md` (added in Phase 1) |
+| Amp | Phase 2 (planned) | `.amp/plugins/cerberus.ts` | `docs/AMP.md` (added in Phase 2) |
+| `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
+
+Existing Claude users do not need to change anything: the legacy `CLAUDE_*` env vars and `~/.claude/projects/...` state paths remain byte-for-byte identical.
+
 ## Features
 
 - **Multi-model review**: Codex, Gemini, and Claude evaluate changes in parallel
@@ -448,6 +461,25 @@ Cerberus ships both hooks in `hooks/hooks.json`:
 
 ### Environment Variables
 
+#### Host-neutral env contract (`CERBERUS_*`)
+
+The shared backend reads a host-neutral env contract. Every entry has a legacy alias so existing Claude callers keep working unchanged. When both the canonical `CERBERUS_*` variable and its legacy alias are set non-empty and differ, `CERBERUS_*` wins and a single stderr warning is emitted (empty strings are treated as unset).
+
+| Variable | Purpose | Alias / fallback |
+|---|---|---|
+| `CERBERUS_HOST` | `claude` \| `codex` \| `amp` \| `generic` | defaults to `claude` if any `CLAUDE_*` is set, else `generic` |
+| `CERBERUS_ROOT` | Plugin/repo root | `CLAUDE_PLUGIN_ROOT` |
+| `CERBERUS_STATE_ROOT` | Override for state base directory | host default (`~/.claude/projects` for Claude, `~/.cerberus/projects` otherwise) |
+| `CERBERUS_PROJECT_KEY` | Stable workspace key | computed via `get_project_hash` fallback |
+| `CERBERUS_SESSION_ID` | Host session/thread id | `CLAUDE_SESSION_ID` |
+| `CERBERUS_RUN_KEY` | Cerberus review identity (canonical) | `REVIEW_GATE_SESSION_KEY` (back-compat alias, indefinite) |
+| `CERBERUS_TRANSCRIPT_PATH` | Optional host transcript path | `CLAUDE_TRANSCRIPT_PATH`, `REVIEW_GATE_TRANSCRIPT_PATH` |
+| `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Bounded Codex `Stop` wait knob | default `0` (never wait) |
+
+**Byte-for-byte compatibility for existing Claude users:** zero changes required. All existing env vars, paths, commands, hooks, and tests continue to work byte-for-byte. Existing CLI scripts/integrations using `REVIEW_GATE_SESSION_KEY`, `REVIEW_GATE_TRANSCRIPT_PATH`, and `CLAUDE_PLUGIN_ROOT` keep working as aliases. There is no migration window.
+
+#### Review defaults
+
 Review defaults (precedence: CLI flag > env var > hardcoded default):
 
 | Variable | Default | Description |
@@ -476,6 +508,18 @@ Model override variables (override the mode-based defaults):
 | `CODEX_REASONING_EFFORT_OVERRIDE` | Override Codex reasoning effort (`medium`/`high`/`xhigh`) |
 
 ## Releasing
+
+### Multi-Host Release Phases
+
+The Codex/Amp port ships in three sequential, independently shippable, independently revertable releases. Each phase's rollback is a single `git revert`.
+
+| Release | Scope | Validation |
+|---|---|---|
+| Cerberus vX (Phase 0) | Shared backend host neutralization. New `status --json` subcommand. New `CERBERUS_*` env contract with full back-compat. | Existing Claude `bin/tests/*.sh` + new neutral-state + `status` tests. No host adapter changes. |
+| Cerberus vX+1 (Phase 1) | Codex port: `.codex-plugin/plugin.json`, skills, `templates/codex-hooks.json`, `bin/codex-session-init`, `bin/codex-stop-hook`, `docs/CODEX.md`. | Phase 0 tests + Codex tests + manual Codex smoke checks. |
+| Cerberus vX+2 (Phase 2) | Amp port: `.amp/plugins/cerberus.ts` + `docs/AMP.md`. | Phase 0/1 tests + Amp tests + manual Amp smoke checks. |
+
+Phase 3 (generator workflow ports) and Phase 4 (team automation revisit) ship in subsequent releases as scope and external host maturity allow. Phase 0 ships behind no flag because it's strictly additive; the regression suite (Claude tests) is the gate, and `CERBERUS_HOST=generic` mode in CI exercises the neutral path before any host adapter is shipped.
 
 ### Debate Mode Manual Smoke Checks
 

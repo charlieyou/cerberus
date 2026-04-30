@@ -1,4 +1,15 @@
 # Cerberus runs Gemini as an external reviewer. Permit local codebase reads only.
+#
+# Host-neutrality (verified Phase 0 — see plan §Deviation Log entry for
+# "Skeleton omitted gemini-readonly-policy.toml cross-host check"):
+# These rules are tool-name based and contain no host-specific paths,
+# Claude-specific assumptions, or `${CLAUDE_*}` references. The settings
+# and policy files are loaded from `$PLUGIN_ROOT/config/...`, where
+# `$PLUGIN_ROOT` is resolved via `__cerberus_resolve_root` and therefore
+# follows `CERBERUS_ROOT` (with `CLAUDE_PLUGIN_ROOT` as alias). The
+# policy applies cleanly under `CERBERUS_HOST=claude`, `codex`, `amp`,
+# and `generic`. See `bin/tests/test-review-gate-gemini-policy.sh` for
+# the cross-host assertion. No host-specific knobs are required.
 
 [[rule]]
 toolName = [
