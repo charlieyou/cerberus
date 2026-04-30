@@ -35,6 +35,21 @@
 
 set -euo pipefail
 
+# Env isolation: the per-shape subshells below set CLAUDE_SESSION_ID and
+# REVIEW_GATE_TRANSCRIPT_PATH explicitly but inherit CLAUDE_TRANSCRIPT_PATH /
+# CERBERUS_TRANSCRIPT_PATH from the parent shell. T005.5 made the resolver
+# honor `CERBERUS_* > CLAUDE_* > REVIEW_GATE_*` precedence, so a leaked
+# CLAUDE_TRANSCRIPT_PATH from a parent Claude Code session would otherwise
+# win over the test-specific REVIEW_GATE_TRANSCRIPT_PATH and route the
+# spawn-* re-entry to the wrong review dir. Match T004's harden-env-isolation
+# pattern on test-host-neutral-state.sh.
+unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT CERBERUS_PROJECT_KEY \
+      CERBERUS_SESSION_ID CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+      CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+      CLAUDE_PLUGIN_ROOT \
+      REVIEW_GATE_SESSION_KEY REVIEW_GATE_TRANSCRIPT_PATH \
+      REVIEW_GATE_SESSION_SOURCE 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REVIEW_GATE="$PLUGIN_ROOT/bin/review-gate"
