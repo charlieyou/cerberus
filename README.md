@@ -13,7 +13,7 @@ Cerberus runs as a plugin/skill set in any of the following host environments. T
 | Host | Status | Adapter | Docs |
 |------|--------|---------|------|
 | Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
-| Codex CLI | Phase 1 (in progress) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/cerberus/*.md` | `docs/CODEX.md` (added in Phase 1) |
+| Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/cerberus/*.md` | [`docs/CODEX.md`](docs/CODEX.md) |
 | Amp | Phase 2 (planned) | `.amp/plugins/cerberus.ts` | `docs/AMP.md` (added in Phase 2) |
 | `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
 
@@ -58,6 +58,16 @@ Missing reviewers are skipped with a warning. You can run with just one or two.
 # Install the plugin
 /plugin install cerberus
 ```
+
+> **Codex CLI users:** the `/plugin` flow above is Claude-specific. To
+> install Cerberus under Codex, follow the two-step install in
+> [`docs/CODEX.md`](docs/CODEX.md) (clone the repo, then substitute
+> `<CERBERUS_INSTALL_ROOT>` in `templates/codex-hooks.json` and copy
+> the result into Codex's hooks file). Codex ships the six Tier-1
+> review skills (`review-code`, `review-plan`, `review-spec`, `ask`,
+> `status`, `clear-gate`) plus the `SessionStart` and `Stop` lifecycle
+> hooks. Generator workflows and Cerberus team automation are
+> Claude-only in v1.
 
 ## Usage
 
