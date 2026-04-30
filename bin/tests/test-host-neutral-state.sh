@@ -17,7 +17,7 @@
 #   Row 12: T004 — missing run key in generic mode (fail diagnostic)
 #   Row 13: T004 — invalid CERBERUS_STATE_ROOT diagnostics through bin/review-gate
 #   Row 14: T004 — path-traversal rejection through bin/review-gate
-#   Row 15: T003 — wait + status --session-key under neutral state
+#   Row 15: T003 — wait + status --session-key under neutral state [DONE]
 #
 # Skipped rows still emit log_skip lines so downstream tasks know exactly
 # which scaffold rows to flip to assertions.
@@ -422,14 +422,86 @@ log_skip "Row 14: scaffolded; T004 turns this row green"
 
 # ---------------------------------------------------------------------------
 # Row 15 — wait + status --session-key parity under neutral state.
-# TODO(T003): spawn under CERBERUS_RUN_KEY=k and verify BOTH
-# wait --session-key k AND status --session-key k succeed without Claude
-# env. T002 already extended find_state_by_session_key in bin/review-gate
-# to search neutral roots; T003 adds the `status --json` subcommand and
-# wires the parity test that exercises both lookup paths end-to-end.
+# Plant a neutral gate-state.json under $TEST_HOME/.cerberus/projects/...
+# (no spawn — that would require real reviewer CLIs). Then assert that
+# BOTH `wait --session-key k` AND `status --session-key k` find the same
+# state file via the shared find_state_by_session_key glob walker
+# (resolve_review_dir env-passing path also works when project key is
+# inferable). Per plan §Run-key lookup parity (L613-L630) both commands
+# MUST locate the run without any Claude env present.
 # ---------------------------------------------------------------------------
 log_test "Row 15 — wait + status --session-key parity under neutral state"
-log_skip "Row 15: scaffolded; T003 turns this row green"
+
+ROW15_PROJ="row15-proj"
+ROW15_RUN="row15-run"
+ROW15_DIR="$TEST_HOME/.cerberus/projects/$ROW15_PROJ/$ROW15_RUN"
+mkdir -p "$ROW15_DIR/reviews"
+cat > "$ROW15_DIR/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "resolved",
+  "trigger_source": "test",
+  "artifact": {"path": "$ROW15_DIR/latest.md", "sha256": ""},
+  "reviewers": {"codex": {}},
+  "consensus": {"verdict": "PASS"},
+  "decision": {"action": "proceed", "decided_at": "2026-04-30T00:00:00Z"},
+  "owner": {"session_key": "$ROW15_RUN"},
+  "created_at": "2026-04-30T00:00:00Z",
+  "iteration": 0
+}
+EOF
+cat > "$ROW15_DIR/reviews/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"All good","findings":[]}
+EOF
+touch "$ROW15_DIR/reviews/codex.done"
+
+row15_status_out="$TEST_DIR/row15-status.out"
+row15_status_err="$TEST_DIR/row15-status.err"
+row15_wait_out="$TEST_DIR/row15-wait.out"
+row15_wait_err="$TEST_DIR/row15-wait.err"
+
+# `status --session-key` parity: no Claude env, no project key in env.
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    "$REVIEW_GATE" status --json --session-key "$ROW15_RUN"
+) >"$row15_status_out" 2>"$row15_status_err"
+row15_status_rc=$?
+row15_status_gs=$(jq -r '.gate_status' "$row15_status_out" 2>/dev/null || echo "")
+row15_status_rd=$(jq -r '.review_dir' "$row15_status_out" 2>/dev/null || echo "")
+if [[ "$row15_status_rc" -eq 0 && "$row15_status_gs" == "resolved" && "$row15_status_rd" == "$ROW15_DIR" ]]; then
+    log_pass "Row 15a: status --session-key locates neutral state without Claude env"
+else
+    log_fail "Row 15a: rc=$row15_status_rc gs=$row15_status_gs rd=$row15_status_rd body=$(cat "$row15_status_out") stderr=$(cat "$row15_status_err")"
+fi
+
+# `wait --session-key` parity: same env profile. Resolved gate with done
+# sentinel + reviewer JSON ⇒ wait returns immediately with status=resolved.
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    "$REVIEW_GATE" wait --json --timeout 5 --poll-interval 1 --session-key "$ROW15_RUN"
+) >"$row15_wait_out" 2>"$row15_wait_err"
+row15_wait_rc=$?
+row15_wait_status=$(jq -r '.status' "$row15_wait_out" 2>/dev/null || echo "")
+# wait exits 0 for PASS consensus, non-zero for other terminal verdicts; we
+# only require that it located the state and returned a status field (not
+# "no_reviewers" — which would mean it never found the state file).
+if [[ "$row15_wait_status" == "resolved" || "$row15_wait_status" == "complete" ]]; then
+    log_pass "Row 15b: wait --session-key locates neutral state without Claude env"
+else
+    log_fail "Row 15b: rc=$row15_wait_rc status=$row15_wait_status body=$(cat "$row15_wait_out") stderr=$(cat "$row15_wait_err")"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -439,7 +511,7 @@ echo "----------------------------------------"
 echo "Host-neutral state test summary:"
 echo "  Passed:  $TESTS_PASSED"
 echo "  Failed:  $TESTS_FAILED"
-echo "  Skipped: $TESTS_SKIPPED  (TODO rows for T003/T004)"
+echo "  Skipped: $TESTS_SKIPPED  (TODO rows for T004)"
 echo "----------------------------------------"
 
 if [[ "$TESTS_FAILED" -gt 0 ]]; then

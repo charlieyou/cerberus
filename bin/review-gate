@@ -179,6 +179,11 @@ Commands:
   wait --json [--finalize] [--timeout <sec>] [--poll-interval <sec>] [--session-key <key>]
     Block/poll until consensus or timeout. Outputs machine-readable JSON.
 
+  status --json [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
+    Non-mutating, non-blocking snapshot of the gate. Outputs canonical JSON
+    consumed by Codex Stop and Amp Status surfaces. Exit 0 on success, 4
+    when no active gate, 2 on internal error.
+
   resolve [--reason <text>]
     Resolve the active gate and allow the session to stop.
 
@@ -4354,6 +4359,67 @@ with open(out_path, "wb") as f: f.write(out)
     echo "STOP now. The stop hook will wait for reviewers and present findings." >&2
 }
 
+# find_state_by_session_key — locate a gate-state.json by owner.session_key.
+#
+# Glob-walks the legacy Claude tree, the neutral host tree, and any
+# explicit CERBERUS_STATE_ROOT, returning the most-recently-created
+# gate-state.json whose `.owner.session_key` matches the supplied key.
+# Used by `wait --session-key` and `status --session-key` as the
+# fallback after the env-passing resolve_review_dir() lookup misses
+# (e.g., a Codex/Amp adapter calling `--session-key` without exporting
+# CERBERUS_PROJECT_KEY).
+#
+# Plan reference: §Run-key lookup parity (L613-L630). T002 added the
+# neutral-roots search path. T003 promoted this from a nested helper
+# inside review_gate_wait to a top-level function so review_gate_status
+# can share the exact same lookup. No behavior change versus the prior
+# nested definition.
+#
+# Stdout: absolute path to the matched gate-state.json, or empty string.
+find_state_by_session_key() {
+    local key="$1"
+    local candidate=""
+    local candidate_epoch=0
+    shopt -s nullglob
+    local -a state_files=(
+        "$HOME/.claude/projects"/*/cerberus/*/gate-state.json
+        "$HOME/.cerberus/projects"/*/*/gate-state.json
+    )
+    if [[ -n "${CERBERUS_STATE_ROOT:-}" && "${CERBERUS_STATE_ROOT:-}" == /* ]]; then
+        # CERBERUS_STATE_ROOT can be used by Claude callers too, in
+        # which case the layout is /<proj>/cerberus/<run>/. Cover both
+        # layouts so the search is host-agnostic.
+        state_files+=(
+            "${CERBERUS_STATE_ROOT}"/*/*/gate-state.json
+            "${CERBERUS_STATE_ROOT}"/*/cerberus/*/gate-state.json
+        )
+    fi
+    local state_file
+    for state_file in "${state_files[@]}"; do
+        [[ ! -f "$state_file" ]] && continue
+        local owner_key
+        owner_key=$(jq -r '.owner.session_key // ""' "$state_file" 2>/dev/null || echo "")
+        if [[ "$owner_key" != "$key" ]]; then
+            continue
+        fi
+        local created_at epoch
+        created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
+        epoch=0
+        if [[ -n "$created_at" ]]; then
+            epoch=$(iso8601_to_epoch "$created_at")
+        fi
+        if [[ "$epoch" -eq 0 ]]; then
+            epoch=$(stat -c %Y "$state_file" 2>/dev/null || stat -f %m "$state_file" 2>/dev/null || echo 0)
+        fi
+        if [[ -z "$candidate" || "$epoch" -gt "$candidate_epoch" ]]; then
+            candidate="$state_file"
+            candidate_epoch="$epoch"
+        fi
+    done
+    shopt -u nullglob
+    printf '%s' "$candidate"
+}
+
 review_gate_resolve() {
     local reason=""
 
@@ -4604,57 +4670,21 @@ USAGE
         session_id="$(basename "$transcript_path" .jsonl)"
     fi
 
-    find_state_by_session_key() {
-        local key="$1"
-        local candidate=""
-        local candidate_epoch=0
-        shopt -s nullglob
-        # T002: search the legacy Claude layout AND the neutral host layout
-        # ($HOME/.cerberus/projects/<proj>/<run>) plus any custom
-        # CERBERUS_STATE_ROOT, so wait --session-key works for non-Claude
-        # spawns. Plan §Run-key lookup parity (L613-L630) requires this
-        # tree to match resolve_review_dir's neutral-roots search path.
-        local -a state_files=(
-            "$HOME/.claude/projects"/*/cerberus/*/gate-state.json
-            "$HOME/.cerberus/projects"/*/*/gate-state.json
-        )
-        if [[ -n "${CERBERUS_STATE_ROOT:-}" && "${CERBERUS_STATE_ROOT:-}" == /* ]]; then
-            # CERBERUS_STATE_ROOT can be used by Claude callers too, in
-            # which case the layout is /<proj>/cerberus/<run>/. Cover both
-            # layouts so the search is host-agnostic.
-            state_files+=(
-                "${CERBERUS_STATE_ROOT}"/*/*/gate-state.json
-                "${CERBERUS_STATE_ROOT}"/*/cerberus/*/gate-state.json
-            )
-        fi
-        local state_file
-        for state_file in "${state_files[@]}"; do
-            [[ ! -f "$state_file" ]] && continue
-            local owner_key
-            owner_key=$(jq -r '.owner.session_key // ""' "$state_file" 2>/dev/null || echo "")
-            if [[ "$owner_key" != "$key" ]]; then
-                continue
-            fi
-            local created_at epoch
-            created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
-            epoch=0
-            if [[ -n "$created_at" ]]; then
-                epoch=$(iso8601_to_epoch "$created_at")
-            fi
-            if [[ "$epoch" -eq 0 ]]; then
-                epoch=$(stat -c %Y "$state_file" 2>/dev/null || stat -f %m "$state_file" 2>/dev/null || echo 0)
-            fi
-            if [[ -z "$candidate" || "$epoch" -gt "$candidate_epoch" ]]; then
-                candidate="$state_file"
-                candidate_epoch="$epoch"
-            fi
-        done
-        shopt -u nullglob
-        printf '%s' "$candidate"
-    }
-
     if [[ "$session_key_from_arg" == "true" && "$session_id_from_arg" != "true" ]]; then
         session_id=""
+    fi
+
+    # T003: when --session-key is supplied via flag, set CERBERUS_RUN_KEY
+    # transiently so the resolve_review_dir() path below can find the run.
+    # This implements the run-key lookup parity contract from plan
+    # §Run-key lookup parity (L613-L630): both `wait --session-key K` and
+    # `status --session-key K` resolve the same path via
+    # `resolve_review_dir(session_id="", transcript_path)` with
+    # CERBERUS_RUN_KEY=K. The glob-based find_state_by_session_key remains
+    # as a fallback for cross-host lookups when the project key cannot be
+    # inferred from env/transcript_path (the common Codex/Amp case).
+    if [[ "$session_key_from_arg" == "true" && -n "$session_key" ]]; then
+        export CERBERUS_RUN_KEY="$session_key"
     fi
 
     local state_file=""
@@ -4663,7 +4693,22 @@ USAGE
         review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
         state_file="$review_dir/gate-state.json"
     elif [[ -n "$session_key" ]]; then
-        state_file=$(find_state_by_session_key "$session_key")
+        # Strategy 1 (env-passing parity, plan §Run-key lookup parity):
+        # resolve_review_dir picks up the transient CERBERUS_RUN_KEY plus
+        # any CERBERUS_PROJECT_KEY / transcript_path-derived project key.
+        local _wait_review_dir=""
+        if _wait_review_dir=$(resolve_review_dir "" "$transcript_path" 2>/dev/null); then
+            if [[ -n "$_wait_review_dir" && -f "$_wait_review_dir/gate-state.json" ]]; then
+                state_file="$_wait_review_dir/gate-state.json"
+            fi
+        fi
+        # Strategy 2 (glob fallback): scan the legacy Claude tree AND the
+        # neutral host roots for a matching .owner.session_key. This is the
+        # path Codex/Amp adapters take when invoking `wait --session-key K`
+        # without exporting CERBERUS_PROJECT_KEY.
+        if [[ -z "$state_file" ]]; then
+            state_file=$(find_state_by_session_key "$session_key")
+        fi
     else
         wait_error "session key or session id is required"
     fi
@@ -4973,6 +5018,426 @@ USAGE
     esac
 }
 
+# review_gate_status — non-mutating, non-blocking status snapshot.
+#
+# Plan reference: §status --json JSON output schema (L634-L730).
+#
+# Produces the canonical JSON shape consumed by the Codex Stop hook
+# (`bin/codex-stop-hook`) and Amp `Cerberus: Status` UI. The contract
+# is strict:
+#
+#   - **Never** writes anything under $REVIEW_DIR (no telemetry side
+#     effects, no `iteration.json` rotation, no `gate-state.json`
+#     mutation). Verified by test 7 (no-mutation invariant) in
+#     bin/tests/test-status-command.sh.
+#   - **Never** blocks. No polling loop, no sleeps. Verified by test 8
+#     (returns in <1s against still-pending gate).
+#   - Reads only committed files; ignores `*.tmp.$$` files.
+#
+# Exit codes:
+#   0 — success (body has `status` field set OR full schema fields)
+#   2 — internal error (e.g., resolver failure unrelated to missing state)
+#   4 — no active gate (body: {"status":"no_active_gate"})
+#
+# Special bodies:
+#   {"status":"no_active_gate"} (exit 4) — no gate-state.json for resolved run
+#   {"status":"unknown","error":"malformed_state"} (exit 0) — failure-open
+#     for downstream Codex Stop / Amp Status when state is unparseable
+#
+# Run-key lookup parity (plan L613-L630): `status --session-key K` and
+# `wait --session-key K` MUST share the same code path. Implementation:
+# when `--session-key` is passed via flag, we set `CERBERUS_RUN_KEY`
+# transiently (via `find_state_for_run_key` below) and call
+# `resolve_review_dir("", transcript_path)` first. If that path's
+# `gate-state.json` exists, we use it. Otherwise we fall back to the
+# glob-based `find_state_by_session_key` (which already searches both
+# Claude legacy roots AND neutral roots after T002).
+review_gate_status() {
+    local json_mode="false"
+    local session_key="$(__cerberus_resolve_run_key)"
+    local session_id="${CLAUDE_SESSION_ID:-${CERBERUS_SESSION_ID:-}}"
+    local transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}}"
+    local session_key_from_arg="false"
+    local session_id_from_arg="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                json_mode="true"
+                shift
+                ;;
+            --session-key=*)
+                session_key="${1#*=}"
+                session_key_from_arg="true"
+                shift
+                ;;
+            --session-key)
+                session_key="${2:-}"
+                session_key_from_arg="true"
+                shift 2
+                ;;
+            --session-id=*)
+                session_id="${1#*=}"
+                session_id_from_arg="true"
+                shift
+                ;;
+            --session-id)
+                session_id="${2:-}"
+                session_id_from_arg="true"
+                shift 2
+                ;;
+            --transcript-path=*)
+                transcript_path="${1#*=}"
+                shift
+                ;;
+            --transcript-path)
+                transcript_path="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<USAGE
+Usage: ${CLI_CMD} status --json [--session-key <key>] [--session-id <id>] [--transcript-path <path>]
+USAGE
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    if [[ "$json_mode" != "true" ]]; then
+        die "status requires --json output"
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        # Failure-open: emit failure-open body and exit 2 (internal error).
+        printf '{"status":"error","error":"missing_dependency"}\n'
+        exit 2
+    fi
+
+    if [[ "$session_id_from_arg" != "true" && -z "$session_id" && -n "$transcript_path" ]]; then
+        session_id="$(basename "$transcript_path" .jsonl)"
+    fi
+
+    # When session_key is supplied via --session-key, set CERBERUS_RUN_KEY
+    # transiently so resolve_review_dir() picks it up (parity with `wait`).
+    # Plan §Run-key lookup parity (L613-L630). Empty values are unset per
+    # the ${VAR:-} idiom.
+    if [[ "$session_key_from_arg" == "true" && -n "$session_key" ]]; then
+        export CERBERUS_RUN_KEY="$session_key"
+    fi
+
+    # Flag-passing precedence: --session-key (alone) takes priority over
+    # the legacy positional CLAUDE_SESSION_ID-derived session_id, mirroring
+    # `wait`'s behavior when both arrive.
+    if [[ "$session_key_from_arg" == "true" && "$session_id_from_arg" != "true" ]]; then
+        session_id=""
+    fi
+
+    # Resolve the gate-state path. Two strategies, matching `wait`:
+    #   1. session_id known → resolve_review_dir directly.
+    #   2. only session_key known → resolve_review_dir (env-passing) first;
+    #      fall back to find_state_by_session_key glob search if that path
+    #      has no gate-state.json (covers cross-host lookup without a
+    #      project key in env).
+    local state_file="" review_dir=""
+    if [[ -n "$session_id" ]]; then
+        if review_dir=$(resolve_review_dir "$session_id" "$transcript_path" 2>/dev/null); then
+            state_file="$review_dir/gate-state.json"
+        fi
+    elif [[ -n "$session_key" ]]; then
+        if review_dir=$(resolve_review_dir "" "$transcript_path" 2>/dev/null); then
+            if [[ -n "$review_dir" && -f "$review_dir/gate-state.json" ]]; then
+                state_file="$review_dir/gate-state.json"
+            fi
+        fi
+        if [[ -z "$state_file" ]]; then
+            state_file=$(find_state_by_session_key "$session_key")
+            if [[ -n "$state_file" ]]; then
+                review_dir=$(dirname "$state_file")
+            fi
+        fi
+    fi
+
+    if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+        printf '{"status":"no_active_gate"}\n'
+        exit 4
+    fi
+
+    # Failure-open: malformed gate-state.json → exit 0 with sentinel body
+    # so the Codex Stop hook can default to allowing the user to stop.
+    if ! jq -e . "$state_file" >/dev/null 2>&1; then
+        printf '{"status":"unknown","error":"malformed_state"}\n'
+        exit 0
+    fi
+
+    # Derive metadata. T004 will record host/owner.project_key in the
+    # state file directly; until then we infer from path + env.
+    local gate_status host project_key run_key
+    gate_status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+    case "$gate_status" in
+        pending|awaiting_decision|resolved) ;;
+        *) gate_status="unknown" ;;
+    esac
+
+    host=$(jq -r '.host // empty' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$host" ]]; then
+        host="${CERBERUS_HOST:-}"
+    fi
+    if [[ -z "$host" ]]; then
+        case "$review_dir" in
+            */.claude/projects/*) host="claude" ;;
+            *) host="generic" ;;
+        esac
+    fi
+
+    run_key=$(jq -r '.owner.session_key // empty' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$run_key" ]]; then
+        run_key=$(basename "$review_dir")
+    fi
+
+    project_key=$(jq -r '.owner.project_key // empty' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$project_key" ]]; then
+        # Path layouts:
+        #   Claude legacy:  <root>/<projkey>/cerberus/<runkey>
+        #   Neutral:        <root>/<projkey>/<runkey>
+        local _parent _parent_name
+        _parent=$(dirname "$review_dir")
+        _parent_name=$(basename "$_parent")
+        if [[ "$_parent_name" == "cerberus" ]]; then
+            project_key=$(basename "$(dirname "$_parent")")
+        else
+            project_key="$_parent_name"
+        fi
+    fi
+
+    # Reviewer aggregation (read-only). Iterate reviewer names from
+    # gate-state.json keys; bucket each into pending/complete/failed
+    # using the .done/.failed sentinel files. For complete reviewers,
+    # pull verdict + findings from <name>.json directly via jq (we
+    # deliberately avoid extract_json's repair_review_output path, which
+    # may invoke external CLIs and violate the <1s no-blocking budget).
+    local reviews_dir="$review_dir/reviews"
+    local reviewer_names
+    reviewer_names=$(jq -r '.reviewers | keys[]?' "$state_file" 2>/dev/null || echo "")
+
+    local reviewers_json='[]'
+    local pending_json='[]'
+    local findings_json='[]'
+    local parse_errors_json='[]'
+    local has_pass=0 has_fail=0 has_needs=0
+
+    local reviewer
+    for reviewer in $reviewer_names; do
+        local done_file="$reviews_dir/${reviewer}.done"
+        local failed_file="$reviews_dir/${reviewer}.failed"
+        local output_file="$reviews_dir/${reviewer}.json"
+
+        if [[ -f "$failed_file" ]]; then
+            reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [{name:$name, status:"failed"}]')
+            parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [$name]')
+            continue
+        fi
+
+        if [[ ! -f "$done_file" ]]; then
+            reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [{name:$name, status:"pending"}]')
+            pending_json=$(printf '%s' "$pending_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [$name]')
+            continue
+        fi
+
+        if [[ ! -f "$output_file" ]] || ! jq -e . "$output_file" >/dev/null 2>&1; then
+            reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [{name:$name, status:"complete", verdict:"error"}]')
+            parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [$name]')
+            continue
+        fi
+
+        local rverdict
+        rverdict=$(jq -r '.verdict // ""' "$output_file" 2>/dev/null || echo "")
+        local out_verdict_lower="" finding_verdict=""
+        case "$rverdict" in
+            PASS)
+                out_verdict_lower="pass"; finding_verdict="PASS"
+                has_pass=$((has_pass + 1))
+                ;;
+            FAIL)
+                out_verdict_lower="fail"; finding_verdict="FAIL"
+                has_fail=$((has_fail + 1))
+                ;;
+            NEEDS_WORK)
+                out_verdict_lower="needs_revision"; finding_verdict="NEEDS_REVISION"
+                has_needs=$((has_needs + 1))
+                ;;
+            NEEDS_REVISION)
+                out_verdict_lower="needs_revision"; finding_verdict="NEEDS_REVISION"
+                has_needs=$((has_needs + 1))
+                ;;
+            *)
+                reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                    --arg name "$reviewer" \
+                    '. + [{name:$name, status:"complete", verdict:"error"}]')
+                parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                    --arg name "$reviewer" \
+                    '. + [$name]')
+                continue
+                ;;
+        esac
+
+        reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+            --arg name "$reviewer" \
+            --arg verdict "$out_verdict_lower" \
+            '. + [{name:$name, status:"complete", verdict:$verdict}]')
+
+        # Findings — required: priority (int 0-3). Missing/non-int → parse_errors.
+        # `priority` is normalized from the integer to "P0".."P3". `verdict`
+        # on each finding mirrors the issuing reviewer's verdict (uppercase,
+        # NEEDS_WORK→NEEDS_REVISION). `summary` uses .title; optional `details`
+        # carries .body; optional `file_refs` wraps .file_path in an array.
+        local rev_findings_json
+        rev_findings_json=$(jq -c '.findings // []' "$output_file" 2>/dev/null || echo "[]")
+        # Validate it's an array; otherwise treat as parse error.
+        if ! printf '%s' "$rev_findings_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                --arg name "$reviewer" \
+                '. + [$name]')
+            continue
+        fi
+
+        # Process valid findings, tracking parse-error indices for invalid ones.
+        local findings_to_add parse_error_indices
+        findings_to_add=$(printf '%s' "$rev_findings_json" | jq -c \
+            --arg reviewer "$reviewer" \
+            --arg verdict "$finding_verdict" \
+            '
+            [ to_entries[]
+              | select(.value.priority? // null | type == "number"
+                       and . >= 0 and . <= 3 and . == floor)
+              | .value as $f
+              | {
+                  reviewer: $reviewer,
+                  priority: ("P" + ($f.priority | tostring)),
+                  verdict: $verdict,
+                  summary: ($f.title // "")
+                }
+                + (if ($f.body // "") != "" then {details: $f.body} else {} end)
+                + (if ($f.file_path // null) != null and ($f.file_path // "") != ""
+                   then {file_refs: [$f.file_path]} else {} end)
+            ]
+            ')
+        parse_error_indices=$(printf '%s' "$rev_findings_json" | jq -c \
+            --arg reviewer "$reviewer" \
+            '
+            [ to_entries[]
+              | select((.value.priority? // null | type) != "number"
+                       or (.value.priority? // -1) < 0
+                       or (.value.priority? // -1) > 3
+                       or ((.value.priority? // -1) | floor) != (.value.priority? // -1))
+              | "\($reviewer):finding[\(.key)]"
+            ]
+            ')
+        findings_json=$(printf '%s' "$findings_json" | jq -c \
+            --argjson add "$findings_to_add" \
+            '. + $add')
+        parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+            --argjson add "$parse_error_indices" \
+            '. + $add')
+    done
+
+    # consensus_verdict — for resolved gates, prefer the recorded
+    # .consensus.verdict; otherwise derive from completed-reviewer verdicts
+    # (matches `wait`'s most-severe-wins logic). Output is lowercase per
+    # plan §JSON shape (L683-L684).
+    local consensus_verdict_raw="" consensus_verdict_out="null"
+    consensus_verdict_raw=$(jq -r '.consensus.verdict // empty' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$consensus_verdict_raw" ]]; then
+        if (( has_fail > 0 )); then
+            consensus_verdict_raw="FAIL"
+        elif (( has_needs > 0 )); then
+            consensus_verdict_raw="NEEDS_WORK"
+        elif (( has_pass > 0 )); then
+            consensus_verdict_raw="PASS"
+        fi
+    fi
+    case "$consensus_verdict_raw" in
+        PASS|pass) consensus_verdict_out="pass" ;;
+        FAIL|fail) consensus_verdict_out="fail" ;;
+        NEEDS_WORK|NEEDS_REVISION|needs_work|needs_revision) consensus_verdict_out="needs_revision" ;;
+        ""|*) consensus_verdict_out="" ;;
+    esac
+
+    # Assemble the final JSON output. Use `--argjson` for pre-built JSON
+    # subtrees and `--arg` for strings. Emit consensus_verdict as JSON null
+    # when undetermined.
+    local final_json
+    if [[ -z "$consensus_verdict_out" ]]; then
+        final_json=$(jq -nc \
+            --argjson schema_version 1 \
+            --arg host "$host" \
+            --arg project_key "$project_key" \
+            --arg run_key "$run_key" \
+            --arg review_dir "$review_dir" \
+            --arg gate_status "$gate_status" \
+            --argjson reviewers "$reviewers_json" \
+            --argjson pending "$pending_json" \
+            --argjson findings "$findings_json" \
+            --argjson parse_errors "$parse_errors_json" \
+            '{
+                schema_version: $schema_version,
+                host: $host,
+                project_key: $project_key,
+                run_key: $run_key,
+                review_dir: $review_dir,
+                gate_status: $gate_status,
+                consensus_verdict: null,
+                reviewers: $reviewers,
+                pending_reviewers: $pending,
+                aggregated_findings: $findings,
+                parse_errors: $parse_errors
+            }')
+    else
+        final_json=$(jq -nc \
+            --argjson schema_version 1 \
+            --arg host "$host" \
+            --arg project_key "$project_key" \
+            --arg run_key "$run_key" \
+            --arg review_dir "$review_dir" \
+            --arg gate_status "$gate_status" \
+            --arg consensus_verdict "$consensus_verdict_out" \
+            --argjson reviewers "$reviewers_json" \
+            --argjson pending "$pending_json" \
+            --argjson findings "$findings_json" \
+            --argjson parse_errors "$parse_errors_json" \
+            '{
+                schema_version: $schema_version,
+                host: $host,
+                project_key: $project_key,
+                run_key: $run_key,
+                review_dir: $review_dir,
+                gate_status: $gate_status,
+                consensus_verdict: $consensus_verdict,
+                reviewers: $reviewers,
+                pending_reviewers: $pending,
+                aggregated_findings: $findings,
+                parse_errors: $parse_errors
+            }')
+    fi
+
+    printf '%s\n' "$final_json"
+    exit 0
+}
+
 main() {
     local cmd="${1:-}"
     case "$cmd" in
@@ -5011,6 +5476,10 @@ main() {
         wait)
             shift
             review_gate_wait "$@"
+            ;;
+        status)
+            shift
+            review_gate_status "$@"
             ;;
         artifact-path|artifact_path)
             shift
