@@ -5,6 +5,33 @@
       "enabled": true
     }
   },
+  "experimental": {
+    "dynamicModelConfiguration": true
+  },
+  "modelConfigs": {
+    "modelIdResolutions": {
+      "gemini-3.1-pro-preview": {
+        "default": "gemini-3.1-pro-preview",
+        "contexts": []
+      },
+      "gemini-3-flash-preview": {
+        "default": "gemini-3-flash-preview",
+        "contexts": []
+      },
+      "gemini-3.1-flash-lite-preview": {
+        "default": "gemini-3.1-flash-lite-preview",
+        "contexts": []
+      }
+    },
+    "modelChains": {
+      "preview": [
+        {
+          "model": "gemini-3.1-pro-preview",
+          "isLastResort": true
+        }
+      ]
+    }
+  },
   "mcp": {
     "excluded": ["*"]
   },
