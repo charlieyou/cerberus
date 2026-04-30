@@ -1,48 +1,57 @@
 #!/usr/bin/env bash
-# bin/codex-stop-hook — Codex Stop adapter (Phase 1 stub).
+# bin/codex-stop-hook — Codex Stop adapter (T009).
 #
-# Final responsibility (T009): read Codex Stop JSON from stdin, look up
-# the active run via the session registry, run
-# `review-gate status --json --session-key <run>`, and map the result to
-# a Codex hook response per the Stop Decision Matrix
+# Reads Codex `Stop` JSON from stdin, looks up the active run via the
+# session registry written by `bin/codex-session-init`, calls
+# `bin/review-gate status --json --session-key <run>`, and maps the
+# result to a Codex hook response per the Stop Decision Matrix
 # (plan §Codex Stop Decision Matrix, L732-L766).
 #
-# This file is a Phase-1 SKELETON (T007). The matrix logic lands in
-# T009; this stub is the failure-open default (always emit
-# {"action":"allow"} and exit 0).
+# Hook contract:
+#   - **Always exits 0**.
+#   - Emits a single JSON blob to stdout: either {"action":"allow",...}
+#     or {"action":"continue","userMessage":...}.
+#   - Diagnostics go to stderr.
+#   - Installs a SIGINT/SIGTERM/SIGHUP trap from script startup that
+#     fails open and kills any tracked child PIDs.
 #
-# Why install signal traps from day one (T007 not T009):
-#   - Plan §Phase 1 exit criteria require the Stop adapter to fail open
-#     under SIGINT/SIGTERM/SIGHUP starting from the first commit that
-#     introduces this file. If we deferred trap installation to T009, a
-#     Codex deployment that picked up the stub between T007 and T009
-#     could hang forever on a stuck stub.
-#   - The trap implementation here is intentionally minimal: emit allow,
-#     kill any child processes whose PIDs we recorded, exit 0. T009
-#     extends `__cerberus_stop_safe_exit` with PID tracking for
-#     spawned `wait` children but the contract (always emit valid JSON,
-#     always exit 0) does not change.
+# Test-only knob: CERBERUS_REVIEW_GATE_BIN overrides the path to
+# `bin/review-gate`. Defaults to `$SCRIPT_DIR/review-gate`.
 
-set -euo pipefail
+# NOTE: deliberately use `set -uo pipefail` (no `-e`). The hook is
+# failure-open by design: any non-zero rc from a probe must be handled
+# inline, not propagate out of the script. Errexit on a complex matrix
+# evaluator is an unbounded source of "wrong-but-non-zero" exits that
+# would violate the "always emit JSON, always exit 0" contract.
+set -uo pipefail
 
-# Track child PIDs spawned during execution so the signal handler can
-# kill them on the way out. T007 stub spawns one child (background
-# stdin drainer); T009 also stores the spawned `wait` child here.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REVIEW_GATE_BIN="${CERBERUS_REVIEW_GATE_BIN:-$SCRIPT_DIR/review-gate}"
+
+# Tracked child PIDs. The signal trap iterates and kills these on the
+# way out so a long-running `review-gate wait` child cannot orphan or
+# block the user from stopping. Bash 3.2-safe array length check
+# (cf. T007 round-1 review feedback).
 __CERBERUS_STOP_CHILD_PIDS=()
+# Re-entrancy guard: trap may fire mid-emission; emit at most once.
+__CERBERUS_STOP_EMITTED="false"
 
+__cerberus_stop_log() {
+    echo "codex-stop-hook: $*" >&2
+}
+
+# Failure-open signal handler. Plan §Stop Decision Matrix row 13.
+# MUST: kill any tracked child PIDs; emit a single allow envelope to
+# stdout; exit 0. NO long-running operations. Strict-mode flags are
+# disabled inside the handler so empty arrays / SIGPIPE / etc. cannot
+# prevent us from emitting the failure-open response.
 __cerberus_stop_safe_exit() {
-    # Failure-open invariant: never error out before emitting the allow
-    # envelope. Disable strict-mode flags inside the handler so a
-    # surprise (empty array under set -u on older bash, ERR-trap path,
-    # SIGPIPE on the kill below, etc.) cannot prevent us from printing
-    # the failure-open response and exiting 0.
     set +e +u
     set +o pipefail 2>/dev/null || true
 
-    # Best-effort: kill any tracked children. Use the array-length
-    # gate (always safe across bash 3.2+) instead of expanding the
-    # array with `:-`, which the reviewer flagged as fragile under
-    # `set -u` on bash 3.2.
+    # Kill tracked children. Bash 3.2-safe length gate (no `${arr[@]:-}`
+    # array expansion with default — that form aborts under set -u on
+    # bash 3.2). T007 round-1 review feedback.
     local _n=${#__CERBERUS_STOP_CHILD_PIDS[@]}
     local _i=0
     while [ "$_i" -lt "$_n" ]; do
@@ -50,49 +59,428 @@ __cerberus_stop_safe_exit() {
         _i=$((_i + 1))
     done
 
-    # Failure-open: emit allow and exit 0. Plan §Stop Decision Matrix
-    # row 13. The note distinguishes the trap path from the normal
-    # stub path so integration tests can tell them apart.
-    printf '{"action":"allow","note":"signal_trap"}\n'
+    if [ "$__CERBERUS_STOP_EMITTED" != "true" ]; then
+        __CERBERUS_STOP_EMITTED="true"
+        printf '{"action":"allow","note":"signal_trap"}\n'
+    fi
     exit 0
 }
 
+# Install signal trap from script startup. Phase 1 exit criterion (plan
+# L760-L765). The trap surface (INT TERM HUP) MUST match the regex used
+# by `bin/tests/test-codex-stop-hook.sh` Happy C.
 trap '__cerberus_stop_safe_exit' INT TERM HUP
 
-# Drain stdin so upstream hooks see EOF on their write end and don't
-# stall. T009 will parse this body for the session id; the stub just
-# discards it.
-#
-# IMPORTANT: drain in a *background* subshell, then `wait` on it in the
-# foreground. Bash defers running TERM/INT/HUP traps while a foreground
-# external command (`cat`) is blocked in a read syscall. Backgrounding
-# the drainer and waiting on it lets the trap fire promptly on signal:
-# `wait` is interruptible, the handler runs, kills the drainer via the
-# stored PID, and emits the failure-open envelope. This pattern is the
-# Phase 1 exit-criterion baseline (plan L760-L765); T009 extends the
-# same trap surface to cover spawned `review-gate wait` children.
+# ---- Hook output emitters --------------------------------------------------
+# Every emitter sets __CERBERUS_STOP_EMITTED so that if a signal arrives
+# AFTER emission but BEFORE exit, the trap doesn't double-print.
+
+__cerberus_emit_allow() {
+    local note="${1:-}"
+    __CERBERUS_STOP_EMITTED="true"
+    if [ -z "$note" ]; then
+        printf '{"action":"allow"}\n'
+        return 0
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        jq -nc --arg note "$note" '{action:"allow",note:$note}'
+    else
+        # No jq available: notes used here are static ASCII safe strings.
+        printf '{"action":"allow","note":"%s"}\n' "$note"
+    fi
+}
+
+__cerberus_emit_continue() {
+    local message="$1"
+    __CERBERUS_STOP_EMITTED="true"
+    if command -v jq >/dev/null 2>&1; then
+        jq -nc --arg msg "$message" '{action:"continue",userMessage:$msg}'
+    else
+        # Without jq we cannot safely escape the message. Failure-open.
+        printf '{"action":"allow"}\n'
+    fi
+}
+
+# ---- Drain stdin via background subshell ----------------------------------
+# Bash defers running TERM/INT/HUP traps while a foreground external
+# command is blocked in a read syscall. Backgrounding the drainer and
+# `wait`-ing on it lets the trap fire promptly on signal: `wait` is
+# interruptible, the handler runs, kills the drainer via the stored PID,
+# and emits the failure-open envelope. T007 carried this pattern; T009
+# extends it to also capture the JSON body for parsing.
+INPUT=""
 if [ ! -t 0 ]; then
     _stdin_drain_out="$(mktemp -t codex-stop-stdin.XXXXXX 2>/dev/null || echo "")"
     if [ -n "$_stdin_drain_out" ]; then
-        # NOTE: explicit `<&0` is REQUIRED. Bash redirects a backgrounded
-        # job's stdin away from a piped stdin in some configurations
-        # (verified empirically on bash 5.3 macOS, reproduces under
-        # bash 3.2 too). Without this redirection cat reads from
-        # /dev/null and returns instantly, defeating the whole point
-        # of the bg-cat + fg-wait pattern.
+        # `<&0` is REQUIRED. Bash redirects backgrounded jobs' stdin
+        # away from the parent's piped stdin in some configurations;
+        # without this redirect cat reads from /dev/null and returns
+        # instantly, defeating the whole point of bg-cat + fg-wait
+        # (verified empirically; see T007 stub commentary).
         cat <&0 >"$_stdin_drain_out" 2>/dev/null &
         _stdin_drain_pid=$!
         __CERBERUS_STOP_CHILD_PIDS+=("$_stdin_drain_pid")
-        # `wait` returns 128+sig if interrupted; the trap handler runs
-        # before we observe a return here. Suppress error so set -e
-        # doesn't kill the script on a non-zero drain rc (e.g. EPIPE).
         wait "$_stdin_drain_pid" 2>/dev/null || true
+        INPUT="$(cat "$_stdin_drain_out" 2>/dev/null || echo "")"
         rm -f "$_stdin_drain_out" 2>/dev/null || true
         unset _stdin_drain_out _stdin_drain_pid
     fi
 fi
 
-# Failure-open default for Phase 1 skeleton. T009 replaces this with
-# the full Stop Decision Matrix.
-printf '{"action":"allow","note":"not_implemented","task":"T009"}\n'
+# ---- Row 12: jq missing on PATH -------------------------------------------
+# Detect early and fail open. Diagnostics to stderr only; stdout gets
+# exactly one JSON envelope.
+if ! command -v jq >/dev/null 2>&1; then
+    __cerberus_stop_log "jq not on PATH; failing open"
+    printf '{"action":"allow"}\n'
+    __CERBERUS_STOP_EMITTED="true"
+    exit 0
+fi
+
+# ---- Parse stdin payload (Codex Stop JSON) --------------------------------
+SESSION_ID=""
+WORKSPACE_ROOT=""
+TRANSCRIPT_PATH=""
+if [ -n "$INPUT" ]; then
+    if printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
+        SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty')"
+        WORKSPACE_ROOT="$(printf '%s' "$INPUT" | jq -r '.workspace_root // .cwd // empty')"
+        TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
+    else
+        # Stdin parse failure (matrix case 15 / failure-open).
+        __cerberus_stop_log "invalid Codex Stop JSON on stdin; failing open"
+        __cerberus_emit_allow ""
+        exit 0
+    fi
+fi
+
+if [ -z "$WORKSPACE_ROOT" ]; then
+    WORKSPACE_ROOT="$(pwd)"
+fi
+
+# ---- Compute project_key via review-gate-lib.sh ---------------------------
+# Source review-gate-lib.sh purely to access `get_project_hash`. Failure
+# to source is treated as failure-open per the matrix invariant.
+if ! source "$SCRIPT_DIR/review-gate-lib.sh" 2>/dev/null; then
+    __cerberus_stop_log "failed to source review-gate-lib.sh; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+# get_project_hash precedence: CERBERUS_PROJECT_KEY (env) wins; else
+# transcript-path-derived; else CLAUDE_PROJECT_DIR / git / pwd. We anchor
+# the hash to the Codex-supplied workspace_root by setting
+# CLAUDE_PROJECT_DIR for the call (mirrors codex-session-init).
+PROJECT_KEY=""
+PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" \
+    CERBERUS_PROJECT_KEY="" \
+    get_project_hash "$TRANSCRIPT_PATH" 2>/dev/null || true)"
+
+if [ -z "$PROJECT_KEY" ]; then
+    __cerberus_stop_log "could not derive project_key; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+# ---- Row 2: registry file missing -----------------------------------------
+REGISTRY_FILE="$HOME/.cerberus/runtime/codex/$PROJECT_KEY/active-session.json"
+if [ ! -f "$REGISTRY_FILE" ]; then
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+# Read run_key from the registry. Treat malformed registry as failure-open.
+if ! jq -e . "$REGISTRY_FILE" >/dev/null 2>&1; then
+    __cerberus_stop_log "registry malformed at $REGISTRY_FILE; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+RUN_KEY="$(jq -r '.run_key // empty' "$REGISTRY_FILE" 2>/dev/null || echo "")"
+if [ -z "$RUN_KEY" ]; then
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+# ---- Row 3: registry present but <run-key>/ missing -----------------------
+RUN_DIR="$HOME/.cerberus/projects/$PROJECT_KEY/$RUN_KEY"
+if [ ! -d "$RUN_DIR" ]; then
+    __cerberus_emit_allow "no review dir"
+    exit 0
+fi
+
+# ---- Wait knob ------------------------------------------------------------
+WAIT_SECONDS_RAW="${CERBERUS_CODEX_STOP_WAIT_SECONDS:-0}"
+case "$WAIT_SECONDS_RAW" in
+    ''|*[!0-9]*) WAIT_SECONDS=0 ;;
+    *)           WAIT_SECONDS="$WAIT_SECONDS_RAW" ;;
+esac
+
+# Export the env review-gate needs to resolve our run. The hook is
+# already in its own process; exporting here scopes only to this
+# invocation and any children it spawns.
+export CERBERUS_HOST="codex"
+export CERBERUS_PROJECT_KEY="$PROJECT_KEY"
+
+# Helper: invoke `review-gate status --json --session-key <run>` and
+# capture body+rc.
+__cerberus_call_status() {
+    local out_file="$1"
+    local err_file="$2"
+    local rc=0
+    "$REVIEW_GATE_BIN" status --json --session-key "$RUN_KEY" \
+        >"$out_file" 2>"$err_file" || rc=$?
+    return $rc
+}
+
+# Helper: extract value via jq -r without leaking exit codes.
+__jq_get() {
+    local body="$1"
+    local filter="$2"
+    printf '%s' "$body" | jq -r "$filter" 2>/dev/null || echo ""
+}
+
+# Helper: count blocking findings per the canonical predicate
+# (plan L700-L706): verdict == "FAIL" OR priority IN {"P0","P1"}.
+__cerberus_count_blocking() {
+    local body="$1"
+    local n
+    n="$(printf '%s' "$body" | jq -r '
+        [
+          .aggregated_findings[]?
+          | select(
+              ((.verdict // "") == "FAIL")
+              or ((.priority // "") == "P0")
+              or ((.priority // "") == "P1")
+            )
+        ] | length
+    ' 2>/dev/null || echo 0)"
+    case "$n" in
+        ''|*[!0-9]*) echo 0 ;;
+        *)           echo "$n" ;;
+    esac
+}
+
+# Helper: format row-6 user message from a status body. Multi-line
+# bullet list. jq emits canonical JSON so newlines survive as `\n` in
+# stdout, which Codex renders.
+__cerberus_format_blocking_message() {
+    local body="$1"
+    printf '%s' "$body" | jq -r '
+        ([
+          .aggregated_findings[]?
+          | select(
+              ((.verdict // "") == "FAIL")
+              or ((.priority // "") == "P0")
+              or ((.priority // "") == "P1")
+            )
+        ]) as $blocking
+        | "Cerberus has \($blocking | length) blocking finding(s); run Cerberus: Status to inspect.\n" +
+          ([
+            $blocking[]
+            | "- [\(.priority // "?")][\(.verdict // "?")] \(.reviewer // "?"): \(.summary // "")"
+          ] | join("\n"))
+    ' 2>/dev/null || echo "Cerberus has blocking findings; run Cerberus: Status to inspect."
+}
+
+# Helper: format row-9 user message (resolved + fail).
+__cerberus_format_resolved_fail_message() {
+    local body="$1"
+    printf '%s' "$body" | jq -r '
+        "Cerberus gate resolved with consensus: \(.consensus_verdict // "fail"). Run Cerberus: Status for details."
+    ' 2>/dev/null || echo "Cerberus gate resolved with consensus: fail."
+}
+
+# Decision-matrix evaluator. Mode `initial` may spawn a wait child if
+# pending + WAIT_SECONDS>0; mode `post-wait` skips that and falls through
+# to the row-4 message instead (avoiding infinite recursion).
+__cerberus_decide() {
+    local body="$1"
+    local mode="$2"   # initial | post-wait
+
+    local gs cv
+    gs="$(__jq_get "$body" '.gate_status // empty')"
+    cv="$(__jq_get "$body" '.consensus_verdict // empty')"
+
+    case "$gs" in
+        pending)
+            if [ "$mode" = "initial" ] && [ "$WAIT_SECONDS" -gt 0 ]; then
+                __cerberus_run_wait_then_reeval
+                return 0
+            fi
+            # Row 4 (and Row 5a fallthrough).
+            __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
+            ;;
+        awaiting_decision)
+            local n
+            n="$(__cerberus_count_blocking "$body")"
+            if [ "$n" -gt 0 ]; then
+                # Row 6.
+                local msg
+                msg="$(__cerberus_format_blocking_message "$body")"
+                __cerberus_emit_continue "$msg"
+            else
+                # Row 7.
+                __cerberus_emit_allow ""
+            fi
+            ;;
+        resolved)
+            case "$cv" in
+                pass)
+                    # Row 8.
+                    __cerberus_emit_allow ""
+                    ;;
+                *)
+                    # Row 9 (fail or any other terminal verdict).
+                    local msg
+                    msg="$(__cerberus_format_resolved_fail_message "$body")"
+                    __cerberus_emit_continue "$msg"
+                    ;;
+            esac
+            ;;
+        *)
+            # Unknown gate_status — failure-open.
+            __cerberus_emit_allow ""
+            ;;
+    esac
+}
+
+# Row 5: wait then re-evaluate. Spawns `review-gate wait --json
+# --timeout N --session-key <run>` as a backgrounded child whose PID is
+# stored in __CERBERUS_STOP_CHILD_PIDS so the trap can SIGTERM it on
+# signal. After the child exits we re-call `status` to obtain the
+# canonical post-wait state and re-apply the matrix in `post-wait` mode.
+__cerberus_run_wait_then_reeval() {
+    local wait_out wait_err
+    wait_out="$(mktemp -t codex-stop-wait.XXXXXX 2>/dev/null || echo "")"
+    wait_err="$(mktemp -t codex-stop-wait-err.XXXXXX 2>/dev/null || echo "")"
+    if [ -z "$wait_out" ] || [ -z "$wait_err" ]; then
+        __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
+        return 0
+    fi
+
+    # Use a tight poll interval inside the child so completion mid-wait
+    # is detected promptly. Honor an externally-set value if the user
+    # tuned it; otherwise default to 1s for the bounded-stop budget.
+    local poll
+    poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-1}"
+    case "$poll" in
+        ''|*[!0-9]*) poll=1 ;;
+    esac
+    if [ "$poll" -lt 1 ]; then
+        poll=1
+    fi
+
+    # Spawn as direct background command so $! is the actual review-gate
+    # PID. That makes the trap's `kill -TERM <PID>` terminate the
+    # review-gate process (not just a wrapping subshell that would leave
+    # review-gate orphaned). CERBERUS_HOST / CERBERUS_PROJECT_KEY are
+    # already exported above; they propagate into the child.
+    REVIEW_GATE_POLL_INTERVAL_SECONDS="$poll" \
+        "$REVIEW_GATE_BIN" wait --json \
+            --timeout "$WAIT_SECONDS" \
+            --session-key "$RUN_KEY" \
+            >"$wait_out" 2>"$wait_err" &
+    local wait_pid=$!
+    __CERBERUS_STOP_CHILD_PIDS+=("$wait_pid")
+    wait "$wait_pid" 2>/dev/null || true
+
+    # Re-call status to get a fresh canonical view. (We deliberately do
+    # NOT consume `wait`'s body here even though it carries verdicts —
+    # the matrix is defined over `status --json`'s schema, and going
+    # through status keeps the row 6/7/8/9 evaluator code paths
+    # identical between mode=initial and mode=post-wait.)
+    local rs_out rs_err rs_rc=0
+    rs_out="$(mktemp -t codex-stop-status2.XXXXXX 2>/dev/null || echo "")"
+    rs_err="$(mktemp -t codex-stop-status2-err.XXXXXX 2>/dev/null || echo "")"
+    if [ -z "$rs_out" ] || [ -z "$rs_err" ]; then
+        rm -f "$wait_out" "$wait_err"
+        __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
+        return 0
+    fi
+
+    __cerberus_call_status "$rs_out" "$rs_err"
+    rs_rc=$?
+
+    local rs_body=""
+    if [ -f "$rs_out" ]; then
+        rs_body="$(cat "$rs_out" 2>/dev/null || echo "")"
+    fi
+    rm -f "$wait_out" "$wait_err" "$rs_out" "$rs_err"
+
+    if [ "$rs_rc" -eq 4 ]; then
+        # Run vanished mid-wait — failure-open.
+        __cerberus_emit_allow ""
+        return 0
+    fi
+    if [ "$rs_rc" -ne 0 ]; then
+        __cerberus_stop_log "post-wait status exited $rs_rc; failing open"
+        __cerberus_emit_allow ""
+        return 0
+    fi
+    if ! printf '%s' "$rs_body" | jq -e . >/dev/null 2>&1; then
+        __cerberus_emit_allow "cerberus state unreadable; allowing stop"
+        return 0
+    fi
+
+    # Detect malformed-state sentinel from status body.
+    local rs_status rs_error
+    rs_status="$(__jq_get "$rs_body" '.status // empty')"
+    rs_error="$(__jq_get "$rs_body" '.error // empty')"
+    if [ "$rs_status" = "unknown" ] && [ "$rs_error" = "malformed_state" ]; then
+        __cerberus_emit_allow "cerberus state unreadable; allowing stop"
+        return 0
+    fi
+
+    __cerberus_decide "$rs_body" "post-wait"
+}
+
+# ---- Initial status probe -------------------------------------------------
+STATUS_OUT="$(mktemp -t codex-stop-status.XXXXXX 2>/dev/null || echo "")"
+STATUS_ERR="$(mktemp -t codex-stop-status-err.XXXXXX 2>/dev/null || echo "")"
+if [ -z "$STATUS_OUT" ] || [ -z "$STATUS_ERR" ]; then
+    __cerberus_stop_log "could not create tmpfiles for status probe; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+__cerberus_call_status "$STATUS_OUT" "$STATUS_ERR"
+status_rc=$?
+
+# Row 1: status exits 4 (no_active_gate).
+if [ "$status_rc" -eq 4 ]; then
+    rm -f "$STATUS_OUT" "$STATUS_ERR"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+# Row 11: status exits non-zero, non-4.
+if [ "$status_rc" -ne 0 ]; then
+    __cerberus_stop_log "review-gate status exited $status_rc; stderr=$(cat "$STATUS_ERR" 2>/dev/null || true)"
+    rm -f "$STATUS_OUT" "$STATUS_ERR"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+STATUS_BODY="$(cat "$STATUS_OUT" 2>/dev/null || echo "")"
+rm -f "$STATUS_OUT" "$STATUS_ERR"
+
+# Row 10: malformed gate-state.json → status returns body with
+# {status:"unknown", error:"malformed_state"} at exit 0.
+if ! printf '%s' "$STATUS_BODY" | jq -e . >/dev/null 2>&1; then
+    __cerberus_stop_log "status body not valid JSON; failing open"
+    __cerberus_emit_allow "cerberus state unreadable; allowing stop"
+    exit 0
+fi
+
+INIT_STATUS_FIELD="$(__jq_get "$STATUS_BODY" '.status // empty')"
+INIT_ERROR_FIELD="$(__jq_get "$STATUS_BODY" '.error // empty')"
+if [ "$INIT_STATUS_FIELD" = "unknown" ] && [ "$INIT_ERROR_FIELD" = "malformed_state" ]; then
+    __cerberus_emit_allow "cerberus state unreadable; allowing stop"
+    exit 0
+fi
+
+# Rows 4/5/6/7/8/9 — drive the matrix evaluator.
+__cerberus_decide "$STATUS_BODY" "initial"
+
 exit 0
