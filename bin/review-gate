@@ -20,35 +20,50 @@ while [ -L "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
 # =============================================================================
 # Centralized host-neutral env helpers
 # =============================================================================
 # Defined BEFORE sourcing review-gate-lib.sh so that resolve_review_dir() in
-# the lib can delegate to __cerberus_resolve_run_key. The same helpers are
-# the single source of truth for ~25 read sites that previously read
-# ${REVIEW_GATE_SESSION_KEY:-} / ${CLAUDE_PLUGIN_ROOT:-} directly; T002
-# routes those sites through these helpers as a mechanical refactor.
+# the lib can delegate to __cerberus_resolve_run_key, AND before the
+# PLUGIN_ROOT line below so __cerberus_resolve_root mediates that read.
+# These helpers are the single source of truth for the ~25 read sites that
+# previously inlined ${REVIEW_GATE_SESSION_KEY:-} / ${CLAUDE_PLUGIN_ROOT:-};
+# T002 routed those sites through these helpers as a mechanical refactor.
 #
-# Plan reference: §API/Interface Design (L543-L600).
+# Plan reference: §API/Interface Design (L543-L600), §Centralized env reads
+# (L100-L120), §Neutral env propagation surface (L587-L599).
 
 # __cerberus_resolve_run_key — return the effective Cerberus run key.
 # Precedence: CERBERUS_RUN_KEY > REVIEW_GATE_SESSION_KEY > "" (caller falls
 # back to a positional session_id when both are unset/empty). When the two
 # alias env vars are both set and disagree, emit a SINGLE warning to stderr
-# guarded by the once-per-process __CERBERUS_ALIAS_WARNED sentinel.
+# guarded by a once-per-process file marker keyed on $$.
+#
+# Why the file marker (and not just an exported __CERBERUS_ALIAS_WARNED)?
+# This helper is invoked via $(...) command substitution at ~25 call sites
+# in a single bin/review-gate process. `export` inside a $()-substitution
+# subshell does NOT propagate back to the parent — the subshell dies with
+# the substitution and its environment is discarded. A $$-keyed marker
+# under TMPDIR survives across all those subshells because $$ in bash is
+# stable: it expands to the parent shell's PID inside command substitution
+# subshells too. This is the only reliable way to dedupe stderr warnings
+# across the many $() call sites without rewriting them to direct calls.
 #
 # IMPORTANT: write the warning DIRECTLY to stderr (not via log()) because
-# this helper is invoked inside command substitution at many call sites; any
-# stdout output here would corrupt the returned run key.
+# this helper is invoked inside command substitution at many call sites;
+# any stdout output would corrupt the returned run key.
 __cerberus_resolve_run_key() {
     local cer="${CERBERUS_RUN_KEY:-}"
     local leg="${REVIEW_GATE_SESSION_KEY:-}"
-    if [ -n "$cer" ] && [ -n "$leg" ] && [ "$cer" != "$leg" ] \
-       && [ -z "${__CERBERUS_ALIAS_WARNED:-}" ]; then
-        echo "warning: CERBERUS_RUN_KEY != REVIEW_GATE_SESSION_KEY; using CERBERUS_RUN_KEY" >&2
+    if [ -n "$cer" ] && [ -n "$leg" ] && [ "$cer" != "$leg" ]; then
+        local _marker="${TMPDIR:-/tmp}/cerberus-alias-warned.$$"
+        if [ ! -e "$_marker" ] && [ -z "${__CERBERUS_ALIAS_WARNED:-}" ]; then
+            echo "warning: CERBERUS_RUN_KEY != REVIEW_GATE_SESSION_KEY; using CERBERUS_RUN_KEY" >&2
+            : > "$_marker" 2>/dev/null || true
+        fi
+        # Belt-and-suspenders for callers that invoke the helper without
+        # command substitution (e.g., the test row 8 direct-call pattern).
         export __CERBERUS_ALIAS_WARNED=1
     fi
     echo "${cer:-${leg:-}}"
@@ -56,10 +71,44 @@ __cerberus_resolve_run_key() {
 
 # __cerberus_resolve_root — return the effective plugin/repo root.
 # Precedence: CERBERUS_ROOT > CLAUDE_PLUGIN_ROOT > "" (caller falls back to
-# the script-directory-derived PLUGIN_ROOT computed above).
+# the script-directory-derived PLUGIN_ROOT computed below).
 __cerberus_resolve_root() {
     echo "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
 }
+
+# __cerberus_export_neutral_env_for_subprocess <fallback-sid> <fallback-tp>
+# Export the full neutral-env block (CERBERUS_* + legacy aliases) into the
+# current shell so any subsequent subprocess invocation inherits them. Used
+# by the spawn-* re-entry sites (spawn-code-review, spawn-plan-review,
+# spawn-spec-review, spawn-epic-verify, spawn-ask) to ensure spawned
+# bin/review-gate processes pick up the same host-neutral context the
+# parent was invoked with. Plan §Neutral env propagation surface (L587-L599)
+# enumerates the env block. Empty CERBERUS_* values are passed through
+# verbatim so that the child's resolver still treats them as unset (the
+# ${VAR:-} idiom — plan L96-L97).
+__cerberus_export_neutral_env_for_subprocess() {
+    local _fallback_sid="${1:-}"
+    local _fallback_tp="${2:-}"
+    local _rk
+    _rk="$(__cerberus_resolve_run_key)"
+    export CERBERUS_HOST="${CERBERUS_HOST:-}"
+    export CERBERUS_ROOT="${CERBERUS_ROOT:-}"
+    export CERBERUS_STATE_ROOT="${CERBERUS_STATE_ROOT:-}"
+    export CERBERUS_PROJECT_KEY="${CERBERUS_PROJECT_KEY:-}"
+    export CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$_fallback_sid}"
+    export CERBERUS_RUN_KEY="${CERBERUS_RUN_KEY:-$_rk}"
+    export CERBERUS_TRANSCRIPT_PATH="${CERBERUS_TRANSCRIPT_PATH:-$_fallback_tp}"
+    # Legacy alias kept in sync. CLAUDE_SESSION_ID / CLAUDE_TRANSCRIPT_PATH
+    # are still cmd-prefixed at each spawn-* call site (so the explicit
+    # cmd-prefix value wins for the subprocess) — we only ensure
+    # REVIEW_GATE_SESSION_KEY is present here because the spawn lines do
+    # not set it explicitly.
+    export REVIEW_GATE_SESSION_KEY="${REVIEW_GATE_SESSION_KEY:-$_rk}"
+}
+
+PLUGIN_ROOT="$(__cerberus_resolve_root)"
+PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
 # Load shared helpers
 source "$SCRIPT_DIR/review-gate-lib.sh"
@@ -1253,6 +1302,10 @@ USAGE
         spawn_cmd+=(--debate-seed "$debate_seed")
     fi
     spawn_cmd+=("$artifact_path")
+    # T002: propagate the full neutral-env block to the spawned subprocess
+    # in addition to the existing CLAUDE_*/REVIEW_GATE_* cmd-prefix vars.
+    # See __cerberus_export_neutral_env_for_subprocess at top of file.
+    __cerberus_export_neutral_env_for_subprocess "$session_id" "$transcript_path"
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="code" \
@@ -1629,6 +1682,9 @@ JSON only, no markdown code fences:
     # preflight uses the canonical user-passed plan path (already
     # realpath'd above) for spec R3 stability rather than the session-
     # scoped latest.md artifact path.
+    # T002: also propagate the full neutral-env block to the spawned
+    # subprocess via __cerberus_export_neutral_env_for_subprocess.
+    __cerberus_export_neutral_env_for_subprocess "$session_id" "$transcript_path"
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="plan" \
@@ -1960,6 +2016,9 @@ JSON only, no markdown code fences:
     # preflight uses the canonical user-passed spec path (already
     # realpath'd above) for spec R3 stability rather than the session-
     # scoped latest.md artifact path.
+    # T002: also propagate the full neutral-env block to the spawned
+    # subprocess via __cerberus_export_neutral_env_for_subprocess.
+    __cerberus_export_neutral_env_for_subprocess "$session_id" "$transcript_path"
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="spec" \
@@ -2359,6 +2418,9 @@ USAGE
     # session-scoped `latest.md` artifact_path (which varies across sessions
     # and breaks the stability requirement). The value matches the
     # `<!-- epic-context: ... -->` frontmatter source used in artifact prep.
+    # T002: also propagate the full neutral-env block to the spawned
+    # subprocess via __cerberus_export_neutral_env_for_subprocess.
+    __cerberus_export_neutral_env_for_subprocess "$session_id" "$transcript_path"
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="epic-verify" \
@@ -2685,6 +2747,10 @@ USAGE
     fi
     spawn_cmd+=("$artifact_path")
 
+    # T002: propagate the full neutral-env block to the spawned subprocess
+    # in addition to the existing CLAUDE_*/REVIEW_GATE_* cmd-prefix vars.
+    # See __cerberus_export_neutral_env_for_subprocess at top of file.
+    __cerberus_export_neutral_env_for_subprocess "$session_id" "$transcript_path"
     CLAUDE_SESSION_ID="$session_id" \
     REVIEW_GATE_TRANSCRIPT_PATH="$transcript_path" \
     REVIEW_TYPE="ask" \
@@ -2852,7 +2918,7 @@ review_gate_spawn() {
     REVIEW_TYPE="${REVIEW_TYPE:-}"
 
     # --- Session metadata ---
-    OWNER_SESSION_KEY="${REVIEW_GATE_SESSION_KEY:-}"
+    OWNER_SESSION_KEY="$(__cerberus_resolve_run_key)"
     OWNER_SOURCE="${REVIEW_GATE_SESSION_SOURCE:-}"
     OWNER_SESSION_ID="${CLAUDE_SESSION_ID:-}"
     OWNER_TRANSCRIPT_PATH="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
@@ -4344,7 +4410,7 @@ review_gate_wait() {
     local json_mode="false"
     local finalize="false"
     local timeout="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
-    local session_key="${REVIEW_GATE_SESSION_KEY:-}"
+    local session_key="$(__cerberus_resolve_run_key)"
     local session_id="${CLAUDE_SESSION_ID:-}"
     local transcript_path="${REVIEW_GATE_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-}}"
     local poll_interval="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-3}"

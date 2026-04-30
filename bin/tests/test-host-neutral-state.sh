@@ -222,31 +222,166 @@ row7_expected="$TEST_HOME/.cerberus/projects/row7-key/row7-run"
 assert_resolved_eq "Row 7: auto-detect default to generic" "$row7_expected" "$row7_actual"
 
 # ---------------------------------------------------------------------------
+# Helper: extract __cerberus_resolve_run_key + __cerberus_resolve_root from
+# bin/review-gate so we can source them in the current test shell without
+# running main(). The function definitions live in the labeled
+# "Centralized host-neutral env helpers" block at the top of the file. We
+# extract by `awk` between two markers: the leading `set -euo pipefail` and
+# the `PLUGIN_ROOT="$(__cerberus_resolve_root)"` line that the helpers
+# precede. Inside that range, only function definitions and comments live;
+# sourcing it is side-effect-free.
+extract_review_gate_helpers() {
+    awk '
+        /^set -euo pipefail/ { in_block = 1; next }
+        /^PLUGIN_ROOT=/        { in_block = 0; exit }
+        in_block { print }
+    ' "$REVIEW_GATE"
+}
+
+# ---------------------------------------------------------------------------
 # Row 8 — Run-key alias precedence + once-per-process warning.
-# TODO(T002): assert (a) CERBERUS_RUN_KEY wins over REVIEW_GATE_SESSION_KEY
-# when both set, (b) exactly one warning fires per process via
-# __CERBERUS_ALIAS_WARNED, (c) a second invocation in the same process emits
-# zero additional warnings.
+# Asserts (a) CERBERUS_RUN_KEY wins over REVIEW_GATE_SESSION_KEY when both
+# are set with different non-empty values, (b) exactly one warning fires
+# on the first call (deduped via the $$-keyed marker file plus the
+# __CERBERUS_ALIAS_WARNED export sentinel), and (c) a second call in the
+# same shell process emits zero additional warnings.
 # ---------------------------------------------------------------------------
 log_test "Row 8 — alias precedence + once-per-process warning"
-log_skip "Row 8: scaffolded; T002 turns this row green"
+row8_out_file="$TEST_DIR/row8.out"
+row8_err_file="$TEST_DIR/row8.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export CERBERUS_RUN_KEY="row8-CER"
+    export REVIEW_GATE_SESSION_KEY="row8-LEG"
+    export TMPDIR="$TEST_DIR"
+    # shellcheck disable=SC1090
+    eval "$(extract_review_gate_helpers)"
+    # First call: warning expected. Second call in same process: no warning.
+    val1="$(__cerberus_resolve_run_key)"
+    val2="$(__cerberus_resolve_run_key)"
+    echo "$val1" >"$row8_out_file"
+    echo "$val2" >>"$row8_out_file"
+) 2>"$row8_err_file"
+row8_v1=$(sed -n '1p' "$row8_out_file")
+row8_v2=$(sed -n '2p' "$row8_out_file")
+row8_warning_count=$(grep -c 'warning: CERBERUS_RUN_KEY != REVIEW_GATE_SESSION_KEY' "$row8_err_file" || true)
+if [[ "$row8_v1" == "row8-CER" && "$row8_v2" == "row8-CER" ]]; then
+    log_pass "Row 8a: CERBERUS_RUN_KEY wins both calls"
+else
+    log_fail "Row 8a: precedence broken (v1='$row8_v1' v2='$row8_v2'; expected both 'row8-CER')"
+fi
+if [[ "$row8_warning_count" == "1" ]]; then
+    log_pass "Row 8b: exactly one alias-mismatch warning per process"
+else
+    log_fail "Row 8b: expected exactly 1 warning, got $row8_warning_count (stderr: $(cat "$row8_err_file"))"
+fi
 
 # ---------------------------------------------------------------------------
 # Row 9 — Alias-only legacy.
-# TODO(T002): only REVIEW_GATE_SESSION_KEY set (no CERBERUS_RUN_KEY) still
-# resolves to .../<legacy-key>; no warning fires.
+# Only REVIEW_GATE_SESSION_KEY set (no CERBERUS_RUN_KEY) → helper returns the
+# legacy alias verbatim and emits zero warnings (no mismatch to flag). Also
+# verifies the resolver builds the neutral path with that legacy alias as
+# the run-key when CERBERUS_HOST=generic + CERBERUS_PROJECT_KEY are present.
 # ---------------------------------------------------------------------------
 log_test "Row 9 — alias-only legacy run key"
-log_skip "Row 9: scaffolded; T002 turns this row green"
+row9_out_file="$TEST_DIR/row9.out"
+row9_err_file="$TEST_DIR/row9.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export REVIEW_GATE_SESSION_KEY="row9-legacy-key"
+    export TMPDIR="$TEST_DIR"
+    # shellcheck disable=SC1090
+    eval "$(extract_review_gate_helpers)"
+    __cerberus_resolve_run_key >"$row9_out_file"
+) 2>"$row9_err_file"
+row9_val=$(cat "$row9_out_file")
+row9_warning_count=$(grep -c 'warning: CERBERUS_RUN_KEY' "$row9_err_file" || true)
+if [[ "$row9_val" == "row9-legacy-key" && "$row9_warning_count" == "0" ]]; then
+    log_pass "Row 9a: alias-only legacy returns legacy key with no warning"
+else
+    log_fail "Row 9a: expected 'row9-legacy-key' + 0 warnings; got val='$row9_val' warnings=$row9_warning_count"
+fi
+# Resolver-level: legacy alias as run key under CERBERUS_HOST=generic.
+row9_env="$(cat <<EOF
+CERBERUS_HOST=generic
+CERBERUS_PROJECT_KEY=row9-key
+REVIEW_GATE_SESSION_KEY=row9-legacy-key
+EOF
+)"
+row9_resolved="$(resolve_in_subshell "$row9_env" "" "")"
+row9_expected="$TEST_HOME/.cerberus/projects/row9-key/row9-legacy-key"
+assert_resolved_eq "Row 9b: resolver uses legacy alias as run key" "$row9_expected" "$row9_resolved"
 
 # ---------------------------------------------------------------------------
 # Row 10 — Empty-string env vars treated as unset.
-# TODO(T002): CERBERUS_HOST="" + CLAUDE_SESSION_ID="" + transcript_path=""
-# behaves as fully unset (host=generic), and CERBERUS_RUN_KEY="" falls
-# through to REVIEW_GATE_SESSION_KEY (then session_id positional).
+# (a) CERBERUS_RUN_KEY="" falls through to REVIEW_GATE_SESSION_KEY in the
+#     helper (matches the ${VAR:-} idiom); empty-string never wins over a
+#     set legacy alias.
+# (b) Empty CERBERUS_HOST="" with no CLAUDE_* and no transcript_path arg
+#     defaults host=generic in the resolver (per row-7 logic, exercised
+#     here with an explicit empty-string export).
+# (c) Empty CERBERUS_RUN_KEY="" + empty REVIEW_GATE_SESSION_KEY="" at the
+#     resolver entrypoint falls through to the positional session_id arg.
 # ---------------------------------------------------------------------------
 log_test "Row 10 — empty-string env vars treated as unset"
-log_skip "Row 10: scaffolded; T002 turns this row green"
+
+# (a) helper falls through CERBERUS_RUN_KEY="" → REVIEW_GATE_SESSION_KEY.
+row10a_out_file="$TEST_DIR/row10a.out"
+row10a_err_file="$TEST_DIR/row10a.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export CERBERUS_RUN_KEY=""
+    export REVIEW_GATE_SESSION_KEY="row10-legacy"
+    export TMPDIR="$TEST_DIR"
+    # shellcheck disable=SC1090
+    eval "$(extract_review_gate_helpers)"
+    __cerberus_resolve_run_key >"$row10a_out_file"
+) 2>"$row10a_err_file"
+row10a_val=$(cat "$row10a_out_file")
+row10a_warn=$(grep -c 'warning: CERBERUS_RUN_KEY' "$row10a_err_file" || true)
+if [[ "$row10a_val" == "row10-legacy" && "$row10a_warn" == "0" ]]; then
+    log_pass "Row 10a: empty CERBERUS_RUN_KEY falls through to legacy alias"
+else
+    log_fail "Row 10a: got val='$row10a_val' warnings=$row10a_warn (expected 'row10-legacy' + 0)"
+fi
+
+# (b) Empty CERBERUS_HOST="" + no CLAUDE_* + no transcript path → generic.
+row10b_env="$(cat <<EOF
+CERBERUS_HOST=
+CERBERUS_PROJECT_KEY=row10b-key
+CERBERUS_RUN_KEY=row10b-run
+EOF
+)"
+row10b_actual="$(resolve_in_subshell "$row10b_env" "" "")"
+row10b_expected="$TEST_HOME/.cerberus/projects/row10b-key/row10b-run"
+assert_resolved_eq "Row 10b: empty CERBERUS_HOST defaults to generic" "$row10b_expected" "$row10b_actual"
+
+# (c) Empty run-key envs fall through to positional session_id.
+row10c_env="$(cat <<EOF
+CERBERUS_HOST=generic
+CERBERUS_PROJECT_KEY=row10c-key
+CERBERUS_RUN_KEY=
+REVIEW_GATE_SESSION_KEY=
+EOF
+)"
+row10c_actual="$(resolve_in_subshell "$row10c_env" "row10c-positional-sid" "")"
+row10c_expected="$TEST_HOME/.cerberus/projects/row10c-key/row10c-positional-sid"
+assert_resolved_eq "Row 10c: empty run-key envs fall through to session_id" "$row10c_expected" "$row10c_actual"
 
 # ---------------------------------------------------------------------------
 # Row 11 — Concurrent runs in same project resolve to distinct dirs.
@@ -302,7 +437,7 @@ echo "----------------------------------------"
 echo "Host-neutral state test summary:"
 echo "  Passed:  $TESTS_PASSED"
 echo "  Failed:  $TESTS_FAILED"
-echo "  Skipped: $TESTS_SKIPPED  (TODO rows for T002/T003/T004)"
+echo "  Skipped: $TESTS_SKIPPED  (TODO rows for T003/T004)"
 echo "----------------------------------------"
 
 if [[ "$TESTS_FAILED" -gt 0 ]]; then
