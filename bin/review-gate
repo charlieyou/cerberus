@@ -3142,11 +3142,43 @@ USAGE
     # so the propagation must happen here as well.
     __cerberus_export_neutral_env_for_subprocess "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH"
 
-    # Session-scoped path resolution
-    REVIEW_DIR=$(resolve_review_dir "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH")
+    # Session-scoped path resolution.
+    # T004: surface resolver validation failures (invalid CERBERUS_HOST, non-
+    # absolute CERBERUS_STATE_ROOT, path-traversal in run/project key) as a
+    # clean non-zero exit BEFORE any mkdir or state-creation side effect. The
+    # resolver already prints a diagnostic to stderr; we just need to stop.
+    REVIEW_DIR=$(resolve_review_dir "$OWNER_SESSION_ID" "$OWNER_TRANSCRIPT_PATH") || \
+        die "Failed to resolve review state directory (check CERBERUS_HOST, CERBERUS_STATE_ROOT, CERBERUS_PROJECT_KEY, and run-key)"
+    if [[ -z "$REVIEW_DIR" ]]; then
+        die "resolve_review_dir returned empty path"
+    fi
     STATE_FILE="$REVIEW_DIR/gate-state.json"
     REVIEWS_DIR="$REVIEW_DIR/reviews"
     ITERATION_FILE="$REVIEW_DIR/iteration.txt"
+
+    # T004: capture host + project_key for gate-state.json metadata. Prefer
+    # explicit CERBERUS_* env, fall back to deriving from REVIEW_DIR layout
+    # (Claude legacy path includes a "/cerberus/" infix; neutral hosts do
+    # not). These values populate the new top-level `host` field plus the
+    # owner block per plan §Data Model (L455-L466).
+    OWNER_HOST="${CERBERUS_HOST:-}"
+    if [[ -z "$OWNER_HOST" ]]; then
+        case "$REVIEW_DIR" in
+            */.claude/projects/*) OWNER_HOST="claude" ;;
+            *) OWNER_HOST="generic" ;;
+        esac
+    fi
+    OWNER_PROJECT_KEY="${CERBERUS_PROJECT_KEY:-}"
+    if [[ -z "$OWNER_PROJECT_KEY" ]]; then
+        local _t004_parent _t004_parent_name
+        _t004_parent=$(dirname "$REVIEW_DIR")
+        _t004_parent_name=$(basename "$_t004_parent")
+        if [[ "$_t004_parent_name" == "cerberus" ]]; then
+            OWNER_PROJECT_KEY=$(basename "$(dirname "$_t004_parent")")
+        else
+            OWNER_PROJECT_KEY="$_t004_parent_name"
+        fi
+    fi
 
     # --- Preflight checks ---
     preflight_check() {
@@ -3929,6 +3961,11 @@ PROMPT
     esac
 
     local state_json
+    # T004 schema additions (plan L455-L466): top-level `host` plus
+    # `owner.{host,project_key,run_key,session_key,session_id,
+    # transcript_path,source}`. `session_key` is the legacy alias kept for
+    # `find_state_by_session_key` glob lookups; `run_key` is the canonical
+    # field. Both carry the same value (OWNER_SESSION_KEY).
     state_json=$(jq -n \
         --arg version "1" \
         --arg status "pending" \
@@ -3938,6 +3975,10 @@ PROMPT
         --arg created "$now" \
         --argjson iteration "$current_iter" \
         --arg author_context "$author_context" \
+        --arg host "$OWNER_HOST" \
+        --arg owner_host "$OWNER_HOST" \
+        --arg owner_project_key "$OWNER_PROJECT_KEY" \
+        --arg owner_run_key "$OWNER_SESSION_KEY" \
         --arg owner_key "$OWNER_SESSION_KEY" \
         --arg owner_source "$OWNER_SOURCE" \
         --arg owner_session_id "$OWNER_SESSION_ID" \
@@ -3956,6 +3997,7 @@ PROMPT
             version: ($version | tonumber),
             status: $status,
             trigger_source: $source,
+            host: (if $host != "" then $host else null end),
             artifact: {path: $path, sha256: $sha256},
             mode: (
                 {type: $mode_type}
@@ -3975,6 +4017,9 @@ PROMPT
             ),
             owner: (
                 {}
+                | (if $owner_host != "" then .host = $owner_host else . end)
+                | (if $owner_project_key != "" then .project_key = $owner_project_key else . end)
+                | (if $owner_run_key != "" then .run_key = $owner_run_key else . end)
                 | (if $owner_key != "" then .session_key = $owner_key else . end)
                 | (if $owner_source != "" then .source = $owner_source else . end)
                 | (if $owner_session_id != "" then .session_id = $owner_session_id else . end)

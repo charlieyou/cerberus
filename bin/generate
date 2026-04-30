@@ -11,7 +11,10 @@ while [ -L "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# T004: alias CERBERUS_ROOT → CLAUDE_PLUGIN_ROOT so non-Claude hosts (Codex/
+# Amp/generic) can configure the plugin root without setting Claude-specific
+# env. Precedence mirrors __cerberus_resolve_root in bin/review-gate.
+PLUGIN_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 
 # Load model helpers
 source "$SCRIPT_DIR/review-gate-models.sh"

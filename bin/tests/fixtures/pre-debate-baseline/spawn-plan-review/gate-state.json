@@ -2,6 +2,7 @@
   "version": 1,
   "status": "resolved",
   "trigger_source": "plan",
+  "host": "claude",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-plan-review/latest.md",
     "sha256": "<SHA256>",
@@ -17,6 +18,8 @@
     "consensus_mode": "majority"
   },
   "owner": {
+    "host": "claude",
+    "project_key": "-capture-pre-debate-baseline",
     "session_id": "baseline-plan-review",
     "transcript_path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/baseline-plan-review.jsonl",
     "session_key": "baseline-plan-review",

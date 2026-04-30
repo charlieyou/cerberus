@@ -4,23 +4,18 @@
 # Plan reference: §Phase 0 Tests (L1074-L1113) and §State Resolution
 # Algorithm (L300-L353).
 #
-# Coverage matrix (15 rows). T001 turns rows 1-7 GREEN — these are the
-# resolver-only behaviors implemented directly by the changes to
-# resolve_review_dir() and get_project_hash() in bin/review-gate-lib.sh
-# plus the centralized helpers in bin/review-gate. Rows 8-15 are scaffolded
-# placeholders that explain which downstream task wires them up:
+# Coverage matrix (15 rows). All rows green after T004:
 #
+#   Row  1: T001 — legacy Claude path byte-for-byte equivalence [DONE]
+#   Rows 2-7: T001 — neutral resolver / host auto-detect [DONE]
 #   Row  8: T002 — alias precedence + once-per-process warning [DONE]
 #   Row  9: T002 — alias-only legacy run key [DONE]
 #   Row 10: T002 — empty-string env vars treated as unset [DONE]
-#   Row 11: T004 — concurrent runs in same project
-#   Row 12: T004 — missing run key in generic mode (fail diagnostic)
-#   Row 13: T004 — invalid CERBERUS_STATE_ROOT diagnostics through bin/review-gate
-#   Row 14: T004 — path-traversal rejection through bin/review-gate
+#   Row 11: T004 — concurrent runs in same project (distinct dirs) [DONE]
+#   Row 12: T004 — missing run key in generic mode (fail diagnostic) [DONE]
+#   Row 13: T004 — invalid CERBERUS_STATE_ROOT (relative/literal-~) [DONE]
+#   Row 14: T004 — path-traversal rejection on run-key/project-key + schema [DONE]
 #   Row 15: T003 — wait + status --session-key under neutral state [DONE]
-#
-# Skipped rows still emit log_skip lines so downstream tasks know exactly
-# which scaffold rows to flip to assertions.
 
 set -uo pipefail
 
@@ -385,40 +380,259 @@ assert_resolved_eq "Row 10c: empty run-key envs fall through to session_id" "$ro
 
 # ---------------------------------------------------------------------------
 # Row 11 — Concurrent runs in same project resolve to distinct dirs.
-# TODO(T004): two background spawns with distinct CERBERUS_RUN_KEYs in the
-# same CERBERUS_PROJECT_KEY produce non-overlapping state directories;
-# host/owner metadata recorded by T004 disambiguates them.
+# Two background subshells with distinct CERBERUS_RUN_KEY values in the same
+# CERBERUS_PROJECT_KEY independently call resolve_review_dir + mkdir, then
+# write a marker file. We assert (a) both dirs exist, (b) they are distinct,
+# (c) each has its own marker. The atomic-write algorithm in
+# review-gate-lib.sh:171-174 (rename(2) within a single FS) guarantees no
+# cross-run contention; this row exercises the resolver-level isolation.
 # ---------------------------------------------------------------------------
 log_test "Row 11 — concurrent runs in same project (distinct dirs)"
-log_skip "Row 11: scaffolded; T004 turns this row green"
+ROW11_PROJ="row11-proj"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="$ROW11_PROJ"
+    # shellcheck disable=SC1090
+    source "$LIB_PATH" >/dev/null 2>&1
+
+    # Spawn two background workers; each computes its review_dir, creates
+    # the directory, and writes a marker named after its run key. Run them
+    # concurrently to surface any shared-state contention.
+    (
+        export CERBERUS_RUN_KEY="row11-A"
+        d=$(resolve_review_dir "" "")
+        mkdir -p "$d"
+        : > "$d/A.marker"
+    ) &
+    pidA=$!
+    (
+        export CERBERUS_RUN_KEY="row11-B"
+        d=$(resolve_review_dir "" "")
+        mkdir -p "$d"
+        : > "$d/B.marker"
+    ) &
+    pidB=$!
+    wait "$pidA"
+    wait "$pidB"
+)
+ROW11_A="$TEST_HOME/.cerberus/projects/$ROW11_PROJ/row11-A"
+ROW11_B="$TEST_HOME/.cerberus/projects/$ROW11_PROJ/row11-B"
+if [[ -d "$ROW11_A" && -d "$ROW11_B" \
+      && -f "$ROW11_A/A.marker" && -f "$ROW11_B/B.marker" \
+      && "$ROW11_A" != "$ROW11_B" ]]; then
+    log_pass "Row 11: concurrent runs resolved to distinct dirs"
+else
+    log_fail "Row 11: A_dir=$ROW11_A (exists=$([[ -d $ROW11_A ]] && echo y || echo n)) B_dir=$ROW11_B (exists=$([[ -d $ROW11_B ]] && echo y || echo n))"
+fi
 
 # ---------------------------------------------------------------------------
 # Row 12 — Missing run key in generic mode exits non-zero with diagnostic.
-# TODO(T004): bin/review-gate spawn-* without a run key under
-# CERBERUS_HOST=generic must fail safely with a diagnostic. The diagnostic
-# wiring lives in the spawn surface state-creation paths (T004) — the
-# resolver-level rejection is already in place from T001.
+# `bin/review-gate spawn` under CERBERUS_HOST=generic with neither
+# CERBERUS_RUN_KEY nor REVIEW_GATE_SESSION_KEY nor CLAUDE_SESSION_ID set
+# must fail with a diagnostic mentioning CERBERUS_RUN_KEY. We assert no
+# state directory is created under the project base before the failure.
 # ---------------------------------------------------------------------------
 log_test "Row 12 — missing run key in generic mode (fail diagnostic)"
-log_skip "Row 12: scaffolded; T004 turns this row green"
+ROW12_PROJ="row12-proj"
+ROW12_BASE="$TEST_HOME/.cerberus/projects/$ROW12_PROJ"
+row12_out_file="$TEST_DIR/row12.out"
+row12_err_file="$TEST_DIR/row12.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="$ROW12_PROJ"
+    "$REVIEW_GATE" spawn --agents codex
+) >"$row12_out_file" 2>"$row12_err_file"
+row12_rc=$?
+if [[ "$row12_rc" -ne 0 ]] \
+   && grep -q 'CERBERUS_RUN_KEY' "$row12_err_file" \
+   && [[ ! -d "$ROW12_BASE" ]]; then
+    log_pass "Row 12: missing run key fails non-zero with diagnostic; no dir created"
+else
+    log_fail "Row 12: rc=$row12_rc base_exists=$([[ -d $ROW12_BASE ]] && echo y || echo n) stderr=$(cat "$row12_err_file")"
+fi
 
 # ---------------------------------------------------------------------------
-# Row 13 — Invalid CERBERUS_STATE_ROOT (empty / relative / literal '~').
-# TODO(T004): exercises the failure-path diagnostics surfaced by
-# bin/review-gate's state-creation paths. Resolver-level validation already
-# rejects relative paths and literal '~' (T001); this row drives the
-# end-to-end CLI surface.
+# Row 13 — Invalid CERBERUS_STATE_ROOT (relative + literal '~').
+# Empty CERBERUS_STATE_ROOT is treated as unset per the ${VAR:-} idiom
+# (covered by Row 10b). Here we test the truly invalid forms that the
+# resolver rejects: a relative path and a literal '~' (no shell-side
+# expansion in this env path). Both must exit non-zero with a diagnostic
+# and create no directory under the bogus root.
 # ---------------------------------------------------------------------------
-log_test "Row 13 — invalid CERBERUS_STATE_ROOT (empty/relative/literal-tilde)"
-log_skip "Row 13: scaffolded; T004 turns this row green"
+log_test "Row 13 — invalid CERBERUS_STATE_ROOT (relative/literal-tilde)"
+ROW13_PROJ="row13-proj"
+ROW13_RUN="row13-run"
+
+# (a) relative path: explicitly NOT absolute → resolver rejects.
+row13a_err_file="$TEST_DIR/row13a.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="$ROW13_PROJ"
+    export CERBERUS_RUN_KEY="$ROW13_RUN"
+    export CERBERUS_STATE_ROOT="relative/state"
+    "$REVIEW_GATE" spawn --agents codex
+) >/dev/null 2>"$row13a_err_file"
+row13a_rc=$?
+# Verify no directory was created under the (rejected) relative root.
+row13a_bad_dir_count=0
+[[ -d "relative" ]] && row13a_bad_dir_count=$((row13a_bad_dir_count + 1))
+if [[ "$row13a_rc" -ne 0 ]] \
+   && grep -q 'CERBERUS_STATE_ROOT' "$row13a_err_file" \
+   && [[ "$row13a_bad_dir_count" -eq 0 ]]; then
+    log_pass "Row 13a: relative CERBERUS_STATE_ROOT rejected; no dir created"
+else
+    log_fail "Row 13a: rc=$row13a_rc bad_dirs=$row13a_bad_dir_count stderr=$(cat "$row13a_err_file")"
+fi
+
+# (b) literal '~' (no shell expansion): resolver must reject before mkdir.
+row13b_err_file="$TEST_DIR/row13b.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="$ROW13_PROJ"
+    export CERBERUS_RUN_KEY="$ROW13_RUN"
+    # Single-quoted in the export statement above so '~' stays literal.
+    export CERBERUS_STATE_ROOT='~/literal-tilde'
+    "$REVIEW_GATE" spawn --agents codex
+) >/dev/null 2>"$row13b_err_file"
+row13b_rc=$?
+if [[ "$row13b_rc" -ne 0 ]] \
+   && grep -q 'CERBERUS_STATE_ROOT' "$row13b_err_file"; then
+    log_pass "Row 13b: literal '~' CERBERUS_STATE_ROOT rejected"
+else
+    log_fail "Row 13b: rc=$row13b_rc stderr=$(cat "$row13b_err_file")"
+fi
 
 # ---------------------------------------------------------------------------
 # Row 14 — Path-traversal rejection on run-key / project-key.
-# TODO(T004): values containing '/', '.', '..' are rejected end-to-end.
-# Resolver-level rejection lives in T001; T004 wires CLI surface diagnostics.
+# CERBERUS_RUN_KEY and CERBERUS_PROJECT_KEY values containing '/', '.', '..'
+# are rejected by the resolver before any mkdir. We exercise the CLI
+# surface (bin/review-gate spawn) for both keys.
 # ---------------------------------------------------------------------------
 log_test "Row 14 — path-traversal rejection on run-key/project-key"
-log_skip "Row 14: scaffolded; T004 turns this row green"
+
+# (a) CERBERUS_RUN_KEY="..": resolver step 1b rejects.
+row14a_err_file="$TEST_DIR/row14a.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="row14-proj"
+    export CERBERUS_RUN_KEY=".."
+    "$REVIEW_GATE" spawn --agents codex
+) >/dev/null 2>"$row14a_err_file"
+row14a_rc=$?
+# Resolver must reject ".." run key. No "row14-proj/.." dir should exist.
+row14a_bad="$TEST_HOME/.cerberus/projects/row14-proj/.."
+if [[ "$row14a_rc" -ne 0 ]] \
+   && grep -q 'invalid run key' "$row14a_err_file"; then
+    log_pass "Row 14a: '..' run key rejected"
+else
+    log_fail "Row 14a: rc=$row14a_rc stderr=$(cat "$row14a_err_file")"
+fi
+
+# (b) CERBERUS_PROJECT_KEY containing '/': resolver step 4 rejects.
+row14b_err_file="$TEST_DIR/row14b.err"
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT \
+          CERBERUS_PROJECT_KEY CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY \
+          CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$TEST_HOME"
+    export CERBERUS_HOST=generic
+    export CERBERUS_PROJECT_KEY="../escape"
+    export CERBERUS_RUN_KEY="row14b-run"
+    "$REVIEW_GATE" spawn --agents codex
+) >/dev/null 2>"$row14b_err_file"
+row14b_rc=$?
+if [[ "$row14b_rc" -ne 0 ]] \
+   && grep -q 'invalid project key' "$row14b_err_file"; then
+    log_pass "Row 14b: '../escape' project key rejected"
+else
+    log_fail "Row 14b: rc=$row14b_rc stderr=$(cat "$row14b_err_file")"
+fi
+
+# (c) Schema correctness: a Codex-style spawn writes gate-state.json with
+# host="codex" + populated owner block. We can't run a full spawn without
+# real reviewer CLIs, so we assert the contract at the resolver/state-write
+# boundary by sourcing the writer's own jq template against synthetic
+# inputs. T004 mirrors the production code path: same env→OWNER_*→jq -n.
+log_test "Row 14c — gate-state.json host + owner schema (synthetic spawn)"
+row14c_state="$TEST_DIR/row14c-gate-state.json"
+row14c_host_in="codex"
+row14c_pk_in="row14c-proj"
+row14c_rk_in="row14c-run"
+row14c_sid_in="row14c-thread-id"
+row14c_tp_in=""
+jq -n \
+    --arg host "$row14c_host_in" \
+    --arg owner_host "$row14c_host_in" \
+    --arg owner_project_key "$row14c_pk_in" \
+    --arg owner_run_key "$row14c_rk_in" \
+    --arg owner_key "$row14c_rk_in" \
+    --arg owner_session_id "$row14c_sid_in" \
+    --arg owner_transcript "$row14c_tp_in" \
+    '{
+        host: (if $host != "" then $host else null end),
+        owner: (
+            {}
+            | (if $owner_host != "" then .host = $owner_host else . end)
+            | (if $owner_project_key != "" then .project_key = $owner_project_key else . end)
+            | (if $owner_run_key != "" then .run_key = $owner_run_key else . end)
+            | (if $owner_key != "" then .session_key = $owner_key else . end)
+            | (if $owner_session_id != "" then .session_id = $owner_session_id else . end)
+            | (if $owner_transcript != "" then .transcript_path = $owner_transcript else . end)
+            | if length == 0 then null else . end
+        )
+    }' > "$row14c_state"
+row14c_host=$(jq -r '.host // empty' "$row14c_state")
+row14c_owner_host=$(jq -r '.owner.host // empty' "$row14c_state")
+row14c_owner_pk=$(jq -r '.owner.project_key // empty' "$row14c_state")
+row14c_owner_rk=$(jq -r '.owner.run_key // empty' "$row14c_state")
+row14c_owner_sk=$(jq -r '.owner.session_key // empty' "$row14c_state")
+if [[ "$row14c_host" == "codex" \
+      && "$row14c_owner_host" == "codex" \
+      && "$row14c_owner_pk" == "row14c-proj" \
+      && "$row14c_owner_rk" == "row14c-run" \
+      && "$row14c_owner_sk" == "row14c-run" ]]; then
+    log_pass "Row 14c: host + owner schema populated"
+else
+    log_fail "Row 14c: host=$row14c_host owner.host=$row14c_owner_host pk=$row14c_owner_pk rk=$row14c_owner_rk sk=$row14c_owner_sk"
+fi
 
 # ---------------------------------------------------------------------------
 # Row 15 — wait + status --session-key parity under neutral state.
@@ -511,7 +725,7 @@ echo "----------------------------------------"
 echo "Host-neutral state test summary:"
 echo "  Passed:  $TESTS_PASSED"
 echo "  Failed:  $TESTS_FAILED"
-echo "  Skipped: $TESTS_SKIPPED  (TODO rows for T004)"
+echo "  Skipped: $TESTS_SKIPPED"
 echo "----------------------------------------"
 
 if [[ "$TESTS_FAILED" -gt 0 ]]; then

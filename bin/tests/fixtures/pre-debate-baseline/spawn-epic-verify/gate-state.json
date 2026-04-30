@@ -2,6 +2,7 @@
   "version": 1,
   "status": "resolved",
   "trigger_source": "epic-verify",
+  "host": "claude",
   "artifact": {
     "path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/cerberus/baseline-epic-verify/latest.md",
     "sha256": "<SHA256>"
@@ -16,6 +17,8 @@
     "consensus_mode": "majority"
   },
   "owner": {
+    "host": "claude",
+    "project_key": "-capture-pre-debate-baseline",
     "session_id": "baseline-epic-verify",
     "transcript_path": "<CAPTURE_WORKDIR>/home/.claude/projects/-capture-pre-debate-baseline/baseline-epic-verify.jsonl",
     "session_key": "baseline-epic-verify",
