@@ -33,18 +33,35 @@
 #     specific params (e.g. `plan_path`, `spec_path`, `question`,
 #     `reason`).
 #
-# Run-key resolution (plan §156-162; docs/AMP.md OQ-3 resolution):
+# Run-key resolution (plan §156-162, §1029-1030; docs/AMP.md OQ-3
+# resolution). Per the OQ-3 resolution, valid `AMP_THREAD_ID` is the
+# primary run key; the persisted registry is the *fallback* for the
+# missing/malformed-thread-id case, plus a continuity anchor for
+# workspaces that started in UUID-fallback mode.
+#
 #   1. If `AMP_THREAD_ID` (or `AMP_CURRENT_THREAD_ID` as a documented
 #      alias from the Amp bundle) is present and matches the expected
-#      `T-<lower-hex-with-hyphens>` shape, use it as the run key.
-#   2. Mid-session flip detection: if a persisted registry exists with
-#      a recorded `amp_thread_id` that differs from the current
-#      `AMP_THREAD_ID`, log a warning and reuse the persisted run_key
-#      for continuity (plan §1029-1030 — the persisted UUID is the
-#      stable anchor when Amp re-keys mid-thread).
-#   3. If `AMP_THREAD_ID` is absent / empty / not in the expected
+#      `T-<lower-hex-with-hyphens>` shape:
+#      a. UUID-fallback continuity case: if the persisted registry
+#         has `amp_thread_id == null` (i.e. an earlier invocation in
+#         this workspace ran without AMP_THREAD_ID and generated a
+#         fallback UUID), keep the persisted UUID as the run key so
+#         the user's already-running review-gate state remains
+#         addressable. Log a warning so the user knows a thread id is
+#         available but is being ignored for continuity.
+#      b. Otherwise (fresh workspace, or persisted record was
+#         thread-bound): use `AMP_THREAD_ID` as the run key. A
+#         different persisted `amp_thread_id` is treated as a normal
+#         new Amp thread — the registry is overwritten with the new
+#         binding. There is no "flip" detection across thread-bound
+#         sessions, because we cannot distinguish a true mid-session
+#         re-key from a legitimate new thread without lifecycle hooks
+#         (which Amp 0.0.1777572045 does not expose; see docs/AMP.md).
+#   2. If `AMP_THREAD_ID` is absent / empty / not in the expected
 #      shape: read the persisted run_key from the registry. If absent,
-#      generate a fresh UUID and atomic-write the registry.
+#      generate a fresh UUID and atomic-write the registry with
+#      `amp_thread_id=null` so future invocations recognize the
+#      workspace as UUID-mode.
 #
 # The plugin/tool memory is cache only; the on-disk registry is
 # authoritative (plan L948-L949).
@@ -100,9 +117,27 @@ CERBERUS_ROOT_VAL="${CERBERUS_ROOT:-$CERBERUS_ROOT_DEFAULT}"
 REVIEW_GATE_BIN="${CERBERUS_REVIEW_GATE_BIN:-$CERBERUS_ROOT_VAL/bin/review-gate}"
 
 # Workspace root: Amp invokes toolbox tools from the user's workspace
-# directory. Tests set CERBERUS_AMP_WORKSPACE to point at a stub
-# workspace so the registry path is deterministic.
-WORKSPACE_ROOT="${CERBERUS_AMP_WORKSPACE:-$PWD}"
+# directory, but Amp may run the tool from any subdirectory of the
+# workspace. To keep the workspace key stable across subdirectories
+# we mirror bin/review-gate-lib.sh `get_project_hash` and prefer the
+# git toplevel before falling back to PWD. Tests set
+# CERBERUS_AMP_WORKSPACE to point at a stub workspace so the registry
+# path is deterministic without needing a real git repo on the
+# harness machine.
+__amp_workspace_root() {
+    if [ -n "${CERBERUS_AMP_WORKSPACE:-}" ]; then
+        printf '%s' "$CERBERUS_AMP_WORKSPACE"
+        return 0
+    fi
+    local toplevel
+    toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$toplevel" ]; then
+        printf '%s' "$toplevel"
+        return 0
+    fi
+    printf '%s' "$PWD"
+}
+WORKSPACE_ROOT="$(__amp_workspace_root)"
 
 # ---------------------------------------------------------------------------
 # Project key — host-neutral path mangling. Mirrors
@@ -110,6 +145,11 @@ WORKSPACE_ROOT="${CERBERUS_AMP_WORKSPACE:-$PWD}"
 # no-CERBERUS_PROJECT_KEY path. Inlined (not sourced) so a missing
 # bin/ directory still surfaces a clean diagnostic from the helper
 # rather than a sourcing failure.
+#
+# Precedence (matches get_project_hash for the no-transcript path):
+#   1. CERBERUS_PROJECT_KEY (explicit override)
+#   2. WORKSPACE_ROOT (git toplevel preferred via __amp_workspace_root,
+#      then $PWD) → path-mangled with sed/tr.
 # ---------------------------------------------------------------------------
 __amp_project_key() {
     local ws="$1"
@@ -152,9 +192,16 @@ __amp_thread_id_valid() {
 # ---------------------------------------------------------------------------
 # Generate a fresh UUID (lowercase, hyphenated). uuidgen is universal
 # on macOS and most Linux distros. /proc fallback covers Linux without
-# uuidgen. The final fallback is a best-effort PID/time blob — not a
-# real UUID but unique enough for a workspace-scoped registry that's
-# only consulted for run-key continuity within the same workspace.
+# uuidgen. The final fallback is a best-effort PID + epoch-seconds +
+# RANDOM blob — not a real UUID but unique enough for a
+# workspace-scoped registry that's only consulted for run-key
+# continuity within the same workspace.
+#
+# Portability note (intentionally avoided): macOS `date` does not
+# support `%N` for nanoseconds and would emit the literal string
+# `%N` if used unguarded. We use bash's $RANDOM (0-32767, two draws
+# = ~30 bits of entropy) instead so the suffix is well-formed on
+# both Darwin and Linux without uuidgen.
 # ---------------------------------------------------------------------------
 __amp_gen_uuid() {
     if command -v uuidgen >/dev/null 2>&1; then
@@ -165,10 +212,7 @@ __amp_gen_uuid() {
         cat /proc/sys/kernel/random/uuid
         return 0
     fi
-    # Best-effort fallback. PID + epoch ns is collision-resistant
-    # within a single workspace's registry; we never compare across
-    # workspaces.
-    printf 'amp-fallback-%s-%s' "$$" "$(date +%s%N 2>/dev/null || date +%s)"
+    printf 'amp-fallback-%s-%s-%s%s' "$$" "$(date +%s)" "$RANDOM" "$RANDOM"
 }
 
 # ---------------------------------------------------------------------------
@@ -230,40 +274,58 @@ __amp_resolve_run_key() {
 
     local persisted_run_key=""
     local persisted_thread_id=""
+    local has_persisted=0
     if [ -f "$REGISTRY_FILE" ] && jq empty "$REGISTRY_FILE" >/dev/null 2>&1; then
         persisted_run_key="$(jq -r '.run_key // ""' "$REGISTRY_FILE" 2>/dev/null || true)"
         persisted_thread_id="$(jq -r '.amp_thread_id // ""' "$REGISTRY_FILE" 2>/dev/null || true)"
+        if [ -n "$persisted_run_key" ]; then
+            has_persisted=1
+        fi
     fi
 
     if [ -n "$thread_id" ] && __amp_thread_id_valid "$thread_id"; then
-        # Mid-session flip: persisted thread_id is set AND differs from
-        # the current AMP_THREAD_ID. Log a warning and reuse the
-        # persisted run_key so reviewer state under
-        # $REVIEW_DIR/<run-key>/ remains addressable.
-        if [ -n "$persisted_thread_id" ] && [ "$persisted_thread_id" != "$thread_id" ] \
-                && [ -n "$persisted_run_key" ]; then
-            echo "cerberus.sh: WARNING: AMP_THREAD_ID flipped mid-session ('$persisted_thread_id' -> '$thread_id'); reusing persisted run_key '$persisted_run_key' for continuity" >&2
-            # Keep the registry's recorded amp_thread_id pointed at the
-            # original (the one Cerberus was bound to) so subsequent
-            # invocations continue to detect the flip until the user
-            # explicitly resets via --run-key / CERBERUS_RUN_KEY.
-            __amp_write_registry "$persisted_run_key" "$persisted_thread_id"
+        # UUID-fallback continuity case (the actual "flip" the plan
+        # cares about): a previous invocation in this workspace ran
+        # without AMP_THREAD_ID and persisted a fallback UUID
+        # (`amp_thread_id` recorded as null). Now Amp is providing a
+        # thread id. Keep the persisted UUID as the run_key so the
+        # user's already-running review-gate state remains addressable.
+        # We deliberately keep amp_thread_id=null in the registry so
+        # this workspace stays in "UUID-mode" — every subsequent
+        # invocation reuses the same UUID until the user explicitly
+        # overrides via CERBERUS_RUN_KEY or `review-gate ... --run-key`.
+        # Warn so the user knows a thread id is available but ignored.
+        if [ "$has_persisted" -eq 1 ] && [ -z "$persisted_thread_id" ]; then
+            echo "cerberus.sh: WARNING: AMP_THREAD_ID '$thread_id' is now available, but a fallback-UUID run_key '$persisted_run_key' is already persisted for this workspace; reusing UUID for continuity. Override via CERBERUS_RUN_KEY to switch to the thread id." >&2
+            __amp_write_registry "$persisted_run_key" ""
             printf '%s' "$persisted_run_key"
             return 0
         fi
+
+        # Default: per OQ-3 resolution, valid AMP_THREAD_ID is the
+        # primary run key. This includes the case where a previous
+        # run in the same workspace was bound to a *different* thread
+        # id — that's a normal new Amp thread, not a flip; we
+        # overwrite the registry binding with the new thread.
+        # (Plan §Amp run-key durability L156-162; docs/AMP.md OQ-3.)
         __amp_write_registry "$thread_id" "$thread_id"
         printf '%s' "$thread_id"
         return 0
     fi
 
-    # AMP_THREAD_ID absent / invalid. Read persisted UUID if present.
-    if [ -n "$persisted_run_key" ]; then
+    # AMP_THREAD_ID absent / invalid. Read persisted run_key if
+    # present — this preserves UUID continuity across invocations,
+    # and also keeps a thread-bound run_key addressable if Amp
+    # transiently fails to set AMP_THREAD_ID for a single invocation.
+    if [ "$has_persisted" -eq 1 ]; then
         __amp_write_registry "$persisted_run_key" "$persisted_thread_id"
         printf '%s' "$persisted_run_key"
         return 0
     fi
 
-    # No persisted UUID either — generate fresh and persist.
+    # Fresh workspace, no thread id, no persisted state: generate UUID
+    # fallback and persist with amp_thread_id=null so future
+    # invocations recognize the workspace as UUID-mode.
     local new_uuid
     new_uuid="$(__amp_gen_uuid)"
     __amp_write_registry "$new_uuid" ""

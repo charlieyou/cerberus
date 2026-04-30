@@ -36,8 +36,15 @@
 #           bin/review-gate is not on path.
 #   Case 8: Missing reviewer CLI — backend's non-zero exit and stderr
 #           are propagated cleanly (no swallowing).
-#   Case 9: Thread id flips mid-session — helper detects mismatch with
-#           persisted value, logs warning, reuses persisted run_key.
+#   Case 9: Run-key continuity matrix (round-1 reviewer-corrected
+#           framing of the plan's "thread id flips mid-session" case;
+#           valid AMP_THREAD_ID is the primary run key per OQ-3, not
+#           an opportunistic optional, so a thread→thread transition
+#           is a new thread rather than a flip):
+#             9A: UUID-fallback → thread arrives = continuity (UUID
+#                 reused, warning emitted).
+#             9B: thread A → thread B = new thread (run_key = B, no
+#                 continuity warning; guards reviewer regression).
 #
 # Happy path A: stub script exists, regular file, executable.
 # Happy path B: TOOLBOX_ACTION=describe emits valid JSON listing the
@@ -500,47 +507,136 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 9 — Thread id flips mid-session: helper detects mismatch, logs
-# warning, reuses persisted run_key for continuity.
+# Case 9 — Run-key continuity matrix.
+#
+# Per docs/AMP.md OQ-3 resolution + reviewer guidance (round 1 review
+# of T014): valid AMP_THREAD_ID is the primary run key; the persisted
+# registry is the fallback for missing/malformed thread ids, plus a
+# continuity anchor for workspaces that started in UUID-fallback mode.
+#
+# Two sub-scenarios cover the matrix:
+#
+#   9A — UUID-fallback continuity: a workspace ran first without
+#        AMP_THREAD_ID (UUID generated). When AMP_THREAD_ID later
+#        arrives, the helper MUST keep the persisted UUID and warn.
+#        This is the "flip" case the plan §1029-1030 is concerned
+#        with (continuity for already-running review-gate state under
+#        the UUID directory).
+#
+#   9B — Thread-bound transition: a workspace ran first with
+#        AMP_THREAD_ID=A. A subsequent invocation with AMP_THREAD_ID=B
+#        is a normal new Amp thread (Amp does not expose lifecycle
+#        hooks, so we cannot distinguish a true mid-session re-key
+#        from a new thread). Run_key MUST flip to B; no continuity
+#        warning is logged for thread-bound→thread-bound transitions.
+#        This sub-case explicitly guards against the round-1 reviewer's
+#        regression: "with a persisted registry from thread A, any
+#        later invocation with a different valid AMP_THREAD_ID ...
+#        reuses A's persisted_run_key. That makes a normal new Amp
+#        thread B run against thread A's review directory."
 # ---------------------------------------------------------------------------
-log_test "Case 9 — AMP_THREAD_ID mismatch with persisted UUID — continuity"
-c9_dir="$TEST_DIR/case9"
-mkdir -p "$c9_dir"
-c9_workspace="/tmp/some-amp-workspace-c9"
-c9_thread_a="T-c9aaaaaa-5555-7000-aaaa-bbbbccccdddd"
-c9_thread_b="T-c9bbbbbb-6666-7000-aaaa-bbbbccccdddd"
-c9_stub="$(make_stub_review_gate "$c9_dir")"
+log_test "Case 9 — run-key continuity matrix (UUID→thread = continuity; thread→thread = no continuity)"
+c9_ok=1
+
+# --- Sub-case 9A: UUID-fallback continuity ---
+c9a_dir="$TEST_DIR/case9a"
+mkdir -p "$c9a_dir"
+c9a_workspace="/tmp/some-amp-workspace-c9a"
+c9a_thread="T-c9aaaaaa-5555-7000-aaaa-bbbbccccdddd"
+c9a_stub="$(make_stub_review_gate "$c9a_dir")"
+
+# First invocation: NO AMP_THREAD_ID → UUID generated, persisted with
+# amp_thread_id=null.
+run_helper "$c9a_dir" "$c9a_workspace" "$c9a_stub" \
+    '{"command":"review-code"}' \
+    "$c9a_dir/stdout-1" "$c9a_dir/stderr-1" || true
+c9a_registry="$(expected_registry_path "$c9a_dir/home" "$c9a_workspace")"
+c9a_first_run_key="$(jq -r '.run_key' "$c9a_registry" 2>/dev/null || echo "")"
+c9a_first_thread="$(jq -r '.amp_thread_id' "$c9a_registry" 2>/dev/null || echo "")"
+
+# Second invocation: AMP_THREAD_ID arrives. Continuity case → reuse UUID.
+c9a_second_rc=0
+run_helper "$c9a_dir" "$c9a_workspace" "$c9a_stub" \
+    '{"command":"review-code"}' \
+    "$c9a_dir/stdout-2" "$c9a_dir/stderr-2" \
+    "AMP_THREAD_ID=$c9a_thread" || c9a_second_rc=$?
+c9a_second_run_key="$(env_capture_value "$c9a_dir/env-capture.txt" CERBERUS_RUN_KEY)"
+c9a_persisted_after="$(jq -r '.amp_thread_id' "$c9a_registry" 2>/dev/null || echo "")"
+
+if [[ "$c9a_second_rc" -ne 0 ]]; then
+    log_fail "Case 9A — second invocation exit $c9a_second_rc; stderr=$(cat "$c9a_dir/stderr-2")"
+    c9_ok=0
+elif [[ -z "$c9a_first_run_key" ]]; then
+    log_fail "Case 9A — first invocation produced empty run_key"
+    c9_ok=0
+elif [[ "$c9a_first_thread" != "null" ]]; then
+    log_fail "Case 9A — first invocation persisted amp_thread_id='$c9a_first_thread' (expected JSON null)"
+    c9_ok=0
+elif [[ "$c9a_second_run_key" != "$c9a_first_run_key" ]]; then
+    log_fail "Case 9A — second invocation run_key='$c9a_second_run_key' (expected continuity with UUID '$c9a_first_run_key')"
+    c9_ok=0
+elif [[ "$c9a_persisted_after" != "null" ]]; then
+    log_fail "Case 9A — registry amp_thread_id='$c9a_persisted_after' after continuity (expected to stay null so subsequent invocations remain in UUID-mode)"
+    c9_ok=0
+elif ! grep -qi "fallback-UUID" "$c9a_dir/stderr-2"; then
+    log_fail "Case 9A — continuity warning missing from stderr; got: $(cat "$c9a_dir/stderr-2")"
+    c9_ok=0
+fi
+
+# --- Sub-case 9B: Thread-bound new-thread transition ---
+c9b_dir="$TEST_DIR/case9b"
+mkdir -p "$c9b_dir"
+c9b_workspace="/tmp/some-amp-workspace-c9b"
+c9b_thread_a="T-c9bbaaaa-6666-7000-aaaa-bbbbccccdddd"
+c9b_thread_b="T-c9bbbbbb-7777-7000-aaaa-bbbbccccdddd"
+c9b_stub="$(make_stub_review_gate "$c9b_dir")"
 
 # First invocation pins amp_thread_id=A.
-run_helper "$c9_dir" "$c9_workspace" "$c9_stub" \
+run_helper "$c9b_dir" "$c9b_workspace" "$c9b_stub" \
     '{"command":"review-code"}' \
-    "$c9_dir/stdout-1" "$c9_dir/stderr-1" \
-    "AMP_THREAD_ID=$c9_thread_a" || true
-c9_registry="$(expected_registry_path "$c9_dir/home" "$c9_workspace")"
-c9_first_run_key="$(jq -r '.run_key' "$c9_registry" 2>/dev/null || echo "")"
-c9_first_thread="$(jq -r '.amp_thread_id' "$c9_registry" 2>/dev/null || echo "")"
+    "$c9b_dir/stdout-1" "$c9b_dir/stderr-1" \
+    "AMP_THREAD_ID=$c9b_thread_a" || true
+c9b_registry="$(expected_registry_path "$c9b_dir/home" "$c9b_workspace")"
+c9b_first_run_key="$(jq -r '.run_key' "$c9b_registry" 2>/dev/null || echo "")"
+c9b_first_thread="$(jq -r '.amp_thread_id' "$c9b_registry" 2>/dev/null || echo "")"
 
-# Second invocation passes a DIFFERENT thread id. The helper should
-# warn and reuse the persisted run_key.
-c9_second_rc=0
-run_helper "$c9_dir" "$c9_workspace" "$c9_stub" \
+# Second invocation: a DIFFERENT valid AMP_THREAD_ID. Per the OQ-3
+# resolution + round-1 reviewer guidance, this is a new thread, NOT a
+# flip — run_key MUST be the new thread id.
+c9b_second_rc=0
+run_helper "$c9b_dir" "$c9b_workspace" "$c9b_stub" \
     '{"command":"review-code"}' \
-    "$c9_dir/stdout-2" "$c9_dir/stderr-2" \
-    "AMP_THREAD_ID=$c9_thread_b" || c9_second_rc=$?
-c9_second_run_key="$(env_capture_value "$c9_dir/env-capture.txt" CERBERUS_RUN_KEY)"
+    "$c9b_dir/stdout-2" "$c9b_dir/stderr-2" \
+    "AMP_THREAD_ID=$c9b_thread_b" || c9b_second_rc=$?
+c9b_second_run_key="$(env_capture_value "$c9b_dir/env-capture.txt" CERBERUS_RUN_KEY)"
+c9b_persisted_after="$(jq -r '.amp_thread_id' "$c9b_registry" 2>/dev/null || echo "")"
+c9b_persisted_run_key_after="$(jq -r '.run_key' "$c9b_registry" 2>/dev/null || echo "")"
 
-if [[ "$c9_second_rc" -ne 0 ]]; then
-    log_fail "Case 9 — second invocation exit $c9_second_rc; stderr=$(cat "$c9_dir/stderr-2")"
-elif [[ "$c9_first_run_key" != "$c9_thread_a" ]]; then
-    log_fail "Case 9 — first invocation didn't bind run_key to thread A: '$c9_first_run_key'"
-elif [[ "$c9_first_thread" != "$c9_thread_a" ]]; then
-    log_fail "Case 9 — first invocation didn't persist amp_thread_id='$c9_thread_a' (got '$c9_first_thread')"
-elif [[ "$c9_second_run_key" != "$c9_thread_a" ]]; then
-    log_fail "Case 9 — second invocation produced run_key='$c9_second_run_key' (expected continuity '$c9_thread_a')"
-elif ! grep -qi "AMP_THREAD_ID flipped" "$c9_dir/stderr-2"; then
-    log_fail "Case 9 — flip warning missing from stderr; got: $(cat "$c9_dir/stderr-2")"
-else
-    log_pass "Case 9 — flip detected, warning emitted, persisted run_key reused for continuity"
+if [[ "$c9b_second_rc" -ne 0 ]]; then
+    log_fail "Case 9B — second invocation exit $c9b_second_rc; stderr=$(cat "$c9b_dir/stderr-2")"
+    c9_ok=0
+elif [[ "$c9b_first_run_key" != "$c9b_thread_a" ]]; then
+    log_fail "Case 9B — first invocation didn't bind run_key to thread A: '$c9b_first_run_key'"
+    c9_ok=0
+elif [[ "$c9b_first_thread" != "$c9b_thread_a" ]]; then
+    log_fail "Case 9B — first invocation didn't persist amp_thread_id='$c9b_thread_a' (got '$c9b_first_thread')"
+    c9_ok=0
+elif [[ "$c9b_second_run_key" != "$c9b_thread_b" ]]; then
+    log_fail "Case 9B — REGRESSION: second invocation produced run_key='$c9b_second_run_key' (expected new thread '$c9b_thread_b'; reviewer found this incorrect in round 1)"
+    c9_ok=0
+elif [[ "$c9b_persisted_after" != "$c9b_thread_b" ]]; then
+    log_fail "Case 9B — registry amp_thread_id='$c9b_persisted_after' after new thread (expected '$c9b_thread_b')"
+    c9_ok=0
+elif [[ "$c9b_persisted_run_key_after" != "$c9b_thread_b" ]]; then
+    log_fail "Case 9B — registry run_key='$c9b_persisted_run_key_after' after new thread (expected '$c9b_thread_b')"
+    c9_ok=0
+elif grep -qi "fallback-UUID" "$c9b_dir/stderr-2"; then
+    log_fail "Case 9B — UUID-continuity warning incorrectly emitted for thread-bound transition; stderr=$(cat "$c9b_dir/stderr-2")"
+    c9_ok=0
+fi
+
+if [[ "$c9_ok" -eq 1 ]]; then
+    log_pass "Case 9 — UUID→thread keeps UUID (warned); thread→thread uses new thread id (no warn)"
 fi
 
 # ---------------------------------------------------------------------------
