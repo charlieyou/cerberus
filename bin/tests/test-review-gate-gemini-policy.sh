@@ -411,10 +411,10 @@ assert_cross_host_policy() {
 
     local cross_args
     cross_args=$("$CAT_BIN" "$GEMINI_ARGS_FILE")
-    if [[ "$cross_args" != *"--policy "* ]]; then
+    if [[ -z "$(arg_after "--policy")" ]]; then
         log_fail "CERBERUS_HOST=$host_label: gemini missing --policy flag, got: $cross_args"
     fi
-    if [[ "$cross_args" != *"--admin-policy "* ]]; then
+    if [[ -z "$(arg_after "--admin-policy")" ]]; then
         log_fail "CERBERUS_HOST=$host_label: gemini missing --admin-policy flag, got: $cross_args"
     fi
     if [[ "$cross_args" == *"--allowed-tools"* ]]; then
