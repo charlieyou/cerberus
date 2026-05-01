@@ -13,8 +13,8 @@ Cerberus runs as a plugin/skill set in any of the following host environments. T
 | Host | Status | Adapter | Docs |
 |------|--------|---------|------|
 | Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
-| Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/cerberus/*.md` | [`docs/CODEX.md`](docs/CODEX.md) |
-| Amp CLI | Phase 2 (release-ready, pending cross-host manual smoke) | `.amp/toolbox/cerberus.sh` (Amp Toolbox tool dispatching six commands) | [`docs/AMP.md`](docs/AMP.md) |
+| Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/<skill>/SKILL.md` | [`docs/CODEX.md`](docs/CODEX.md) |
+| Amp CLI | Phase 2 (release-ready, pending cross-host manual smoke) | `skills/<skill>/SKILL.md`, `.amp/toolbox/cerberus.sh` | [`docs/AMP.md`](docs/AMP.md) |
 | `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
 
 Existing Claude users do not need to change anything: the legacy `CLAUDE_*` env vars and `~/.claude/projects/...` state paths remain byte-for-byte identical.
@@ -249,7 +249,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-epic-verify --debate path/to/epic.md
 ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-ask --debate "Should we ship this?"
 ```
 
-`--debate` is silently passed through by the slash-command wrappers, so:
+`--debate` is silently passed through by the Cerberus skill wrappers, so:
 
 ```
 /cerberus:review-code --debate
@@ -435,7 +435,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn --context-file path/to/issue.txt pat
 When max iterations are reached, the gate auto-resolves to proceed and surfaces any remaining P0/P1 issues in the stop prompt. Use manual resolution if you need to resolve the gate early:
 
 ```
-/cerberus:clear-gate                     # Clear the gate via slash command
+/cerberus:clear-gate                     # Clear the gate via skill
 ```
 
 Or via CLI:
@@ -488,7 +488,7 @@ The shared backend reads a host-neutral env contract. Every entry has a legacy a
 | `CERBERUS_TRANSCRIPT_PATH` | Optional host transcript path | `CLAUDE_TRANSCRIPT_PATH`, `REVIEW_GATE_TRANSCRIPT_PATH` |
 | `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Bounded Codex `Stop` wait knob | default `0` (never wait) |
 
-**Byte-for-byte compatibility for existing Claude users:** zero changes required. All existing env vars, paths, commands, hooks, and tests continue to work byte-for-byte. Existing CLI scripts/integrations using `REVIEW_GATE_SESSION_KEY`, `REVIEW_GATE_TRANSCRIPT_PATH`, and `CLAUDE_PLUGIN_ROOT` keep working as aliases. There is no migration window.
+**Compatibility for existing Claude users:** zero changes required for the `/cerberus:*` invocation surface. Existing env vars, paths, hooks, and tests continue to work; the prompt bodies now live under `skills/<skill>/SKILL.md` instead of flat `commands/*.md`. Existing CLI scripts/integrations using `REVIEW_GATE_SESSION_KEY`, `REVIEW_GATE_TRANSCRIPT_PATH`, and `CLAUDE_PLUGIN_ROOT` keep working as aliases.
 
 #### Review defaults
 

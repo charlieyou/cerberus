@@ -8,23 +8,21 @@
 > to the Claude and Codex experiences; only the lifecycle adapter and
 > packaging differ.
 >
-> **Feature scope (v1).** Amp ships with the **six Tier-1 review
-> commands** (`review-code`, `review-plan`, `review-spec`, `ask-panel`,
-> `status`, `clear-gate`) surfaced as a single Amp Toolbox tool.
-> Generator workflows (`/cerberus:create-plan`, `/cerberus:create-spec`,
-> `/cerberus:healthcheck`, `/cerberus:architecture-review`), Cerberus
-> team-automation (`/cerberus:run-team`, the task-completed and
-> teammate-idle hooks), and Amp lifecycle handlers (`session.start`,
-> `agent.start`, `agent.end`, `tool.call`, `tool.result`) are **not
-> supported on Amp in v1**. They remain Claude-only until Phase 3
-> (generators) and Phase 4 (team automation) ship; the lifecycle
-> handlers are not exposed by the Amp build inspected during the
-> Phase 2 spike (see [Phase 2 Spike Findings](#phase-2-spike-findings)).
+> **Feature scope (v1).** Amp can use the generic Cerberus skills from
+> `skills/<skill>/SKILL.md`; the six Tier-1 review workflows
+> (`review-code`, `review-plan`, `review-spec`, `ask`, `status`,
+> `clear-gate`) are also surfaced through a single Amp Toolbox tool for
+> host-specific run-key handling.
+> Generator and team-automation skills share the same prompt source as
+> Claude. Amp lifecycle handlers (`session.start`, `agent.start`,
+> `agent.end`, `tool.call`, `tool.result`) are still **not supported on
+> Amp in v1**; the lifecycle handlers are not exposed by the Amp build
+> inspected during the Phase 2 spike (see [Phase 2 Spike Findings](#phase-2-spike-findings)).
 
 ## Install
 
-The Cerberus Amp surface ships as a single **Amp Toolbox** shell
-script: `.amp/toolbox/cerberus.sh`. Amp discovers toolbox tools by
+The Cerberus Amp surface ships as generic Agent Skills plus a single
+**Amp Toolbox** shell script: `.amp/toolbox/cerberus.sh`. Amp discovers toolbox tools by
 scanning `$AMP_TOOLBOX` (a colon-separated list of directories or a
 single absolute file path) and invokes each executable per the
 [Amp Toolbox protocol](https://ampcode.com/manual) (`TOOLBOX_ACTION=describe`
@@ -102,7 +100,11 @@ ln -s "$HOME/code/cerberus/.amp/toolbox/cerberus.sh" ~/.amp/toolbox/cerberus.sh
 ```
 
 After Step 2, restart Amp (or start a new thread) so the new toolbox
-path is picked up.
+path is picked up. The repository also contains `.agents/skills` as a
+symlink to `skills`, so Amp project-skill discovery sees the
+same skill files when you run Amp from this checkout. For other
+workspaces, install or symlink `skills` into that workspace's
+`.agents/skills` directory if you want direct skill invocation there.
 
 ### Verifying the install
 
@@ -273,17 +275,16 @@ v1**:
   hosts have no plan or spec registry per plan §Out Of Scope (plan
   L165-L166). The dispatcher rejects calls without `plan_path` or
   `spec_path`.
-- **Generator workflows are Claude-only.** `/cerberus:create-plan`,
+- **Generator workflows are skill-only on Amp.** `/cerberus:create-plan`,
   `/cerberus:create-spec`, `/cerberus:healthcheck`, and
-  `/cerberus:architecture-review` are not surfaced as Amp Toolbox
-  commands. They remain Claude-only until Phase 3 (plan §Out Of Scope,
-  §Phase 3).
-- **Cerberus team automation is Claude-only.**
-  `/cerberus:run-team`, the `TaskCompleted` hook, and the
-  `TeammateIdle` hook are not available from Amp. They remain
-  Claude-only until Phase 4 (plan §Out Of Scope, §Phase 4).
-- **Amp lifecycle handlers are out of scope.** v1 surfaces the six
-  Tier-1 commands only. There is no equivalent of Claude's
+  `/cerberus:architecture-review` use the generic skill prompt source;
+  they are not surfaced through the six-command Amp Toolbox dispatcher.
+- **Cerberus team automation is skill-only on Amp.**
+  `/cerberus:run-team` uses the generic skill prompt source, but the
+  Claude `TaskCompleted` and `TeammateIdle` lifecycle hooks are not
+  available from Amp.
+- **Amp lifecycle handlers are out of scope.** The Amp Toolbox surface
+  dispatches the six Tier-1 commands only. There is no equivalent of Claude's
   `SessionStart` / `Stop` hook or Codex's `SessionStart` / `Stop`
   lifecycle adapter (plan L953-L955). The Phase 2 spike confirmed that
   the Amp build inspected does not expose lifecycle callbacks

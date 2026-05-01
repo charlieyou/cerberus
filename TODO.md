@@ -1,5 +1,8 @@
 # TODO
 
+* Generate skills/commands instead of dups
+
+
 * add /constitution command (from Spec Kit)
   - Create/update project principles at `/memory/constitution.md`
   - Non-negotiable constraints that gate planning (e.g., "max 3 services", "no ORMs", "100% API test coverage")
@@ -64,3 +67,8 @@ Task review should use multi-models
 
 * Test it
 * Rest of commands
+
+## Debate
+
+* Can specify multiple of one model, or arbitrary mix
+* Mode where Reasoning strategies are rotated across rounds

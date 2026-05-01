@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Source from Cerberus skill Bash snippets to normalize host-neutral env.
+
+__cerberus_skill_env_source="${BASH_SOURCE[0]}"
+while [ -L "$__cerberus_skill_env_source" ]; do
+    __cerberus_skill_env_dir="$(cd -P "$(dirname "$__cerberus_skill_env_source")" && pwd)"
+    __cerberus_skill_env_source="$(readlink "$__cerberus_skill_env_source")"
+    [[ $__cerberus_skill_env_source != /* ]] && __cerberus_skill_env_source="$__cerberus_skill_env_dir/$__cerberus_skill_env_source"
+done
+__cerberus_skill_env_bin_dir="$(cd -P "$(dirname "$__cerberus_skill_env_source")" && pwd)"
+
+if [ -z "${CERBERUS_ROOT:-}" ]; then
+    if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+        export CERBERUS_ROOT="$CLAUDE_PLUGIN_ROOT"
+    elif [ -n "${CLAUDE_SKILL_DIR:-}" ]; then
+        export CERBERUS_ROOT="$(cd "$CLAUDE_SKILL_DIR/../.." && pwd)"
+    else
+        export CERBERUS_ROOT="$(cd "$__cerberus_skill_env_bin_dir/.." && pwd)"
+    fi
+fi
+
+if [ -z "${CERBERUS_HOST:-}" ]; then
+    if [ -n "${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}" ]; then
+        export CERBERUS_HOST="amp"
+    elif [ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]; then
+        export CERBERUS_HOST="claude"
+    elif [ -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ] && command -v jq >/dev/null 2>&1; then
+        __cerberus_skill_project_key="$(
+            # shellcheck source=/dev/null
+            . "$CERBERUS_ROOT/bin/review-gate-lib.sh" >/dev/null 2>&1 || exit 0
+            get_project_hash "" 2>/dev/null || true
+        )"
+        if [ -n "$__cerberus_skill_project_key" ] \
+           && [ -r "$HOME/.cerberus/runtime/codex/$__cerberus_skill_project_key/active-session.json" ]; then
+            export CERBERUS_HOST="codex"
+        else
+            export CERBERUS_HOST="generic"
+        fi
+        unset __cerberus_skill_project_key
+    else
+        export CERBERUS_HOST="generic"
+    fi
+fi
+
+if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
+    if [ "$CERBERUS_HOST" = "amp" ]; then
+        __cerberus_skill_amp_thread="${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}"
+        case "$__cerberus_skill_amp_thread" in
+            T-*) export CERBERUS_RUN_KEY="$__cerberus_skill_amp_thread" ;;
+        esac
+        unset __cerberus_skill_amp_thread
+    elif [ "$CERBERUS_HOST" = "codex" ] && [ -z "${CLAUDE_SESSION_ID:-}" ] \
+         && [ -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ] && command -v jq >/dev/null 2>&1; then
+        __cerberus_skill_project_key="$(
+            # shellcheck source=/dev/null
+            . "$CERBERUS_ROOT/bin/review-gate-lib.sh" >/dev/null 2>&1 || exit 0
+            get_project_hash "" 2>/dev/null || true
+        )"
+        __cerberus_skill_registry="$HOME/.cerberus/runtime/codex/$__cerberus_skill_project_key/active-session.json"
+        if [ -n "$__cerberus_skill_project_key" ] && [ -r "$__cerberus_skill_registry" ]; then
+            __cerberus_skill_run_key="$(jq -r '.run_key // empty' "$__cerberus_skill_registry" 2>/dev/null || true)"
+            [ -n "$__cerberus_skill_run_key" ] && export CERBERUS_RUN_KEY="$__cerberus_skill_run_key"
+            unset __cerberus_skill_run_key
+        fi
+        unset __cerberus_skill_project_key __cerberus_skill_registry
+    fi
+fi
+
+unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir

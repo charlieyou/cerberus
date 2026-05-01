@@ -6,29 +6,19 @@
 > debate, telemetry) is identical to the Claude experience; only the
 > lifecycle adapters and packaging differ.
 >
-> **Feature scope (v1).** Codex ships with the **six Tier-1 review
-> skills** (`review-code`, `review-plan`, `review-spec`, `ask`,
-> `status`, `clear-gate`) and the **`SessionStart` + `Stop`** lifecycle
-> hooks. Generator workflows (`/cerberus:create-plan`,
-> `/cerberus:create-spec`, `/cerberus:healthcheck`,
-> `/cerberus:architecture-review`) and Cerberus team-automation
-> (`/cerberus:run-team`, the task-completed and teammate-idle hooks)
-> are **not supported on Codex in v1**. They remain Claude-only until
-> Phase 3 (generators) and Phase 4 (team automation) ship.
+> **Feature scope.** Codex discovers the same generic Cerberus skills
+> used by Claude and Amp from `skills/<skill>/SKILL.md`. The
+> Tier-1 review skills (`review-code`, `review-plan`, `review-spec`,
+> `ask`, `status`, `clear-gate`) are the supported Codex lifecycle
+> workflows and use the **`SessionStart` + `Stop`** hooks.
 
 ## Install
 
-The Cerberus Codex integration has two separate roots that must not be
-confused:
-
-- The **backend checkout root** is the repository checkout that contains
-  `bin/`, `templates/`, `docs/`, and the shared review backend. Set
-  `CERBERUS_ROOT` to this directory and use it when substituting the
-  hook template.
-- The **Codex plugin package root** is `plugins/cerberus/`. It is a
-  discovery-only package containing `.codex-plugin/plugin.json` and the
-  six Codex skill files. It intentionally does **not** contain `bin/` or
-  `templates/`.
+The Cerberus Codex integration uses the repository checkout as the
+single package root. That checkout contains `.codex-plugin/plugin.json`,
+`skills/`, `bin/`, `templates/`, and the shared review backend.
+Set `CERBERUS_ROOT` to this directory and use it when substituting the
+hook template.
 
 Codex plugin installation discovers the skills, but it does not install
 the lifecycle hooks. Configure both the plugin package and the
@@ -49,7 +39,7 @@ with a warning, so a one- or two-reviewer install is fine.
 | `gemini` | Google Gemini reviewer | [Gemini CLI](https://ai.google.dev/gemini-api/docs/get-started/cli) |
 | `claude` | Anthropic Claude reviewer | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
 
-### Step 1 — Backend Checkout + Plugin Package
+### Step 1 — Checkout + Plugin Package
 
 Clone the Cerberus repository (or your fork) somewhere stable on the
 machine that runs Codex. The directory you clone into is the
@@ -60,28 +50,15 @@ git clone https://github.com/charlieyou/cerberus.git ~/code/cerberus
 ```
 
 Current Codex CLI (verified with 0.128) expects `.codex-plugin/plugin.json`
-to declare `skills` as a directory path. Each skill lives in a child
-directory named after the skill and has a `SKILL.md` file.
+to declare `skills` as a directory path. Cerberus points that field at
+`skills/`; each skill lives in a child directory named after
+the skill and has a `SKILL.md` file.
 
-Cerberus ships two compatible manifests:
-
-- `.codex-plugin/plugin.json` is for direct repository discovery and
-  points at `skills/codex/`, whose shape is
-  `skills/codex/<skill>/SKILL.md`.
-- `plugins/cerberus/.codex-plugin/plugin.json` is for local
-  marketplace installs and points at `plugins/cerberus/skills/`, whose
-  shape is `plugins/cerberus/skills/<skill>/SKILL.md`.
-
-Prefer the local package for Codex installs. The repository root also
-contains developer/agent skills that are not part of Cerberus, while
-`plugins/cerberus/` exposes only the six Cerberus skills. The local
-marketplace descriptor at `.agents/plugins/marketplace.json` registers
-that package as `cerberus-local`; add that marketplace file to Codex,
-then install and enable `cerberus@cerberus-local` using your Codex
-plugin UI or CLI. After installation, Codex should list these skills:
-`cerberus:ask`, `cerberus:clear-gate`, `cerberus:review-code`,
-`cerberus:review-plan`, `cerberus:review-spec`, and
-`cerberus:status`.
+The local marketplace descriptor at `.agents/plugins/marketplace.json`
+registers the repository root as `cerberus-local`; add that marketplace
+file to Codex, then install and enable `cerberus@cerberus-local` using
+your Codex plugin UI or CLI. After installation, Codex should list the
+Cerberus skills from `skills/`.
 
 ### Step 2 — Runtime Root + Lifecycle Hooks
 
@@ -93,8 +70,8 @@ stable session-id env var, so the `SessionStart` hook
 into your Codex hooks configuration for skills to behave correctly
 across stop boundaries.
 
-Set `CERBERUS_ROOT` in Codex's shell environment to the **backend
-checkout root**, not to `plugins/cerberus/`. Installed skills are cached
+Set `CERBERUS_ROOT` in Codex's shell environment to the **repository
+checkout root**. Installed skills are cached
 by Codex and are not rewritten during install, so they locate the shared
 backend through `CERBERUS_ROOT` at runtime.
 
@@ -141,7 +118,7 @@ found". If you don't, check:
   actually contains `bin/codex-session-init` and
   `bin/codex-stop-hook`.
 - `CERBERUS_ROOT` is set in Codex's shell environment and points at the
-  backend checkout root, not at `plugins/cerberus/` or Codex's plugin
+  backend checkout root, not at `` or Codex's plugin
   cache.
 - `bin/codex-session-init` and `bin/codex-stop-hook` are executable
   (`chmod +x`).
@@ -192,30 +169,28 @@ themselves.
 
 ## Commands (Skills)
 
-All six Tier-1 workflows ship as Codex **skills**. Direct repository
-discovery reads them from `skills/codex/<skill>/SKILL.md`; the local
-marketplace package reads them from
-`plugins/cerberus/skills/<skill>/SKILL.md`. Codex packaging is
-skills-only — there is no separate slash-command declaration. The exact
+Cerberus workflows ship as **skills** under
+`skills/<skill>/SKILL.md`. Codex packaging is skills-only —
+there is no separate slash-command declaration. The exact
 invocation verb (`/skill`, `@`-mention, skill picker UI) is
 host-dependent; installed marketplace skills are typically selected as
 `cerberus:<skill>`.
 
-Every skill exports `CERBERUS_HOST=codex` before handing off to the
-shared backend, so `gate-state.json` is recorded with `host: "codex"`
-and state is rooted under the Codex runtime tree. Each skill also
-bootstraps `CERBERUS_RUN_KEY` from the on-disk session registry so the
-skill works correctly when the user shell that triggered it didn't
-inherit the env var from `SessionStart`.
+Each skill starts from the same prompt text that previously lived under
+`commands/`, with a small host-neutral preamble that sources
+`bin/cerberus-skill-env`. That helper resolves `CERBERUS_ROOT`, detects
+the current host when possible, and bootstraps `CERBERUS_RUN_KEY` from
+the on-disk Codex session registry when a Codex `SessionStart` hook has
+run.
 
 | Skill | Backend invocation | Required args | Optional flags |
 |---|---|---|---|
 | `review-code` | `bin/review-gate spawn-code-review [flags] [focus]` | none | `--mode`, `--consensus`, `--agents`, `--max-rounds`, `--uncommitted`, `--base <branch>`, `--commit <sha...>`, `--exclude <pathspec>`, range (`a..b`), free-text focus |
-| `review-plan` | `bin/review-gate spawn-plan-review <plan-path> [flags]` | `<plan-path>` | `--mode`, `--consensus`, `--agents`, `--max-rounds`, `--debate`, free-text focus |
+| `review-plan` | `bin/review-gate spawn-plan-review [plan-path] [flags]` | none on Claude; explicit path recommended elsewhere | `--mode`, `--consensus`, `--agents`, `--max-rounds`, `--debate`, free-text focus |
 | `review-spec` | `bin/review-gate spawn-spec-review <spec-path> [flags]` | `<spec-path>` | `--mode`, `--consensus`, `--agents`, `--max-rounds`, `--debate` |
 | `ask` | `bin/review-gate spawn-ask <question>` then `wait --json --finalize` | none | `--debate`, `--mode`, `--agents`, `--max-rounds`, `--consensus`, `--context-file`, `--prompt-file`, `--` to escape leading dashes |
 | `status` | `bin/review-gate status --json` | none | `--session-key <K>` to inspect a non-active run |
-| `clear-gate` | `bin/review-gate resolve --reason "manual clear from Codex"` | none | (none — `bin/review-gate resolve` only accepts `--reason`; to target a non-active run, set `CERBERUS_RUN_KEY=<K>` in the environment before invoking) |
+| `clear-gate` | `bin/review-gate resolve --reason "manual clear"` | none | (none — `bin/review-gate resolve` only accepts `--reason`; to target a non-active run, set `CERBERUS_RUN_KEY=<K>` in the environment before invoking) |
 
 ### `review-code`
 
@@ -228,11 +203,10 @@ modes (`--uncommitted`, `--base`, `--commit`, range) in the main
 
 ### `review-plan` and `review-spec`
 
-Both require an **explicit path** to the plan or spec markdown file.
-v1 of the Codex port does not consult a plan or spec registry; the
-skill exits with a clear error if you forget the path. There is no
-Claude-style "use the most recent plan" fallback. (See
-[Limitations](#limitations-v1).)
+Pass an explicit path to the plan or spec markdown file when using
+Codex. The underlying backend can fall back to Claude's recent-plan
+registry when running under Claude, but non-Claude hosts should not rely
+on that registry being present.
 
 ### `ask`
 
@@ -367,7 +341,7 @@ Cerberus backend; set CERBERUS_ROOT to the Cerberus checkout root`.
 
 **Fix:** Set `CERBERUS_ROOT` in Codex's shell environment to the
 backend checkout root — the directory containing `bin/review-gate` —
-not to `plugins/cerberus/` and not to Codex's plugin cache. Installed
+not to `` and not to Codex's plugin cache. Installed
 skills are cached markdown files, so they are not patched with a local
 checkout path during plugin install.
 
@@ -424,7 +398,7 @@ accepts `--reason` — so to clear a non-active run, set
 ```bash
 CERBERUS_RUN_KEY=<run-key> \
     "$CERBERUS_ROOT/bin/review-gate" resolve \
-        --reason "manual clear from Codex"
+        --reason "manual clear"
 ```
 
 ### `Cerberus: Status` works but `Cerberus: Clear Gate` doesn't resolve the run I expected
@@ -442,7 +416,7 @@ not accept `--session-key` on its CLI:
 ```bash
 CERBERUS_RUN_KEY=<K> \
     "$CERBERUS_ROOT/bin/review-gate" resolve \
-        --reason "manual clear from Codex"
+        --reason "manual clear"
 ```
 
 ### Stop hook timing out
@@ -470,8 +444,8 @@ maintainer also runs the following manual smoke on a clean Codex
 install. None of these are automated; they're a release gate, not a
 CI gate.
 
-1. **Install.** Clone the repo, configure the local package
-   `plugins/cerberus` per [Install](#install), set `CERBERUS_ROOT` to
+1. **Install.** Clone the repo, configure the package from
+   the repository root per [Install](#install), set `CERBERUS_ROOT` to
    the backend checkout root, and substitute the hook placeholder with
    that same backend root. Confirm the resulting hooks file points at
    absolute paths inside the backend checkout root.
@@ -506,7 +480,7 @@ CI gate.
    `status` only appears for `no_active_gate` / `malformed_state`.)
 7. **`Cerberus: Clear Gate`.** Invoke `clear-gate`. Confirm
    `gate-state.json.status` flips to `resolved` with reason
-   `manual clear from Codex`.
+   `manual clear`.
 8. **Host-recorded metadata.** For every Codex-originated run created
    above, confirm `gate-state.json.host == "codex"`. Re-run a Claude
    review in the same workspace and confirm the Claude run is
@@ -563,7 +537,7 @@ directory contains `SKILL.md` with YAML frontmatter.
 | `name` | string | Plugin identifier; this package uses `"cerberus"`. |
 | `version` | string | SemVer. The Codex package ships as `"1.0.0"`. |
 | `description` | string | One-line package description. |
-| `skills` | string | Plugin-relative directory path. Root discovery uses `"./skills/codex/"`; the local package uses `"./skills/"`. |
+| `skills` | string | Plugin-relative directory path. Cerberus uses `"./skills/"`. |
 | `interface` | object | UI metadata used by current Codex plugin discovery (`displayName`, descriptions, category, capabilities, prompts, brand color). |
 
 #### Skill directory shape
@@ -580,10 +554,8 @@ skills/
   status/SKILL.md
 ```
 
-The repository root manifest points at `skills/codex/` because the root
-`skills/` directory also contains developer-only skills. The installable
-local package under `plugins/cerberus/` contains only Cerberus skills, so
-its manifest can point at `./skills/`.
+The manifest points at `skills/` so the same flat skill tree is shared
+by Claude, Codex, and Amp.
 
 #### Slash-command vs skill semantics for the six Tier-1 workflows
 
@@ -593,19 +565,18 @@ Tier-1 workflows through Codex's skill-invocation UX (the exact verb —
 `/skill`, `@`-mention, or skill picker — is host-dependent and not part
 of the manifest contract).
 
-| Workflow | Skill file in local package | Backend invocation | Argument shape |
+| Workflow | Skill file | Backend invocation | Argument shape |
 |---|---|---|---|
-| Code review | `plugins/cerberus/skills/review-code/SKILL.md` | `bin/review-gate spawn-code-review [flags]` | Optional flags: `--mode`, `--consensus`, `--agents`, `--max-rounds`, diff selectors, and optional focus text. |
-| Plan review | `plugins/cerberus/skills/review-plan/SKILL.md` | `bin/review-gate spawn-plan-review <plan-path> [flags]` | **Path required (v1).** Non-Claude hosts have no plan registry per plan §Out Of Scope. |
-| Spec review | `plugins/cerberus/skills/review-spec/SKILL.md` | `bin/review-gate spawn-spec-review <spec-path> [flags]` | **Path required (v1).** Same rationale as Plan review. |
-| Ask panel | `plugins/cerberus/skills/ask/SKILL.md` | `bin/review-gate spawn-ask <question>` then `wait --json --finalize` | Free-text question; skill synthesizes the panel answer from the wait output. |
-| Status | `plugins/cerberus/skills/status/SKILL.md` | `bin/review-gate status --json` | None. Read-only; never mutates state (see plan §Phase 0 exit criteria). |
-| Clear gate | `plugins/cerberus/skills/clear-gate/SKILL.md` | `bin/review-gate resolve --reason "manual clear from Codex"` | None. Operator escape hatch. |
+| Code review | `skills/review-code/SKILL.md` | `bin/review-gate spawn-code-review [flags]` | Optional flags: `--mode`, `--consensus`, `--agents`, `--max-rounds`, diff selectors, and optional focus text. |
+| Plan review | `skills/review-plan/SKILL.md` | `bin/review-gate spawn-plan-review [plan-path] [flags]` | Explicit path recommended on non-Claude hosts. |
+| Spec review | `skills/review-spec/SKILL.md` | `bin/review-gate spawn-spec-review <spec-path> [flags]` | Spec path required by the backend. |
+| Ask panel | `skills/ask/SKILL.md` | `bin/review-gate spawn-ask <question>` then `wait --json --finalize` | Free-text question; skill synthesizes the panel answer from the wait output. |
+| Status | `skills/status/SKILL.md` | `bin/review-gate status --json` | None. Read-only; never mutates state (see plan §Phase 0 exit criteria). |
+| Clear gate | `skills/clear-gate/SKILL.md` | `bin/review-gate resolve --reason "manual clear"` | None. Operator escape hatch. |
 
 #### Sample manifest
 
-This is the local package manifest shape. The root manifest is identical
-except that `skills` is `"./skills/codex/"`.
+This is the manifest shape:
 
 ```json
 {
@@ -664,7 +635,7 @@ It appears in every `command:` field in the hook template that needs
 to invoke a Cerberus binary. The user replaces it with the absolute
 path to their Cerberus backend checkout root (the directory containing
 `bin/` and `templates/`) when installing the hook template into Codex's
-hooks config. Do not use the discovery-only `plugins/cerberus/` package
+hooks config. Do not use the discovery-only `` package
 root for this substitution.
 
 **Rationale.**
@@ -692,7 +663,7 @@ The Codex install is:
 1. Clone or otherwise place the Cerberus repository at a known
    absolute path (the **backend checkout root**).
 2. Add `.agents/plugins/marketplace.json` to Codex and install/enable
-   `cerberus@cerberus-local`, which points at `plugins/cerberus/`.
+   `cerberus@cerberus-local`, which points at the repository root.
 3. Set `CERBERUS_ROOT` in Codex's shell environment to the backend
    checkout root.
 4. Open `templates/codex-hooks.json`, replace every
@@ -713,8 +684,8 @@ hook template, not in any backend code path or current Codex skill body.
   schema; the current manifest uses `skills` as a directory path and
   includes `interface` metadata.
 - **T010** (landed) authored `templates/codex-hooks.json` using the
-  `<CERBERUS_INSTALL_ROOT>` placeholder per OQ-2 and ships the six
-  Codex skills under `skills/codex/<skill>/SKILL.md` plus the packaged
-  local marketplace copy under `plugins/cerberus/skills/<skill>/SKILL.md`.
+  `<CERBERUS_INSTALL_ROOT>` placeholder per OQ-2 and shipped the first
+  Codex skills. The current package uses the generic skill tree under
+  `skills/<skill>/SKILL.md` as the single source.
 - **T011** (this task) finalizes the user-facing sections of this
   document and links them from the host catalog in `README.md`.

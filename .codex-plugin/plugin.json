@@ -14,7 +14,7 @@
     "quality-gate",
     "cerberus"
   ],
-  "skills": "./skills/codex/",
+  "skills": "./skills/",
   "interface": {
     "displayName": "Cerberus",
     "shortDescription": "Multi-model review gates for Codex",

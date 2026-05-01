@@ -1,11 +1,12 @@
 {
   "name": "cerberus",
-  "version": "1.53.0",
+  "version": "1.54.0",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"
   },
   "repository": "https://github.com/charlieyou/cerberus",
   "license": "MIT",
+  "skills": "./skills/",
   "keywords": ["code-review", "plan-review", "multi-model", "quality-gate", "cerberus"]
 }

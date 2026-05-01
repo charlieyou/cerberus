@@ -32,11 +32,11 @@ assert_contains "agents/implementer.md" "Never claim, set \`owner\`, or mark \`i
 assert_not_contains "agents/implementer.md" "Claim the task with \`TaskUpdate(taskId: \"<claude-task-id>\", owner: \"<your-name>\", status: \"in_progress\")\`"
 assert_not_contains "agents/implementer.md" "keep it \`in_progress\`"
 
-assert_contains "commands/run-team.md" "cerberus_assigned_teammate: \"impl-T###\""
-assert_contains "commands/run-team.md" "Do not pass an owner and do not immediately call \`TaskUpdate(status: \"in_progress\")\`."
-assert_contains "commands/run-team.md" "If the Claude task is not \`completed\`"
-assert_not_contains "commands/run-team.md" "claim the synthetic task"
-assert_not_contains "commands/run-team.md" "if you have already claimed or started T###"
+assert_contains "skills/run-team/SKILL.md" "cerberus_assigned_teammate: \"impl-T###\""
+assert_contains "skills/run-team/SKILL.md" "Do not pass an owner and do not immediately call \`TaskUpdate(status: \"in_progress\")\`."
+assert_contains "skills/run-team/SKILL.md" "If the Claude task is not \`completed\`"
+assert_not_contains "skills/run-team/SKILL.md" "claim the synthetic task"
+assert_not_contains "skills/run-team/SKILL.md" "if you have already claimed or started T###"
 
 assert_contains "docs/team-implement-plan.md" "cerberus_assigned_teammate: \"impl-T###\""
 assert_contains "docs/team-implement-plan.md" "Do not set TaskList \`owner\` and do not mark the task \`in_progress\`."

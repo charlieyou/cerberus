@@ -1,6 +1,0 @@
-# Phase 1 placeholder. The six Cerberus Codex skills (review-code,
-# review-plan, review-spec, ask, status, clear-gate) referenced by
-# `.codex-plugin/plugin.json` are authored by **T010**. This file
-# exists so the directory is tracked in git from T007 onward, which
-# avoids "skill path not found" diagnostics from any Codex tooling
-# that materializes the plugin between T007 and T010.
