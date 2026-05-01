@@ -67,20 +67,14 @@ write_idle_state() {
     local task_id="$2"
     local repo_root="${3:-}"
     local state_dir="${TMP_ROOT}/cerberus-task-completed-hook/${team_hash}/${task_id}"
-    local baseline_sha=""
-
-    if [[ -n "$repo_root" ]]; then
-        baseline_sha="$(git -C "$repo_root" rev-parse HEAD)"
-    fi
 
     mkdir -p "$state_dir"
     jq -n \
         --arg task_id "$task_id" \
         --arg claude_task_id "test-${task_id}" \
         --arg team_hash "$team_hash" \
-        --arg baseline_sha "$baseline_sha" \
         --arg repo_root "$repo_root" \
-        '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, baseline_sha:$baseline_sha, round:0, max_rounds:3, repo_root:$repo_root}' \
+        '{task_id:$task_id, claude_task_id:$claude_task_id, team_hash:$team_hash, round:0, max_rounds:3, repo_root:$repo_root}' \
         > "${state_dir}/state.json"
     printf '%s\n' "$state_dir"
 }

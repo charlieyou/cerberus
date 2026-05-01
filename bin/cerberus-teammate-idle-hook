@@ -151,7 +151,6 @@ append_epoch "state_team_hash=${state_team_hash}"
 append_epoch "state_claude_task_id=$(jq -r '.claude_task_id // ""' "$state_file" 2>/dev/null || printf '')"
 append_epoch "state_round=$(jq -r '.round // ""' "$state_file" 2>/dev/null || printf '')"
 append_epoch "state_max_rounds=$(jq -r '.max_rounds // ""' "$state_file" 2>/dev/null || printf '')"
-append_epoch "state_baseline_sha=$(jq -r '.baseline_sha // ""' "$state_file" 2>/dev/null || printf '')"
 append_epoch "repo_head=${repo_head}"
 if [[ -n "$repo_head" ]]; then
     strong_evidence="1"
