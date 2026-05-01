@@ -2912,11 +2912,13 @@ review_gate_artifact_path() {
     session_id="$(__cerberus_resolve_session_id)"
     local transcript_path
     transcript_path="$(__cerberus_resolve_transcript_path)"
+    local session_id_from_arg="false"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --session-id)
                 session_id="${2:-}"
+                session_id_from_arg="true"
                 shift 2
                 ;;
             --transcript-path)
@@ -2944,7 +2946,19 @@ USAGE
     fi
 
     local review_dir
-    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    # When the caller explicitly passed --session-id, that value MUST take
+    # precedence over any ambient CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY.
+    # resolve_review_dir() routes through __cerberus_resolve_run_key() which
+    # gives the env aliases precedence over the positional session_id, so
+    # without unsetting them an explicit --session-id lookup from a Codex/Amp
+    # shell with an exported run key would silently read the ambient run.
+    # Scope the unset to the command-substitution subshell so the parent's
+    # env is preserved.
+    if [[ "$session_id_from_arg" == "true" ]]; then
+        review_dir=$(unset CERBERUS_RUN_KEY REVIEW_GATE_SESSION_KEY; resolve_review_dir "$session_id" "$transcript_path")
+    else
+        review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    fi
     echo "$review_dir/latest.md"
 }
 
@@ -2955,11 +2969,13 @@ review_gate_author_context() {
     transcript_path="$(__cerberus_resolve_transcript_path)"
     local clear="false"
     local context=""
+    local session_id_from_arg="false"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --session-id)
                 session_id="${2:-}"
+                session_id_from_arg="true"
                 shift 2
                 ;;
             --transcript-path)
@@ -3023,8 +3039,21 @@ USAGE
     local review_dir
     local state_file
 
-    # First try resolving with transcript path
-    review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    # First try resolving with transcript path.
+    #
+    # When the caller explicitly passed --session-id, that value MUST take
+    # precedence over any ambient CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY.
+    # resolve_review_dir() routes through __cerberus_resolve_run_key() which
+    # gives the env aliases precedence over the positional session_id, so
+    # without unsetting them an explicit --session-id lookup from a Codex/Amp
+    # shell with an exported run key would silently read the ambient run.
+    # Scope the unset to the command-substitution subshell so the parent's
+    # env is preserved.
+    if [[ "$session_id_from_arg" == "true" ]]; then
+        review_dir=$(unset CERBERUS_RUN_KEY REVIEW_GATE_SESSION_KEY; resolve_review_dir "$session_id" "$transcript_path")
+    else
+        review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+    fi
     state_file="$review_dir/gate-state.json"
 
     # If state doesn't exist and we don't have transcript path, search all projects
@@ -3058,7 +3087,7 @@ USAGE
     local temp_file="${state_file}.tmp.$$"
     # T002: include the alias-warning marker in cleanup so the top-level
     # marker-cleanup EXIT trap (which we clobber here) is not lost.
-    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
 
     if [[ "$clear" == "true" ]]; then
         jq 'del(.author_context)' "$state_file" > "$temp_file"
@@ -4627,7 +4656,7 @@ review_gate_resolve() {
     local temp_file="${state_file}.tmp.$$"
     # T002: include the alias-warning marker in the cleanup so the top-level
     # marker-cleanup trap (which we clobber here) is not lost.
-    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
 
     # Update shas to current values so subsequent hook runs don't detect "changes"
     # This prevents respawning reviewers after auto_approve when files were edited during review
@@ -4844,7 +4873,21 @@ USAGE
     local state_file=""
     if [[ -n "$session_id" ]]; then
         local review_dir
-        review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+        # When the caller explicitly passed --session-id, that value MUST take
+        # precedence over any ambient CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY.
+        # resolve_review_dir() routes through __cerberus_resolve_run_key() which
+        # gives the env aliases precedence over the positional session_id, so
+        # without unsetting them an explicit --session-id lookup from a
+        # Codex/Amp shell with an exported run key would silently read the
+        # ambient run instead of the requested gate. Scope the unset to the
+        # command-substitution subshell so the parent's env is preserved (this
+        # also means we don't disturb the transient CERBERUS_RUN_KEY exported
+        # by the --session-key-only branch above).
+        if [[ "$session_id_from_arg" == "true" ]]; then
+            review_dir=$(unset CERBERUS_RUN_KEY REVIEW_GATE_SESSION_KEY; resolve_review_dir "$session_id" "$transcript_path")
+        else
+            review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
+        fi
         state_file="$review_dir/gate-state.json"
     elif [[ -n "$session_key" ]]; then
         # Strategy 1 (env-passing parity, plan §Run-key lookup parity):
@@ -5123,7 +5166,7 @@ USAGE
         local temp_file="${state_file}.tmp.$$"
         # T002: include the alias-warning marker in cleanup so the top-level
         # marker-cleanup EXIT trap (which we clobber here) is not lost.
-        trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" 2>/dev/null || true' EXIT
+        trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
         jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
            --arg consensus "$consensus_verdict" \
@@ -5309,8 +5352,23 @@ USAGE
     #      project key in env).
     local state_file="" review_dir=""
     if [[ -n "$session_id" ]]; then
-        if review_dir=$(resolve_review_dir "$session_id" "$transcript_path" 2>/dev/null); then
-            state_file="$review_dir/gate-state.json"
+        # When the caller explicitly passed --session-id, that value MUST take
+        # precedence over any ambient CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY.
+        # resolve_review_dir() routes through __cerberus_resolve_run_key() which
+        # gives the env aliases precedence over the positional session_id, so
+        # without unsetting them an explicit --session-id lookup from a
+        # Codex/Amp shell with an exported run key would silently read the
+        # ambient run instead of the requested gate. Scope the unset to the
+        # command-substitution subshell so the parent's env is preserved for
+        # subsequent operations.
+        if [[ "$session_id_from_arg" == "true" ]]; then
+            if review_dir=$(unset CERBERUS_RUN_KEY REVIEW_GATE_SESSION_KEY; resolve_review_dir "$session_id" "$transcript_path" 2>/dev/null); then
+                state_file="$review_dir/gate-state.json"
+            fi
+        else
+            if review_dir=$(resolve_review_dir "$session_id" "$transcript_path" 2>/dev/null); then
+                state_file="$review_dir/gate-state.json"
+            fi
         fi
     elif [[ -n "$session_key" ]]; then
         if review_dir=$(resolve_review_dir "" "$transcript_path" 2>/dev/null); then

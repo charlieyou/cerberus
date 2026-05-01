@@ -45,6 +45,19 @@ commits are not shown individually.
 
 FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
+## Install
+
+The bash block below uses a `<CERBERUS_INSTALL_ROOT>` placeholder. At install
+time, either:
+
+- Replace every `<CERBERUS_INSTALL_ROOT>` token in this file with the absolute
+  path to your Cerberus checkout (the same substitution applied to
+  `templates/codex-hooks.json`), OR
+- Export `CERBERUS_ROOT=/abs/path/to/cerberus` in your shell profile so the
+  fallback is never reached.
+
+See `templates/codex-hooks.json` for the same install procedure.
+
 ## Run the Review
 
 Invoke the shared backend with `CERBERUS_HOST=codex` exported. The Codex
@@ -64,7 +77,7 @@ export CERBERUS_HOST=codex
 # CLAUDE_SESSION_ID, so explicit overrides win.
 if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ] \
    && [ -z "${CLAUDE_SESSION_ID:-}" ] && command -v jq >/dev/null 2>&1; then
-    __cb_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}"
+    __cb_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-<CERBERUS_INSTALL_ROOT>}}"
     if [ -r "$__cb_root/bin/review-gate-lib.sh" ]; then
         # shellcheck source=/dev/null
         . "$__cb_root/bin/review-gate-lib.sh" >/dev/null 2>&1 || :
@@ -82,7 +95,7 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ] \
     unset __cb_root
 fi
 
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/bin/review-gate" spawn-code-review "$@"
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-<CERBERUS_INSTALL_ROOT>}}/bin/review-gate" spawn-code-review "$@"
 ```
 
 After the spawn returns, **stop the turn**. Do not poll. The Codex `Stop` hook

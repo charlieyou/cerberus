@@ -39,6 +39,13 @@
 # missing/malformed-thread-id case, plus a continuity anchor for
 # workspaces that started in UUID-fallback mode.
 #
+#   0. If the caller pre-set `CERBERUS_RUN_KEY` (or the legacy
+#      `REVIEW_GATE_SESSION_KEY` alias), it takes precedence over both
+#      `AMP_THREAD_ID` and the persisted registry. This is the
+#      documented escape hatch for `clear-gate` / `status` against a
+#      non-active run, or for switching out of UUID-fallback mode
+#      without touching the registry. The override is one-shot — it
+#      does NOT rebind the persisted registry.
 #   1. If `AMP_THREAD_ID` (or `AMP_CURRENT_THREAD_ID` as a documented
 #      alias from the Amp bundle) is present and matches the expected
 #      `T-<lower-hex-with-hyphens>` shape:
@@ -108,10 +115,22 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks before deriving SCRIPT_DIR. Docs explicitly support
+# symlinking this script into `~/.amp/toolbox/`; without the readlink
+# loop, SCRIPT_DIR would point at `~/.amp/toolbox` and CERBERUS_ROOT
+# would resolve to `$HOME` instead of the real Cerberus checkout. Same
+# pattern as bin/review-gate.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 # The plugin root is the directory containing bin/review-gate. With
 # the toolbox layout `<root>/.amp/toolbox/cerberus.sh`, that is two
-# levels up from this script.
+# levels up from this script (after symlink resolution above, so a
+# symlinked copy in `~/.amp/toolbox/` still locates the real checkout).
 CERBERUS_ROOT_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CERBERUS_ROOT_VAL="${CERBERUS_ROOT:-$CERBERUS_ROOT_DEFAULT}"
 REVIEW_GATE_BIN="${CERBERUS_REVIEW_GATE_BIN:-$CERBERUS_ROOT_VAL/bin/review-gate}"
@@ -270,6 +289,18 @@ __amp_write_registry() {
 # Returns the resolved run_key on stdout.
 # ---------------------------------------------------------------------------
 __amp_resolve_run_key() {
+    # Explicit override path: if the caller pre-set CERBERUS_RUN_KEY (or
+    # the legacy REVIEW_GATE_SESSION_KEY alias), honor it as-is. This is
+    # the documented escape hatch for clear-gate / status against a non-
+    # active run, or for switching out of UUID-fallback mode without
+    # touching the registry. Do NOT update the registry on this path —
+    # an explicit override is a one-shot override, not a registry rebind.
+    local explicit_run_key="${CERBERUS_RUN_KEY:-${REVIEW_GATE_SESSION_KEY:-}}"
+    if [ -n "$explicit_run_key" ]; then
+        printf '%s' "$explicit_run_key"
+        return 0
+    fi
+
     local thread_id="${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}"
 
     local persisted_run_key=""

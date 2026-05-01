@@ -30,6 +30,19 @@ ask --mode max --debate --prompt-file /tmp/question.md
 ask -- --prompt text that starts with a dash
 ```
 
+## Install
+
+The bash block below uses a `<CERBERUS_INSTALL_ROOT>` placeholder. At install
+time, either:
+
+- Replace every `<CERBERUS_INSTALL_ROOT>` token in this file with the absolute
+  path to your Cerberus checkout (the same substitution applied to
+  `templates/codex-hooks.json`), OR
+- Export `CERBERUS_ROOT=/abs/path/to/cerberus` in your shell profile so the
+  fallback is never reached.
+
+See `templates/codex-hooks.json` for the same install procedure.
+
 ## Run the Panel
 
 Invoke the shared backend with `CERBERUS_HOST=codex` exported, wait for the
@@ -49,7 +62,7 @@ export CERBERUS_HOST=codex
 # REVIEW_GATE_SESSION_KEY / CLAUDE_SESSION_ID, so explicit overrides win.
 if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ] \
    && [ -z "${CLAUDE_SESSION_ID:-}" ] && command -v jq >/dev/null 2>&1; then
-    __cb_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}"
+    __cb_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-<CERBERUS_INSTALL_ROOT>}}"
     if [ -r "$__cb_root/bin/review-gate-lib.sh" ]; then
         # shellcheck source=/dev/null
         . "$__cb_root/bin/review-gate-lib.sh" >/dev/null 2>&1 || :
@@ -67,7 +80,7 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ] \
     unset __cb_root
 fi
 
-review_gate="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/bin/review-gate"
+review_gate="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-<CERBERUS_INSTALL_ROOT>}}/bin/review-gate"
 
 # artifact-path is a read-only query; require it to succeed before we
 # start spawning, otherwise we have no review_dir to anchor results.
