@@ -698,9 +698,11 @@ Use `templates/team-tasks-template.md` as the canonical schema. This format is i
 
 **Team task format requirements:**
 - Header frontmatter includes `plan`, `spec` (or `N/A`), and `generated`.
+- The Task Summary table's `Tasks` column lists task IDs for each execution phase, not just counts, so `/cerberus:run-team` can recover phase membership if needed.
 - Each task heading is exactly `## T### — <subject>`.
 - The first fenced block immediately under each task heading is always ```meta.
-- The `meta` block includes `files`, `depends`, `acceptance`, and `plan_link`.
+- The `meta` block includes `phase`, `files`, `depends`, `acceptance`, and `plan_link`.
+- `phase` must match the task's execution phase label from the Task Summary table, such as `Setup`, `Foundation`, `System Wiring`, `US1: Login`, or `Polish`.
 - `depends` is always an explicit list, even when empty: `depends: []`.
 - The task body after the `meta` fence contains the full task spec from Phase 4, equivalent to the default TODO.md collapsible task detail content.
 

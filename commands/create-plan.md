@@ -1,42 +1,45 @@
 ---
-description: Interview the user to produce a technical implementation plan (design-focused), then run multi-model generator and plan review gate
-argument-hint: [--mode <fast|smart|max>] [--max-rounds <N>] [--from-spec <path/to/spec.md>] <feature or plan summary>
+description: Produce a technical implementation plan (design-focused), optionally interviewing the user, then run multi-model generator and plan review gate
+argument-hint: [--mode <fast|smart|max>] [--max-rounds <N>] [--from-spec <path/to/spec.md>] [--skip-interview] <feature or plan summary>
 ---
 
-# Create Plan (Interview + Multi-Model Generator)
+# Create Plan (Interview/Autonomous + Multi-Model Generator)
 
-Turn a spec or vague feature idea into a **design-focused implementation plan** by combining codebase research (including file existence checks), a targeted implementation-focused interview, multi-model generation, and a plan review gate.
+Turn a spec or vague feature idea into a **design-focused implementation plan** by combining codebase research (including file existence checks), either a targeted implementation-focused interview or an autonomous decision pass, multi-model generation, and a plan review gate.
 
 > **Note**: This command produces a **design plan** (architecture, constraints, approach). Task breakdown is handled separately by `/create-tasks`, which reads this plan and outputs to Beads issues (`--beads`) or TODO.md.
 
 ## Execution Contract (MANDATORY)
 
-You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**:
+You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**, except that `--skip-interview` replaces the interactive interview portion of Phase 2 with an autonomous decision pass:
 
 1. **Phase 0–1b**: Research codebase + integration point analysis + verify file existence
 2. **Phase 1c**: Write initial plan with `[TBD]` placeholders to a file (this becomes the canonical doc)
-3. **Phase 2**: Run an interview focused on filling `[TBD]` placeholders
-4. **Phase 3**: Build context from plan file + user answers
+3. **Phase 2**: Run an interview focused on filling `[TBD]` placeholders, or if `--skip-interview` is set, make and document autonomous decisions for those placeholders
+4. **Phase 3**: Build context from plan file + user answers or autonomous decisions
 5. **Phase 4**: Call generators (writes drafts to files)
 6. **Phase 5**: Use a **subagent** to synthesize drafts into the plan file
 7. **Phase 6**: Verify plan file is complete
 8. **Phase 7**: Run review gate
 
 **Hard Rules:**
-- You are **NOT ALLOWED** to produce a fully-filled plan before Phase 5
+- You are **NOT ALLOWED** to produce the final synthesized plan before Phase 5; Phase 2 may only fill skeleton placeholders with user answers or documented autonomous decisions for generator context
 - You **MUST** output an initial plan with `[TBD]` markers in Phase 1c
-- You **MUST** interview the user in Phase 2 before calling generators
-- You **MUST** wait for user answers before proceeding to Phase 3
-- Even if the user asks to "skip the interview" or "just generate the plan", you **MUST** still produce an initial plan with `[TBD]` and run at least one batch of questions
+- You **MUST** interview the user in Phase 2 before calling generators unless `--skip-interview` is set
+- You **MUST** wait for user answers before proceeding to Phase 3 unless `--skip-interview` is set
+- If `--skip-interview` is set, you **MUST NOT** ask plan-generation clarifying questions; instead, make safe decisions from the spec, codebase evidence, and existing project patterns, then document every decision and rationale in the plan
+- If the user asks to "skip the interview" or "just generate the plan" without passing `--skip-interview`, explain the workflow and proceed with skeleton + interview
 - At the start of each major phase (0–7), explicitly state which phase you are in and what you will do next
 
 ## Success Criteria (Mandatory)
 
 ✅ **Produce skeleton with `[TBD]` placeholders in Phase 1c** — The initial plan file must contain unfilled placeholders, not completed content.
 
-✅ **Run at least one interview batch in Phase 2** — Use `AskUserQuestion` to confirm assumptions, even if the spec seems complete.
+✅ **Run at least one interview batch in Phase 2 unless `--skip-interview` is set** — Use `AskUserQuestion` to confirm assumptions, even if the spec seems complete.
 
-✅ **Follow the workflow even when user asks to skip** — If user says "just generate the plan", explain the workflow and proceed with skeleton + interview.
+✅ **Honor `--skip-interview` explicitly** — Do not ask clarifying questions; fill placeholders through documented autonomous decisions and mark unsafe/product-owned decisions as Open Questions.
+
+✅ **Follow the workflow when user asks to skip without the flag** — If user says "just generate the plan" but did not pass `--skip-interview`, explain the workflow and proceed with skeleton + interview.
 
 ✅ **Write generator drafts to files** — Call the generate script which writes drafts to disk; pass file paths to the synthesis subagent.
 
@@ -52,10 +55,12 @@ Modes control depth and rigor. Use soft budgets—exit early when quality is suf
 | smart | Until ~80% filled | up to 3 | standard |
 | max | Until ~95% filled + proactive probing | up to 5 | alternatives + detailed risk register |
 
+With `--skip-interview`, apply the same depth targets to the autonomous decision pass instead of asking questions.
+
 **Override:** `--max-rounds <N>` sets the review round cap explicitly, overriding the mode default. Accepts any integer ≥ 0 (0 skips the review refinement loop entirely after the initial gate run).
 
 **Soft budget rules:**
-- Stop interviewing when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
+- Stop interviewing or deciding when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
 - In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
 - In `max`, actively probe for edge cases and failure modes even if user doesn't raise them
 
@@ -67,6 +72,17 @@ The user provides either:
   - "implement backend + UI for batch exports"
   - "execute the auth spec in docs/2025-01-10-auth-spec.md"
 - Optionally, a **spec path** via `--from-spec path/to/spec.md`
+- Optionally, `--skip-interview` to skip user questions and have the command make and document its own implementation decisions
+
+## Argument Handling
+
+Before Phase 0, parse command arguments:
+
+- `SKIP_INTERVIEW=true` only when the explicit `--skip-interview` flag is present.
+- Otherwise leave `SKIP_INTERVIEW` unset or set it to `false`; command examples must check `[[ "${SKIP_INTERVIEW:-false}" == "true" ]]` before forwarding the flag.
+- Remove `--skip-interview` from the feature summary before writing the plan.
+- If `--skip-interview` is not present, free-text phrases like "skip the interview" or "just generate it" are not enough to enter autonomous mode; follow the normal interview workflow.
+- If `--from-spec` is not provided and `--skip-interview` is set, treat the remaining feature summary as the starting artifact instead of asking whether a spec exists.
 
 ## Workflow
 
@@ -76,6 +92,7 @@ Before deep research, establish what you're planning against:
 
 1. **Detect a spec (if any)**:
    - If `--from-spec` is provided, use that path.
+   - Otherwise, if `--skip-interview` is set, do not ask; record `spec_path` as N/A and use the user's feature summary as the starting artifact.
    - Otherwise, ask: "Is there an existing spec for this? If so, what's the path?"
    - If there's no spec, treat the user's description as the spec summary.
 
@@ -175,10 +192,11 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 **IMPORTANT: When you finish Phase 1c:**
 - Write the skeleton plan to a file (e.g., `docs/YYYY-MM-DD-FEATURE-plan.md`) — this becomes the canonical doc
-- The skeleton MUST contain `[TBD]` placeholders — fill them only after user answers in Phase 2
-- Present the skeleton and your first batch of interview questions via `AskUserQuestion`
+- The skeleton MUST contain `[TBD]` placeholders — fill them only during Phase 2 from user answers or documented autonomous decisions
+- If `--skip-interview` is not set, present the skeleton and your first batch of interview questions via `AskUserQuestion`
+- If `--skip-interview` is set, do not present interview questions; immediately proceed to the Phase 2 autonomous decision pass
 
-**PHASE 2 GATE**: After sending Interview Batch 1, end your turn immediately. Do not proceed to Phase 3+ until the user answers or issues a stop signal. This gate is mandatory.
+**PHASE 2 GATE**: If `--skip-interview` is not set, after sending Interview Batch 1, end your turn immediately. Do not proceed to Phase 3+ until the user answers or issues a stop signal. This gate is mandatory for interactive mode.
 
 ```markdown
 # Implementation Plan: [Short Name]
@@ -201,6 +219,11 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 ### Testing Constraints
 - [TBD: coverage requirements]
+
+### Decision Log
+| Decision | Rationale | Evidence | Tradeoff / Risk / Follow-up |
+|----------|-----------|----------|------------------------------|
+| [TBD: decisions made during interview or autonomous mode] | [TBD] | [TBD] | [TBD] |
 
 ## Integration Analysis
 
@@ -233,15 +256,21 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 
 ### File Impact Summary
 [Pre-fill from Phase 1b verification table]
-```
-- src/auth/middleware.ts — Exists (modify)
-- src/auth/session.ts — New (create)
-- tests/auth/session.test.ts — New (create)
-```
+
+| Path | Status | Description |
+|------|--------|-------------|
+| `src/auth/middleware.ts` | Exists | Modify existing middleware |
+| `src/auth/session.ts` | **New** | Create session helper |
+| `tests/auth/session.test.ts` | **New** | Add tests |
 
 ## Risks, Edge Cases & Breaking Changes
+
+### Edge Cases & Failure Modes
 - [TBD or pre-fill from spec Edge Cases]
-- Backwards compatibility concerns: [TBD]
+
+### Breaking Changes & Compatibility
+- **Potential Breaking Changes**: [TBD]
+- **Mitigations**: [TBD]
 
 ## Testing & Validation Strategy
 - [TBD: Types of tests needed (unit, integration, e2e)]
@@ -252,6 +281,14 @@ Create a skeleton of the plan with placeholders based on research and spec. This
 | Spec AC | Approach |
 |---------|----------|
 | [Pre-fill from spec if available] | [How this plan addresses it] |
+
+## Spec/Legacy Fidelity
+[If a spec/legacy doc exists, confirm the plan matches it. Any deviations must be explicit.]
+
+### Deviation Log
+| Source | Deviation | Rationale | Approved? |
+|--------|-----------|-----------|-----------|
+| None | — | — | — |
 
 ## Open Questions
 - [List unknowns from research]
@@ -268,9 +305,37 @@ After this plan is approved, run `/create-tasks` to generate:
 - Mark unknowns as `[TBD]` or `[TBD: hint]`
 - The skeleton drives Phase 2 questions—every TBD is a potential question
 
-### Phase 2: Prioritized BFS Interview
+### Phase 2: Prioritized BFS Interview or Autonomous Decision Pass
 
 **Prerequisites:** Phase 1c skeleton MUST exist before starting Phase 2.
+
+#### Autonomous Decision Pass (`--skip-interview`)
+
+If `SKIP_INTERVIEW=true`, replace the interactive interview with this pass:
+
+1. **Do not use `AskUserQuestion` for plan-generation clarification.** The flag is the user's explicit delegation signal.
+2. **Fill each `[TBD]` from evidence where possible** using the spec, codebase research, integration table, verified file list, and established project patterns.
+3. **Choose safe defaults** for ambiguous implementation details: extend existing mechanisms, keep changes reversible, prefer feature flags for risky behavior, and use the repository's normal test layers.
+4. **Document every autonomous decision** in `### Decision Log` with rationale, evidence, tradeoff, and risk/follow-up. Also mirror durable assumptions in `## Assumptions & Constraints`.
+5. **Do not hide uncertainty.** If a decision is product-owned, irreversible, security-sensitive, or unsafe to guess, leave it in `## Open Questions` and design the plan so implementation can pause at that boundary.
+6. **Declare Phase 2 complete** once the skeleton has no unexplained `[TBD]` placeholders except intentionally retained Open Questions.
+
+Treat these as unsafe unknowns unless directly specified by the spec or strongly established by codebase patterns:
+
+- Product scope or UX behavior that changes user-visible semantics.
+- Irreversible data migrations or destructive operations.
+- Security, privacy, permission, compliance, or data-retention choices.
+- External API contracts or backwards-incompatible behavior.
+- Cost, performance, or SLO commitments.
+- Ownership or operational responsibility across teams/services.
+
+For unsafe unknowns, do not ask the user in skip-interview mode and do not silently choose. List the item in Open Questions and design the implementation so work can pause before the unsafe boundary.
+
+After this pass, proceed directly to Phase 3 in the same turn.
+
+#### Interactive Interview (default)
+
+If `SKIP_INTERVIEW=false`, run the interview below.
 
 **Load the interview engine:** Read `${CLAUDE_PLUGIN_ROOT}/prompts/interview-engine.md` for the full mechanism. Key principles below.
 
@@ -378,18 +443,18 @@ Or say "enough detail" to stop, "keep it high-level" to cap depth.
 
 **Gate Check — You MUST NOT proceed to Phase 3 until:**
 - [ ] A plan file exists from Phase 1c
-- [ ] You have run at least one batch of Phase 2 interview questions
-- [ ] You have collected user answers for the critical TBDs
+- [ ] Either you have run at least one batch of Phase 2 interview questions, or `--skip-interview` is set and the autonomous decision pass is complete
+- [ ] Either you have collected user answers for the critical TBDs, or you have documented autonomous decisions/open questions for them
 - [ ] Any remaining unknowns are marked as Open Questions
 
 Create a compact context block for generators:
 
-- **Current plan file** (with TBDs filled from interview, remaining gaps marked)
+- **Current plan file** (with TBDs filled from interview or autonomous decisions, remaining gaps marked)
 - **Implementation target summary** (1–2 paragraphs)
 - **Starting artifacts**: Spec path + summary (if any)
 - **Codebase findings**: Key files/modules, patterns, constraints, ownership
 - **File existence table**: For each path: Exists / New / Ambiguous
-- **User answers**: Structured bullets mapped to plan sections
+- **User answers or autonomous decisions**: Structured bullets mapped to plan sections
 - **Decisions made + rationale**
 - **Remaining open questions**
 
@@ -401,6 +466,7 @@ Create a compact context block for generators:
 - [ ] Dependencies
 - [ ] Implementation constraints (architectural, areas to avoid)
 - [ ] Testing & verification strategy (coverage, quality gates)
+- [ ] Decision Log with rationale/evidence for major decisions, especially autonomous ones
 - [ ] Mapping from spec Acceptance Criteria to design approach
 
 ### Phase 4: Run Multi-Model Generators
@@ -427,17 +493,19 @@ cat "${CLAUDE_PLUGIN_ROOT}/prompts/generators/create-plan.md" > "$PROMPT_TMP" &&
 EOF
 ```
 
-Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
+Now append the Phase 3 context (skeleton + findings + user answers or autonomous decisions) to `$PROMPT_TMP`.
 
 Spawn generators with the mode flag. The generate script requires an output directory as the first argument and writes drafts to files, returning their paths:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
+If `--skip-interview` was passed to this command, add `--skip-interview` to the `bin/generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
+
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && "${CLAUDE_PLUGIN_ROOT}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then "${CLAUDE_PLUGIN_ROOT}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else "${CLAUDE_PLUGIN_ROOT}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
 ```
 
 Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by the generate script. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
@@ -465,13 +533,14 @@ Draft files to read:
 Plan file to update: docs/YYYY-MM-DD-FEATURE-plan.md
 
 Synthesis rules:
-1. Use the existing plan file as canonical structure — don't invent new sections
+1. Use the existing plan file as the canonical structure. Preserve its section order, but add any missing required sections from the create-plan template rather than dropping generator content.
 2. Identify common structure and tasks — higher confidence where drafts agree
 3. Resolve conflicts using the spec and codebase patterns
 4. Fill remaining [TBD] placeholders with synthesized content
 5. Mark unresolved items as Open Questions
 6. Respect file existence: label new files as "New: path/to/file"
-7. Ensure all template sections are complete:
+7. Preserve and complete the Decision Log; if `--skip-interview` was used, include every autonomous decision with rationale, evidence, tradeoff, and risk/follow-up
+8. Ensure all template sections are complete:
    - Context & Goals, Scope & Non-Goals, Assumptions & Constraints
    - Prerequisites, High-Level Approach, Technical Design (architecture/data/interfaces)
    - Risks/Edge Cases, Testing & Validation, Open Questions
@@ -494,6 +563,8 @@ The subagent will:
 
 The subagent updated the plan file in Phase 5. Confirm the [TBD] placeholders have been filled.
 
+If `--skip-interview` was used, also confirm `### Decision Log` documents the autonomous decisions, their rationale, supporting evidence, tradeoffs, and risk/follow-up.
+
 ### Phase 7: Review Gate with Prioritized BFS Refinement
 
 Spawn external reviewers on the plan file. Pass `--max-rounds` so the daemon's auto-respawn limit matches the command-level cap:
@@ -506,6 +577,14 @@ ${CLAUDE_PLUGIN_ROOT}/bin/review-gate spawn-plan-review --max-rounds "$MAX_ROUND
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.
+
+`--skip-interview` only skips Phase 0 spec-path questioning and the Phase 2 implementation interview. It does not skip the review gate.
+
+During review refinement in skip-interview mode:
+- Silently fix mechanical issues.
+- For safe, conventional design fixes, apply the same autonomous-decision rules and record the decision in the Decision Log.
+- For unsafe/product-owned reviewer findings, mark them as Open Questions or approval-required risks.
+- Only use `AskUserQuestion` if the review gate cannot proceed without a human decision.
 
 **IMPORTANT: Use the `AskUserQuestion` tool for ALL clarifying questions during review.** Put findings + options in a single tool call. Plain text questions are not interactive.
 

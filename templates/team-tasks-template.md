@@ -4,6 +4,8 @@
   Parser contract for `/cerberus:run-team`:
   - Each task starts with a level-two heading at column 0: `## T### — <subject>`.
   - The first fenced block immediately under that heading MUST be ```meta.
+  - The meta block SHOULD include `phase` so `/cerberus:run-team` can run
+    completed-phase epic verification after each execution phase.
   - No narrative text may appear between the heading and the meta block.
   - The task body begins after the first meta fence closes and continues until
     the next `## ` heading at column 0 or EOF.
@@ -31,14 +33,15 @@ generated: <ISO timestamp>
 
 | Phase | Tasks | Dependencies |
 |-------|-------|--------------|
-| Setup | N | [] |
-| Foundation | N | [T001] |
-| US1: <Name> | N | [T00X] |
+| Setup | T001 | [] |
+| Foundation | T002 | [T001] |
+| US1: <Name> | T003, T004 | [T002] |
 
 ---
 
 ## T001 — <subject>
 ```meta
+phase: Setup
 files: [path/a.py, path/b.py]
 depends: []
 acceptance: [AC1, AC2]
@@ -75,6 +78,7 @@ plan_link: <plan>.md#L45-L67
 
 ## T002 — <subject>
 ```meta
+phase: Foundation
 files: [path/c.py]
 depends: [T001]
 acceptance: [AC3]
@@ -132,5 +136,5 @@ T001 -> T002
 ## Notes
 
 - Total tasks: N
-- Execution model: strictly serial in `/cerberus:run-team` initial cut
+- Execution model: `/cerberus:run-team` may run independent same-phase tasks in parallel when dependencies and file scopes are safe; completion/review remains serialized
 - Each implementer commit must include a `Cerberus-Task: T###` trailer

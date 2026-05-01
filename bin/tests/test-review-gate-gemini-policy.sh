@@ -36,6 +36,7 @@ trap cleanup EXIT
 TEST_DIR=$(mktemp -d)
 FAKE_BIN="$TEST_DIR/bin"
 REVIEWS_DIR="$TEST_DIR/reviews"
+FAST_REVIEWS_DIR="$TEST_DIR/reviews-fast"
 PROMPT_FILE="$TEST_DIR/review.prompt"
 SCHEMA_FILE="$TEST_DIR/review-schema.json"
 RUNNER_BASH="${BASH:-/bin/bash}"
@@ -49,7 +50,7 @@ SLEEP_BIN="$(command -v sleep)"
 CAT_BIN="$(command -v cat)"
 GREP_BIN="$(command -v grep)"
 
-mkdir -p "$FAKE_BIN" "$REVIEWS_DIR"
+mkdir -p "$FAKE_BIN" "$REVIEWS_DIR" "$FAST_REVIEWS_DIR"
 
 cat > "$FAKE_BIN/nohup" <<EOF
 #!$RUNNER_BASH
@@ -69,7 +70,10 @@ EOF
 
 cat > "$FAKE_BIN/gemini" <<EOF
 #!$RUNNER_BASH
-printf '%s\n' "\$*" > "$GEMINI_ARGS_FILE"
+: > "$GEMINI_ARGS_FILE"
+for arg in "\$@"; do
+    printf '%s\n' "\$arg" >> "$GEMINI_ARGS_FILE"
+done
 printf '%s\n' "\${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-}" > "$GEMINI_SETTINGS_FILE"
 
 policy_path=""
@@ -159,6 +163,23 @@ export GEMINI_MODEL=""
 export CODEX_MODEL=""
 export CLAUDE_MODEL=""
 
+arg_after() {
+    local flag="$1"
+    awk -v flag="$flag" 'prev == flag { print; exit } { prev = $0 }' "$GEMINI_ARGS_FILE"
+}
+
+wait_for_gemini() {
+    local reviews_dir="$1"
+    local i
+    for ((i = 0; i < 40; i++)); do
+        if [[ -f "$reviews_dir/gemini.done" || -f "$reviews_dir/gemini.failed" ]]; then
+            return 0
+        fi
+        "$SLEEP_BIN" 0.1
+    done
+    return 1
+}
+
 log_test "spawn_reviewer invokes gemini with Policy Engine read-only controls"
 
 env \
@@ -173,15 +194,11 @@ env \
     "$RUNNER_BASH" -c '
         source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
         source "$PLUGIN_ROOT/bin/review-gate-models.sh"
+        resolve_intelligence_mode smart
         spawn_reviewer gemini gemini "$PROMPT_FILE" "$SCHEMA_FILE"
     '
 
-for ((i = 0; i < 40; i++)); do
-    if [[ -f "$REVIEWS_DIR/gemini.done" || -f "$REVIEWS_DIR/gemini.failed" ]]; then
-        break
-    fi
-    "$SLEEP_BIN" 0.1
-done
+wait_for_gemini "$REVIEWS_DIR"
 
 if [[ -f "$REVIEWS_DIR/gemini.failed" ]]; then
     output=$(
@@ -201,6 +218,11 @@ if [[ ! -f "$GEMINI_ARGS_FILE" ]]; then
 fi
 
 gemini_args=$("$CAT_BIN" "$GEMINI_ARGS_FILE")
+model_arg=$(arg_after "-m")
+if [[ "$model_arg" != "gemini-3.1-pro-preview" ]]; then
+    log_fail "expected gemini smart reviewer to use gemini-3.1-pro-preview, got: $model_arg"
+fi
+
 if [[ "$gemini_args" == *"--allowed-tools"* ]]; then
     log_fail "gemini should not receive deprecated --allowed-tools, got: $gemini_args"
 fi
@@ -212,6 +234,21 @@ fi
 settings_path=$("$CAT_BIN" "$GEMINI_SETTINGS_FILE")
 if [[ "$settings_path" != "$PLUGIN_ROOT/config/gemini-readonly-settings.json" ]]; then
     log_fail "expected system settings path to point at Cerberus config, got: $settings_path"
+fi
+
+if ! jq -e '
+    .experimental.dynamicModelConfiguration == true and
+    (.modelConfigs.modelIdResolutions["gemini-3.1-pro-preview"].default == "gemini-3.1-pro-preview") and
+    (.modelConfigs.modelIdResolutions["gemini-3.1-pro-preview"].contexts | length == 0) and
+    (.modelConfigs.modelIdResolutions["gemini-3-flash-preview"].default == "gemini-3-flash-preview") and
+    (.modelConfigs.modelIdResolutions["gemini-3-flash-preview"].contexts | length == 0) and
+    (.modelConfigs.modelIdResolutions["gemini-3.1-flash-lite-preview"].default == "gemini-3.1-flash-lite-preview") and
+    (.modelConfigs.modelIdResolutions["gemini-3.1-flash-lite-preview"].contexts | length == 0) and
+    (.modelConfigs.modelChains.preview | length == 1) and
+    (.modelConfigs.modelChains.preview[0].model == "gemini-3.1-pro-preview") and
+    (.modelConfigs.modelChains.preview[0].isLastResort == true)
+' "$settings_path" >/dev/null; then
+    log_fail "expected Gemini routing to strictly pin Pro, Flash, and Flash-Lite concrete models"
 fi
 
 policy_path=$("$CAT_BIN" "$GEMINI_POLICY_FILE")
@@ -237,6 +274,46 @@ fi
 
 log_pass "gemini reviewer uses policy-based read-only invocation"
 
+log_test "fast mode still invokes gemini flash"
+
+env \
+    PATH="$FAKE_BIN:$PATH" \
+    PLUGIN_ROOT="$PLUGIN_ROOT" \
+    REVIEWS_DIR="$FAST_REVIEWS_DIR" \
+    GEMINI_MODEL="$GEMINI_MODEL" \
+    CODEX_MODEL="$CODEX_MODEL" \
+    CLAUDE_MODEL="$CLAUDE_MODEL" \
+    PROMPT_FILE="$PROMPT_FILE" \
+    SCHEMA_FILE="$SCHEMA_FILE" \
+    "$RUNNER_BASH" -c '
+        source "$PLUGIN_ROOT/bin/review-gate-lib.sh"
+        source "$PLUGIN_ROOT/bin/review-gate-models.sh"
+        resolve_intelligence_mode fast
+        spawn_reviewer gemini gemini "$PROMPT_FILE" "$SCHEMA_FILE"
+    '
+
+wait_for_gemini "$FAST_REVIEWS_DIR"
+
+if [[ -f "$FAST_REVIEWS_DIR/gemini.failed" ]]; then
+    output=$(
+        if [[ -f "$FAST_REVIEWS_DIR/gemini.json" ]]; then
+            "$CAT_BIN" "$FAST_REVIEWS_DIR/gemini.json"
+        fi
+    )
+    log_fail "gemini fast reviewer failed; output: $output"
+fi
+
+if [[ ! -f "$FAST_REVIEWS_DIR/gemini.done" ]]; then
+    log_fail "expected fast gemini.done to be created"
+fi
+
+model_arg=$(arg_after "-m")
+if [[ "$model_arg" != "gemini-3-flash-preview" ]]; then
+    log_fail "expected gemini fast reviewer to use gemini-3-flash-preview, got: $model_arg"
+fi
+
+log_pass "fast mode uses gemini flash"
+
 log_test "repair_review_output invokes gemini with Policy Engine read-only controls"
 
 repair_output=$(
@@ -258,6 +335,11 @@ if [[ "$repair_output" != *'"verdict":"PASS"'* ]]; then
 fi
 
 gemini_args=$("$CAT_BIN" "$GEMINI_ARGS_FILE")
+model_arg=$(arg_after "-m")
+if [[ "$model_arg" != "gemini-3.1-flash-lite-preview" ]]; then
+    log_fail "expected gemini repair to use gemini-3.1-flash-lite-preview, got: $model_arg"
+fi
+
 if [[ "$gemini_args" == *"--allowed-tools"* ]]; then
     log_fail "gemini repair should not receive deprecated --allowed-tools, got: $gemini_args"
 fi

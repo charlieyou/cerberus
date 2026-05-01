@@ -154,13 +154,14 @@ ${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-spec --prompt-file path/to/prom
 
 ### Create Plan (Generator)
 
-Interview the user, run multi-model generators, synthesize an implementation plan, then run the plan review gate:
+Interview the user (or use `--skip-interview` for autonomous decisions), run multi-model generators, synthesize an implementation plan, then run the plan review gate:
 
 ```
 /cerberus:create-plan                              # Create plan with smart mode (default)
 /cerberus:create-plan --from-spec docs/spec.md    # Start from an existing spec
 /cerberus:create-plan --mode fast                  # Faster, essential questions only
 /cerberus:create-plan --mode max                   # Maximum depth with risk analysis
+/cerberus:create-plan --skip-interview             # Make and document autonomous decisions instead of interviewing
 ```
 
 **Workflow phases:**
@@ -168,7 +169,7 @@ Interview the user, run multi-model generators, synthesize an implementation pla
 2. **Codebase research** - Identify files, patterns, and integration points
 3. **File verification** - Check which files exist vs need creation
 4. **Draft skeleton** - Create plan template with TBD placeholders
-5. **Implementation interview** - Ask about scope, constraints, and testing
+5. **Implementation interview or autonomous decision pass** - Ask about scope, constraints, and testing, or with `--skip-interview`, make and document safe defaults
 6. **Multi-model generation** - Codex, Gemini, and Claude generate draft plans
 7. **Subagent synthesis** - Merge drafts into coherent plan (preserves context)
 8. **Review gate** - Iterate until consensus passes
@@ -184,7 +185,8 @@ Override with `--max-rounds <N>` (e.g. `--max-rounds 0` skips the refinement loo
 You can also run the generator directly:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/bin/generate --type=create-plan --prompt-file path/to/prompt.md
+${CLAUDE_PLUGIN_ROOT}/bin/generate /tmp/create-plan-drafts --type=create-plan --prompt-file path/to/prompt.md
+${CLAUDE_PLUGIN_ROOT}/bin/generate /tmp/create-plan-drafts --type=create-plan --skip-interview --prompt-file path/to/prompt.md
 ```
 
 ### Healthcheck & Architecture Review

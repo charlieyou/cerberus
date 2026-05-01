@@ -64,6 +64,7 @@ Options:
   --prompt <text>       Inline prompt text (replaces base prompt)
   --focus <text>        Focus area to append to base prompt
   --analysis-file <path>  Append analysis output from a file (repeatable)
+  --skip-interview      For create-plan: generate autonomously, making and documenting decisions instead of asking clarifying questions
   [--] <focus>          Optional focus text (or trailing text; -- forces focus)
 USAGE
 }
@@ -268,6 +269,7 @@ review_gate_generate() {
     local focus_area=""
     local mode=""
     local output_dir=""
+    local skip_interview=false
     local -a extra_args=()
     local -a analysis_files=()
 
@@ -342,6 +344,10 @@ review_gate_generate() {
                 analysis_files+=("${2:-}")
                 shift 2
                 ;;
+            --skip-interview)
+                skip_interview=true
+                shift
+                ;;
             -h|--help)
                 usage
                 return 0
@@ -370,6 +376,10 @@ review_gate_generate() {
         focus_area="${extra_args[*]}"
     fi
 
+    if [[ "$skip_interview" == "true" && "$review_type" != "create-plan" ]]; then
+        die "--skip-interview is only supported with --type create-plan"
+    fi
+
     mode=$(normalize_mode "$mode")
     if [[ -z "$mode" ]]; then
         mode="smart"
@@ -395,6 +405,11 @@ review_gate_generate() {
         else
             die "No prompt found for type '$review_type' at $prompt_path"
         fi
+    fi
+
+    if [[ "$skip_interview" == "true" ]]; then
+        echo "Autonomous decision mode: enabled (--skip-interview)" >&2
+        prompt_content=$'## Caller Options\n\nAUTONOMOUS_DECISION_MODE=enabled\n\nDo not ask clarifying questions. Make safe, conventional implementation-plan decisions from the provided spec, codebase evidence, and existing project patterns. Document each autonomous decision, assumption, tradeoff, and unresolved risk in the generated plan.\n\n'"$prompt_content"
     fi
 
     if [[ ${#analysis_files[@]} -gt 0 ]]; then
@@ -493,7 +508,7 @@ review_gate_generate() {
             fi
 
             if [[ "$codex_json_mode" == "true" ]]; then
-                if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check --json - < "$prompt_input" > "$codex_raw" 2>&1; then
+                if "${timeout_prefix[@]}" codex exec ${codex_extra_args[@]+"${codex_extra_args[@]}"} -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check --json - < "$prompt_input" > "$codex_raw" 2>&1; then
                     extract_codex_content "$codex_raw" > "$codex_draft"
                     safe_extract_telemetry codex "$codex_raw" > "$codex_stats"
                     touch "$codex_done"
@@ -502,7 +517,7 @@ review_gate_generate() {
                 fi
             else
                 # Fallback to text mode
-                if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check - < "$prompt_input" > "$codex_draft" 2>&1; then
+                if "${timeout_prefix[@]}" codex exec ${codex_extra_args[@]+"${codex_extra_args[@]}"} -m "$codex_model" -c model_reasoning_effort="$codex_reasoning" -s read-only --skip-git-repo-check - < "$prompt_input" > "$codex_draft" 2>&1; then
                     _emit_empty_telemetry codex > "$codex_stats"
                     touch "$codex_done"
                 else

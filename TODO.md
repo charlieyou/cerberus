@@ -1,6 +1,6 @@
 # TODO
 
-* Gemini: Fall back to flash when pro usage limits are hit
+* Amp Agent Teams
 
 * add /constitution command (from Spec Kit)
   - Create/update project principles at `/memory/constitution.md`
@@ -45,4 +45,11 @@ Task review should use multi-models
 
 * add the spec/plan link into every issue
 
-## Test Posture Review
+## Run Team
+
+* Cursor-style continuous planning
+
+* Block dangerous commands in implementers
+* Persist P2/P3 review issues
+* Config-driven validation, more triggers
+* File locking + enable parallel implementers
