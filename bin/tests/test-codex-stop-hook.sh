@@ -10,15 +10,15 @@
 # probe the failure-open path).
 #
 #   Case 1  — Row 1:  registry + run dir present, but no gate-state.json
-#                     → status exits 4 → {"action":"allow"}.
-#   Case 2  — Row 2:  no registry → {"action":"allow"}.
+#                     → status exits 4 → {"continue":true}.
+#   Case 2  — Row 2:  no registry → {"continue":true}.
 #   Case 3  — Row 4:  pending + WAIT=0 → allow with "still running" note.
 #   Case 4  — Row 5a: pending + WAIT=N, reviewers DON'T finish during the
 #                     wait window → fall through to row 4 message.
 #   Case 5  — Row 5b: pending + WAIT=N, reviewers finish during the wait
 #                     window → re-evaluation produces row 8 (allow).
 #   Case 6  — Row 6:  awaiting_decision + blocking findings (FAIL/P0) →
-#                     {"action":"continue", "userMessage":...}.
+#                     {"decision":"block", "reason":...}.
 #   Case 7  — Row 8:  resolved + consensus_verdict=pass → allow.
 #   Case 8  — Row 9:  resolved + consensus_verdict=fail → continue.
 #   Case 9  — Row 10: malformed gate-state.json → allow with "unreadable"
@@ -33,7 +33,7 @@
 #
 # Happy-path probes carried forward from T007:
 #   Happy A — script entry point exists, executable.
-#   Happy B — stub reads stdin and emits valid {action:allow,...}, exit 0.
+#   Happy B — stub reads stdin and emits valid {continue:true,...}, exit 0.
 #   Happy C — INT/TERM/HUP trap installed at script load (static check).
 
 set -uo pipefail
@@ -244,12 +244,54 @@ make_no_jq_path() {
     echo "$d"
 }
 
+assert_codex_stop_schema() {
+    local out="$1"
+    jq -s -e '
+        length == 1
+        and (.[0] | type == "object")
+        and (.[0] |
+          (
+            (.continue == true)
+            and ((has("systemMessage") | not) or (.systemMessage | type == "string"))
+            and ((keys - ["continue", "systemMessage"]) | length == 0)
+          )
+          or
+          (
+            (.decision == "block")
+            and (.reason | type == "string")
+            and (.reason | length > 0)
+            and ((keys - ["decision", "reason"]) | length == 0)
+          )
+        )
+    ' "$out" >/dev/null 2>&1
+}
+
+stop_action() {
+    local out="$1"
+    if ! assert_codex_stop_schema "$out"; then
+        echo "invalid"
+        return 0
+    fi
+    jq -s -r '.[0] | if .decision == "block" then "continue" elif .continue == true then "allow" else empty end' \
+        "$out" 2>/dev/null || echo ""
+}
+
+stop_system_message() {
+    local out="$1"
+    jq -s -r '.[0].systemMessage // empty' "$out" 2>/dev/null || echo ""
+}
+
+stop_reason() {
+    local out="$1"
+    jq -s -r '.[0].reason // empty' "$out" 2>/dev/null || echo ""
+}
+
 # ---------------------------------------------------------------------------
 # Case 1 — Row 1: registry + run dir present, no gate-state.json.
 # Status returns exit 4 ({"status":"no_active_gate"}). Hook emits plain
 # allow.
 # ---------------------------------------------------------------------------
-log_test "Case 1 — Row 1: status exits 4 → {action:allow}"
+log_test "Case 1 — Row 1: status exits 4 → {continue:true}"
 c1_home="$TEST_DIR/case1"
 mkdir -p "$c1_home"
 c1_workspace="/tmp/cerberus-c1"
@@ -260,18 +302,17 @@ c1_out="$TEST_DIR/c1.out"
 c1_err="$TEST_DIR/c1.err"
 c1_rc=0
 run_hook "$c1_home" "$c1_workspace" "sess-c1-001" "$c1_out" "$c1_err" || c1_rc=$?
-c1_action="$(jq -r '.action // empty' "$c1_out" 2>/dev/null || echo "")"
-c1_note_present="$(jq -r 'has("note")' "$c1_out" 2>/dev/null || echo "error")"
-if [[ "$c1_rc" -eq 0 && "$c1_action" == "allow" && "$c1_note_present" == "false" ]]; then
-    log_pass "Case 1 — Row 1: {action:allow}, exit 0, no note"
+c1_action="$(stop_action "$c1_out")"
+if [[ "$c1_rc" -eq 0 && "$c1_action" == "allow" ]]; then
+    log_pass "Case 1 — Row 1: {continue:true}, exit 0, no unsupported fields"
 else
-    log_fail "Case 1: rc=$c1_rc action=$c1_action note_present=$c1_note_present body=$(cat "$c1_out") stderr=$(cat "$c1_err")"
+    log_fail "Case 1: rc=$c1_rc action=$c1_action body=$(cat "$c1_out") stderr=$(cat "$c1_err")"
 fi
 
 # ---------------------------------------------------------------------------
-# Case 2 — Row 2: no registry → {action:allow}.
+# Case 2 — Row 2: no registry → {continue:true}.
 # ---------------------------------------------------------------------------
-log_test "Case 2 — Row 2: no registry → {action:allow}"
+log_test "Case 2 — Row 2: no registry → {continue:true}"
 c2_home="$TEST_DIR/case2"
 mkdir -p "$c2_home"
 c2_workspace="/tmp/cerberus-c2"
@@ -280,9 +321,9 @@ c2_out="$TEST_DIR/c2.out"
 c2_err="$TEST_DIR/c2.err"
 c2_rc=0
 run_hook "$c2_home" "$c2_workspace" "sess-c2-001" "$c2_out" "$c2_err" || c2_rc=$?
-c2_action="$(jq -r '.action // empty' "$c2_out" 2>/dev/null || echo "")"
+c2_action="$(stop_action "$c2_out")"
 if [[ "$c2_rc" -eq 0 && "$c2_action" == "allow" ]]; then
-    log_pass "Case 2 — Row 2: no registry → {action:allow}, exit 0"
+    log_pass "Case 2 — Row 2: no registry → {continue:true}, exit 0"
 else
     log_fail "Case 2: rc=$c2_rc action=$c2_action body=$(cat "$c2_out") stderr=$(cat "$c2_err")"
 fi
@@ -304,8 +345,8 @@ c3_rc=0
 run_hook "$c3_home" "$c3_workspace" "sess-c3-001" "$c3_out" "$c3_err" \
     "CERBERUS_CODEX_STOP_WAIT_SECONDS=0" \
     || c3_rc=$?
-c3_action="$(jq -r '.action // empty' "$c3_out" 2>/dev/null || echo "")"
-c3_note="$(jq -r '.note // empty' "$c3_out" 2>/dev/null || echo "")"
+c3_action="$(stop_action "$c3_out")"
+c3_note="$(stop_system_message "$c3_out")"
 if [[ "$c3_rc" -eq 0 && "$c3_action" == "allow" && "$c3_note" == *"reviewers still running"* ]]; then
     log_pass "Case 3 — Row 4: allow + still-running note"
 else
@@ -334,8 +375,8 @@ run_hook "$c4_home" "$c4_workspace" "sess-c4-001" "$c4_out" "$c4_err" \
     || c4_rc=$?
 c4_t1=$(date +%s)
 c4_elapsed=$((c4_t1 - c4_t0))
-c4_action="$(jq -r '.action // empty' "$c4_out" 2>/dev/null || echo "")"
-c4_note="$(jq -r '.note // empty' "$c4_out" 2>/dev/null || echo "")"
+c4_action="$(stop_action "$c4_out")"
+c4_note="$(stop_system_message "$c4_out")"
 # Loose timing assertion: must have actually waited ~2s (timeout) but
 # not absurdly longer (would suggest infinite-loop regression).
 if [[ "$c4_rc" -eq 0 && "$c4_action" == "allow" \
@@ -390,8 +431,8 @@ if [[ "$c5_done" -ne 1 ]]; then
 fi
 wait "$c5_pid" 2>/dev/null
 c5_rc=$?
-c5_action="$(jq -r '.action // empty' "$c5_out" 2>/dev/null || echo "")"
-c5_note="$(jq -r '.note // empty' "$c5_out" 2>/dev/null || echo "")"
+c5_action="$(stop_action "$c5_out")"
+c5_note="$(stop_system_message "$c5_out")"
 # Successful re-evaluation under row 8: action=allow + no row-4 note +
 # no row-3 'no review dir' note. (We accept either no `note` field at
 # all, or a note that does NOT contain "still running".)
@@ -431,10 +472,10 @@ c6_out="$TEST_DIR/c6.out"
 c6_err="$TEST_DIR/c6.err"
 c6_rc=0
 run_hook "$c6_home" "$c6_workspace" "sess-c6-001" "$c6_out" "$c6_err" || c6_rc=$?
-c6_action="$(jq -r '.action // empty' "$c6_out" 2>/dev/null || echo "")"
-c6_msg="$(jq -r '.userMessage // empty' "$c6_out" 2>/dev/null || echo "")"
+c6_action="$(stop_action "$c6_out")"
+c6_msg="$(stop_reason "$c6_out")"
 if [[ "$c6_rc" -eq 0 && "$c6_action" == "continue" && -n "$c6_msg" ]]; then
-    log_pass "Case 6 — Row 6: continue + non-empty userMessage"
+    log_pass "Case 6 — Row 6: continue + non-empty reason"
 else
     log_fail "Case 6: rc=$c6_rc action=$c6_action msg='$c6_msg' body=$(cat "$c6_out") stderr=$(cat "$c6_err")"
 fi
@@ -458,8 +499,8 @@ c7_out="$TEST_DIR/c7.out"
 c7_err="$TEST_DIR/c7.err"
 c7_rc=0
 run_hook "$c7_home" "$c7_workspace" "sess-c7-001" "$c7_out" "$c7_err" || c7_rc=$?
-c7_action="$(jq -r '.action // empty' "$c7_out" 2>/dev/null || echo "")"
-c7_note="$(jq -r '.note // empty' "$c7_out" 2>/dev/null || echo "")"
+c7_action="$(stop_action "$c7_out")"
+c7_note="$(stop_system_message "$c7_out")"
 if [[ "$c7_rc" -eq 0 && "$c7_action" == "allow" && "$c7_note" == "" ]]; then
     log_pass "Case 7 — Row 8: allow, no note"
 else
@@ -485,10 +526,10 @@ c8_out="$TEST_DIR/c8.out"
 c8_err="$TEST_DIR/c8.err"
 c8_rc=0
 run_hook "$c8_home" "$c8_workspace" "sess-c8-001" "$c8_out" "$c8_err" || c8_rc=$?
-c8_action="$(jq -r '.action // empty' "$c8_out" 2>/dev/null || echo "")"
-c8_msg="$(jq -r '.userMessage // empty' "$c8_out" 2>/dev/null || echo "")"
+c8_action="$(stop_action "$c8_out")"
+c8_msg="$(stop_reason "$c8_out")"
 if [[ "$c8_rc" -eq 0 && "$c8_action" == "continue" && -n "$c8_msg" ]]; then
-    log_pass "Case 8 — Row 9: continue + non-empty userMessage"
+    log_pass "Case 8 — Row 9: continue + non-empty reason"
 else
     log_fail "Case 8: rc=$c8_rc action=$c8_action msg='$c8_msg' body=$(cat "$c8_out") stderr=$(cat "$c8_err")"
 fi
@@ -508,8 +549,8 @@ c9_out="$TEST_DIR/c9.out"
 c9_err="$TEST_DIR/c9.err"
 c9_rc=0
 run_hook "$c9_home" "$c9_workspace" "sess-c9-001" "$c9_out" "$c9_err" || c9_rc=$?
-c9_action="$(jq -r '.action // empty' "$c9_out" 2>/dev/null || echo "")"
-c9_note="$(jq -r '.note // empty' "$c9_out" 2>/dev/null || echo "")"
+c9_action="$(stop_action "$c9_out")"
+c9_note="$(stop_system_message "$c9_out")"
 if [[ "$c9_rc" -eq 0 && "$c9_action" == "allow" && "$c9_note" == *"unreadable"* ]]; then
     log_pass "Case 9 — Row 10: allow + unreadable note"
 else
@@ -540,7 +581,7 @@ c10_rc=0
 run_hook "$c10_home" "$c10_workspace" "sess-c10-001" "$c10_out" "$c10_err" \
     "CERBERUS_REVIEW_GATE_BIN=$c10_stub" \
     || c10_rc=$?
-c10_action="$(jq -r '.action // empty' "$c10_out" 2>/dev/null || echo "")"
+c10_action="$(stop_action "$c10_out")"
 c10_diag=""
 if grep -q "review-gate status exited 2" "$c10_err" 2>/dev/null; then
     c10_diag="found"
@@ -577,11 +618,11 @@ else
 $c11_payload
 EOF
     c11_body="$(cat "$c11_out" 2>/dev/null || echo "")"
-    # Cannot use jq here (we just hid it). Coarse string match: action:allow.
-    if [[ "$c11_rc" -eq 0 && "$c11_body" == *'"action"'*'"allow"'* ]]; then
-        log_pass "Case 11 — Row 12: jq missing → action:allow"
+    c11_action="$(stop_action "$c11_out")"
+    if [[ "$c11_rc" -eq 0 && "$c11_action" == "allow" ]]; then
+        log_pass "Case 11 — Row 12: jq missing → continue:true"
     else
-        log_fail "Case 11: rc=$c11_rc body='$c11_body' stderr=$(cat "$c11_err")"
+        log_fail "Case 11: rc=$c11_rc action=$c11_action body='$c11_body' stderr=$(cat "$c11_err")"
     fi
 fi
 
@@ -622,9 +663,9 @@ c12_valid_json="false"
 if echo "$c12_body" | jq -e . >/dev/null 2>&1; then
     c12_valid_json="true"
 fi
-c12_action="$(echo "$c12_body" | jq -r '.action // empty' 2>/dev/null || echo "")"
+c12_action="$(stop_action "$c12_out")"
 if [[ "$c12_rc" -eq 0 && "$c12_valid_json" == "true" && "$c12_action" == "allow" ]]; then
-    log_pass "Case 12 — Row 13a: SIGTERM → valid {action:allow}, exit 0"
+    log_pass "Case 12 — Row 13a: SIGTERM → valid {continue:true}, exit 0"
 else
     log_fail "Case 12: rc=$c12_rc valid=$c12_valid_json action=$c12_action body='$c12_body' stderr=$(cat "$c12_err")"
 fi
@@ -661,14 +702,14 @@ c13_rc=$?
 c13_body="$(cat "$c13_out" 2>/dev/null || echo "")"
 c13_valid="false"
 if echo "$c13_body" | jq -e . >/dev/null 2>&1; then c13_valid="true"; fi
-c13_action="$(echo "$c13_body" | jq -r '.action // empty' 2>/dev/null || echo "")"
+c13_action="$(stop_action "$c13_out")"
 # Verify no orphan review-gate child remains attached to our session
 # tree. Coarse check: the hook PID is gone; its children are reparented
 # to init when killed, but the hook should have killed the wait child
 # via the trap, so a freshly-launched ps shouldn't show a review-gate
 # wait against our test review_dir within a brief window.
 if [[ "$c13_rc" -eq 0 && "$c13_valid" == "true" && "$c13_action" == "allow" ]]; then
-    log_pass "Case 13 — Row 13b: SIGINT → valid {action:allow}, exit 0"
+    log_pass "Case 13 — Row 13b: SIGINT → valid {continue:true}, exit 0"
 else
     log_fail "Case 13: rc=$c13_rc valid=$c13_valid action=$c13_action body='$c13_body' stderr=$(cat "$c13_err")"
 fi
@@ -704,9 +745,9 @@ c14_rc=$?
 c14_body="$(cat "$c14_out" 2>/dev/null || echo "")"
 c14_valid="false"
 if echo "$c14_body" | jq -e . >/dev/null 2>&1; then c14_valid="true"; fi
-c14_action="$(echo "$c14_body" | jq -r '.action // empty' 2>/dev/null || echo "")"
+c14_action="$(stop_action "$c14_out")"
 if [[ "$c14_rc" -eq 0 && "$c14_valid" == "true" && "$c14_action" == "allow" ]]; then
-    log_pass "Case 14 — Row 13c: SIGHUP → valid {action:allow}, exit 0"
+    log_pass "Case 14 — Row 13c: SIGHUP → valid {continue:true}, exit 0"
 else
     log_fail "Case 14: rc=$c14_rc valid=$c14_valid action=$c14_action body='$c14_body' stderr=$(cat "$c14_err")"
 fi
@@ -733,7 +774,7 @@ c15_rc=0
     printf 'this is not json garbage' | "$CODEX_STOP_HOOK" \
         >"$c15_out" 2>"$c15_err"
 ) || c15_rc=$?
-c15_action="$(jq -r '.action // empty' "$c15_out" 2>/dev/null || echo "")"
+c15_action="$(stop_action "$c15_out")"
 c15_diag=""
 if grep -qi "invalid Codex Stop JSON" "$c15_err" 2>/dev/null; then
     c15_diag="found"
@@ -784,8 +825,8 @@ run_hook "$cR1_home" "$cR1_workspace" "sess-regress1-001" \
     "$cR1_out" "$cR1_err" \
     "CERBERUS_PROJECT_KEY=$cR1_pk" \
     || cR1_rc=$?
-cR1_action="$(jq -r '.action // empty' "$cR1_out" 2>/dev/null || echo "")"
-cR1_msg="$(jq -r '.userMessage // empty' "$cR1_out" 2>/dev/null || echo "")"
+cR1_action="$(stop_action "$cR1_out")"
+cR1_msg="$(stop_reason "$cR1_out")"
 if [[ "$cR1_rc" -eq 0 && "$cR1_action" == "continue" && -n "$cR1_msg" ]]; then
     log_pass "Regression #1 — CERBERUS_PROJECT_KEY env honored; row-6 continue fired"
 else
@@ -825,9 +866,9 @@ run_hook "$cR2_home" "$cR2_workspace" "sess-regress2-001" \
     "$cR2_out" "$cR2_err" \
     "CERBERUS_STATE_ROOT=$cR2_state_root" \
     || cR2_rc=$?
-cR2_action="$(jq -r '.action // empty' "$cR2_out" 2>/dev/null || echo "")"
-cR2_note="$(jq -r '.note // empty' "$cR2_out" 2>/dev/null || echo "")"
-cR2_msg="$(jq -r '.userMessage // empty' "$cR2_out" 2>/dev/null || echo "")"
+cR2_action="$(stop_action "$cR2_out")"
+cR2_note="$(stop_system_message "$cR2_out")"
+cR2_msg="$(stop_reason "$cR2_out")"
 # Pass conditions: action=continue AND no "no review dir" note.
 if [[ "$cR2_rc" -eq 0 && "$cR2_action" == "continue" \
       && "$cR2_note" != *"no review dir"* && -n "$cR2_msg" ]]; then
@@ -861,9 +902,9 @@ cR3_rc=0
 run_hook "$cR3_home" "$cR3_workspace" "sess-regress3-001" \
     "$cR3_out" "$cR3_err" \
     || cR3_rc=$?
-cR3_action="$(jq -r '.action // empty' "$cR3_out" 2>/dev/null || echo "")"
+cR3_action="$(stop_action "$cR3_out")"
 if [[ "$cR3_rc" -eq 0 && "$cR3_action" == "allow" ]]; then
-    log_pass "Regression #3 — resolved + needs_revision → action:allow"
+    log_pass "Regression #3 — resolved + needs_revision → continue:true"
 else
     log_fail "Regression #3: rc=$cR3_rc action=$cR3_action body=$(cat "$cR3_out") stderr=$(cat "$cR3_err")"
 fi
@@ -913,10 +954,10 @@ wait "$cR4_pid" 2>/dev/null
 cR4_rc=$?
 cR4_t1=$(date +%s)
 cR4_elapsed=$((cR4_t1 - cR4_t0))
-cR4_action="$(jq -r '.action // empty' "$cR4_out" 2>/dev/null || echo "")"
+cR4_action="$(stop_action "$cR4_out")"
 if [[ "$cR4_rc" -eq 0 && "$cR4_action" == "allow" \
       && "$cR4_elapsed" -le 8 ]]; then
-    log_pass "Regression #4 — SIGTERM during slow status → exit ${cR4_elapsed}s, action:allow"
+    log_pass "Regression #4 — SIGTERM during slow status → exit ${cR4_elapsed}s, continue:true"
 else
     log_fail "Regression #4: rc=$cR4_rc action=$cR4_action elapsed=${cR4_elapsed}s body=$(cat "$cR4_out") stderr=$(cat "$cR4_err")"
 fi
@@ -932,19 +973,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Happy path B — hook reads stdin and emits valid {action:allow,...} JSON.
+# Happy path B — hook reads stdin and emits valid {continue:true,...} JSON.
 # Reuses the no-registry path (Row 2) so it's deterministic.
 # ---------------------------------------------------------------------------
-log_test "Happy B — hook reads stdin and emits {action:allow}, exit 0"
+log_test "Happy B — hook reads stdin and emits {continue:true}, exit 0"
 hb_home="$TEST_DIR/happy-b"
 mkdir -p "$hb_home"
 hb_out="$TEST_DIR/hb.out"
 hb_err="$TEST_DIR/hb.err"
 hb_rc=0
 run_hook "$hb_home" "/tmp/cerberus-hb" "sess-hb" "$hb_out" "$hb_err" || hb_rc=$?
-hb_action="$(jq -r '.action // empty' "$hb_out" 2>/dev/null || echo "")"
+hb_action="$(stop_action "$hb_out")"
 if [[ "$hb_rc" -eq 0 && "$hb_action" == "allow" ]]; then
-    log_pass "Happy B — emitted {action:allow}, exit 0"
+    log_pass "Happy B — emitted {continue:true}, exit 0"
 else
     log_fail "Happy B — rc=$hb_rc action=$hb_action body=$(cat "$hb_out") stderr=$(cat "$hb_err")"
 fi

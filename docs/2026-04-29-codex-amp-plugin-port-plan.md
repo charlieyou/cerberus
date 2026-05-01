@@ -154,8 +154,11 @@
   `PLUGINS=all amp`. Plugin code runs in Bun. Exposes
   `amp.registerCommand`, lifecycle events `session.start`,
   `agent.start`, `agent.end`, `tool.call`, `tool.result`, and
-  `agent.end → { action: "continue", userMessage }` for soft continuation.
-  Plugin API requires the experimental directive comment.
+  host-specific `agent.end` soft-continuation responses. These Amp
+  responses are not the Codex `Stop` schema; Codex `Stop` uses the
+  `{"continue":true}` / `{"decision":"block","reason":...}` shapes
+  defined in the matrix below. Plugin API requires the experimental
+  directive comment.
 - **Amp run-key durability:** `ctx.thread.id` is the preferred run key
   when present and stable. If unavailable or unstable, the Amp shell
   helper generates a UUID per workspace and persists it at
@@ -184,7 +187,7 @@
 | `find_active_gate` | `bin/review-gate-lib.sh` | **Extend carefully** | Useful for legacy fallback, but non-Claude adapters prefer registry or explicit run key. |
 | Claude `Stop` hook (`bin/review-gate-hook.sh`) | 2164 lines | **Keep + new thin Codex adapter** | Tightly coupled to Claude hook JSON & continuation semantics. Out of v1 modification scope. |
 | Claude `SessionStart` (`bin/claude-session-init`) | 25 lines | **Keep + new Codex adapter** | Uses Claude-only `CLAUDE_ENV_FILE`. Out of v1 modification scope. |
-| Slash commands `commands/*.md` | 13 files | **Keep + add** | Markdown commands are Claude prompt files. Codex gets skills under `skills/cerberus/`; Amp gets TS commands. |
+| Slash commands `commands/*.md` | 13 files | **Keep + add** | Markdown commands are Claude prompt files. Codex gets skills under `skills/`; Amp gets TS commands. |
 | Plugin manifest | `.claude-plugin/plugin.json` | **Keep + add** | Separate `.codex-plugin/plugin.json` for Codex. |
 | `bin/generate` | 739 lines | **Extend** | Already mostly host-neutral; alias `CERBERUS_ROOT` → `CLAUDE_PLUGIN_ROOT` at single read site. |
 | `bin/telemetry-lib.sh` | — | **Reuse unchanged** | Telemetry writes under the provided `review_dir`; new layout works automatically because `$REVIEW_DIR` is the resolver output. |
@@ -739,19 +742,19 @@ and a re-evaluation.
 
 | # | Gate state (initial `status --json`) | `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Action |
 |---|---|---|---|
-| 1 | `status --json` exits 4 (no active gate) | any | `{"action":"allow"}` |
-| 2 | Registry file missing | any | `{"action":"allow"}` (no run to look up) |
-| 3 | Registry present but `<run-key>/` missing | any | `{"action":"allow","note":"no review dir"}` |
-| 4 | `gate_status == "pending"` | `0` (default) | `{"action":"allow","note":"reviewers still running; run Cerberus: Status to check"}` |
+| 1 | `status --json` exits 4 (no active gate) | any | `{"continue":true}` |
+| 2 | Registry file missing | any | `{"continue":true}` (no run to look up) |
+| 3 | Registry present but `<run-key>/` missing | any | `{"continue":true,"systemMessage":"no review dir"}` |
+| 4 | `gate_status == "pending"` | `0` (default) | `{"continue":true,"systemMessage":"reviewers still running; run Cerberus: Status to check"}` |
 | 5 | `gate_status == "pending"` | `N > 0` | Run `wait --json --timeout N --session-key <run>`; on completion re-evaluate via row 6/7/8/9. On wait timeout: emit row 4 message. |
-| 6 | `gate_status == "awaiting_decision"` AND blocking findings present (per blocking-finding predicate above: any finding with `verdict=="FAIL"` OR `priority` in `{"P0","P1"}`) | any | `{"action":"continue","userMessage":"<formatted findings summary>"}` |
-| 7 | `gate_status == "awaiting_decision"` AND no blocking findings (empty `aggregated_findings`, or only P2/P3 non-FAIL findings, or only `parse_errors`) | any | `{"action":"allow"}` (rare; finalize via existing `wait` path before reaching here) |
-| 8 | `gate_status == "resolved"` AND `consensus_verdict == "pass"` | any | `{"action":"allow"}` |
-| 9 | `gate_status == "resolved"` AND `consensus_verdict == "fail"` (manual clear or otherwise) | any | `{"action":"continue","userMessage":"<reason>"}` |
-| 10 | Malformed `gate-state.json` (exit 0, body has `error`) | any | `{"action":"allow","note":"cerberus state unreadable; allowing stop"}` |
-| 11 | `status --json` exits non-zero, non-4 (internal error) | any | log to stderr, emit `{"action":"allow"}`, exit 0 |
-| 12 | `jq` missing or backend not invokable | any | log to stderr, emit `{"action":"allow"}`, exit 0 |
-| 13 | SIGINT/SIGTERM/SIGHUP received during execution | any | `trap` emits `{"action":"allow"}` to stdout, kills any child `wait`/`status` process, exits 0 |
+| 6 | `gate_status == "awaiting_decision"` AND blocking findings present (per blocking-finding predicate above: any finding with `verdict=="FAIL"` OR `priority` in `{"P0","P1"}`) | any | `{"decision":"block","reason":"<formatted findings summary>"}` |
+| 7 | `gate_status == "awaiting_decision"` AND no blocking findings (empty `aggregated_findings`, or only P2/P3 non-FAIL findings, or only `parse_errors`) | any | `{"continue":true}` (rare; finalize via existing `wait` path before reaching here) |
+| 8 | `gate_status == "resolved"` AND `consensus_verdict == "pass"` | any | `{"continue":true}` |
+| 9 | `gate_status == "resolved"` AND `consensus_verdict == "fail"` (manual clear or otherwise) | any | `{"decision":"block","reason":"<reason>"}` |
+| 10 | Malformed `gate-state.json` (exit 0, body has `error`) | any | `{"continue":true,"systemMessage":"cerberus state unreadable; allowing stop"}` |
+| 11 | `status --json` exits non-zero, non-4 (internal error) | any | log to stderr, emit `{"continue":true}`, exit 0 |
+| 12 | `jq` missing or backend not invokable | any | log to stderr, emit `{"continue":true}`, exit 0 |
+| 13 | SIGINT/SIGTERM/SIGHUP received during execution | any | `trap` emits `{"continue":true}` to stdout, kills any child `wait`/`status` process, exits 0 |
 
 **Failure-open principle:** the hook never blocks the user from stopping
 due to a Cerberus failure. If state can't be read, allow. If a child
@@ -761,7 +764,7 @@ process hangs, the trap kills it and emits allow.
 `trap '__cerberus_stop_safe_exit' INT TERM HUP` at startup.
 `__cerberus_stop_safe_exit` does the minimum work necessary: kill the
 backgrounded wait/status child (if any) via stored PID, emit
-`{"action":"allow"}` to stdout, exit 0. No long-running operations
+`{"continue":true}` to stdout, exit 0. No long-running operations
 inside the trap.
 
 **Codex skill surface:**
@@ -820,12 +823,12 @@ CLAUDE_PLUGIN_ROOT=<plugin root>               # transient compat alias
 | `.codex-plugin/plugin.json` | **New** | Codex marketplace manifest (skills only). |
 | `bin/codex-session-init` | **New** | `SessionStart` adapter; reads JSON from stdin, writes session registry atomically. |
 | `bin/codex-stop-hook` | **New** | `Stop` adapter; implements the Codex Stop Decision Matrix; installs signal traps. |
-| `skills/cerberus/review-code.md` | **New** | Codex skill: Review Code. |
-| `skills/cerberus/review-plan.md` | **New** | Codex skill: Review Plan. |
-| `skills/cerberus/review-spec.md` | **New** | Codex skill: Review Spec. |
-| `skills/cerberus/ask.md` | **New** | Codex skill: Ask Panel. |
-| `skills/cerberus/status.md` | **New** | Codex skill: Status. |
-| `skills/cerberus/clear-gate.md` | **New** | Codex skill: Clear Gate. |
+| `skills/review-code/SKILL.md` | **New** | Codex skill: Review Code. |
+| `skills/review-plan/SKILL.md` | **New** | Codex skill: Review Plan. |
+| `skills/review-spec/SKILL.md` | **New** | Codex skill: Review Spec. |
+| `skills/ask/SKILL.md` | **New** | Codex skill: Ask Panel. |
+| `skills/status/SKILL.md` | **New** | Codex skill: Status. |
+| `skills/clear-gate/SKILL.md` | **New** | Codex skill: Clear Gate. |
 | `templates/codex-hooks.json` | **New** | User-installed lifecycle hook template (two-step install). |
 | `.amp/plugins/cerberus.ts` | **New** | Amp plugin (commands + shell helper). Experimental directive comment required. |
 | `.amp/in/` | Exists | Amp plugin input directory (already present; no changes). |
@@ -900,7 +903,7 @@ recovering session/run identity without Claude's env-file persistence.
 
 - **Spike:** resolve OQ-1, OQ-2 before implementation begins.
 - Add `.codex-plugin/plugin.json` declaring six skills.
-- Author Tier 1 skill markdown under `skills/cerberus/` (six files:
+- Author Tier 1 skill markdown under `skills/` (six files:
   review-code, review-plan, review-spec, ask, status, clear-gate).
 - Add `templates/codex-hooks.json` (user installs into Codex config).
 - Implement `bin/codex-session-init`:
@@ -1027,7 +1030,7 @@ orchestrator / port if Codex or Amp exposes equivalent task primitives.
 | `CERBERUS_CODEX_STOP_WAIT_SECONDS=N` exceeded mid-review | `wait` exits with current state; matrix re-evaluates with possibly-still-pending state → emits "still running" message; user can re-invoke `Cerberus: Status`. |
 | Telemetry directory creation fails (disk full) | Existing `init_iteration_dir` already tolerates this with warning; same on neutral path because path is `$REVIEW_DIR`-relative. |
 | Telemetry under new layout | `run-telemetry.json` already records iterations/tokens/cost; works automatically on neutral path because it's `$REVIEW_DIR`-relative. No `bin/telemetry-lib.sh` changes. |
-| SIGTERM / SIGINT / SIGHUP to `bin/codex-stop-hook` mid-execution | `trap` emits `{"action":"allow"}` JSON to stdout, kills child wait/status, exits 0. No partial JSON to Codex. |
+| SIGTERM / SIGINT / SIGHUP to `bin/codex-stop-hook` mid-execution | `trap` emits `{"continue":true}` JSON to stdout, kills child wait/status, exits 0. No partial JSON to Codex. |
 | User runs `Cerberus: Clear Gate` while reviewers still spawning | Existing `resolve` writes `gate-state.json` with status=resolved; in-flight reviewers' results are archived to `reviews-iter-<n>/` (existing behavior at `bin/review-gate-lib.sh:113-124`). |
 | Amp `ctx.thread.id` flips mid-session (unstable) | Shell helper detects via comparison with persisted `amp_thread_id`; logs warning; uses persisted UUID for continuity. |
 | Codex install root path env var unstable across versions | Hook template uses placeholder substitution; `docs/CODEX.md` documents manual edit. OQ-2 spike confirms. |
@@ -1151,31 +1154,31 @@ matrix):
 **`bin/tests/test-codex-stop-hook.sh`** (every row of the Decision
 Matrix + signal handling):
 
-1. **Row 1:** no registry → `{"action":"allow"}`.
-2. **Row 2:** registry → no run dir → `{"action":"allow"}`.
+1. **Row 1:** no registry → `{"continue":true}`.
+2. **Row 2:** registry → no run dir → `{"continue":true}`.
 3. **Row 4:** pending, `CERBERUS_CODEX_STOP_WAIT_SECONDS=0` →
-   `{"action":"allow","note":"..."}`.
+   `{"continue":true,"systemMessage":"..."}`.
 4. **Row 5a:** pending, wait knob N=2, reviewers don't finish → fall
    through to allow with "still running" note.
 5. **Row 5b:** pending, wait knob N=2, reviewers finish during wait →
    re-evaluate → emit row 6/7/8/9 result.
 6. **Row 6:** awaiting decision, blocking findings →
-   `{"action":"continue", "userMessage":"..."}` containing findings
+   `{"decision":"block", "reason":"..."}` containing findings
    summary.
-7. **Row 8:** resolved pass → `{"action":"allow"}`.
-8. **Row 9:** resolved fail → `{"action":"continue", ...}`.
+7. **Row 8:** resolved pass → `{"continue":true}`.
+8. **Row 9:** resolved fail → `{"decision":"block", ...}`.
 9. **Row 10:** malformed `gate-state.json` →
-   `{"action":"allow","note":"cerberus state unreadable; allowing stop"}`.
-10. **Row 11:** `status --json` exits 2 → `{"action":"allow"}`,
+   `{"continue":true,"systemMessage":"cerberus state unreadable; allowing stop"}`.
+10. **Row 11:** `status --json` exits 2 → `{"continue":true}`,
     diagnostic logged.
-11. **Row 12:** `jq` missing on PATH → `{"action":"allow"}`.
-12. **Row 13a:** SIGTERM mid-execution → `{"action":"allow"}` emitted,
+11. **Row 12:** `jq` missing on PATH → `{"continue":true}`.
+12. **Row 13a:** SIGTERM mid-execution → `{"continue":true}` emitted,
     exit 0.
 13. **Row 13b:** SIGINT during child wait → child killed via stored PID,
-    `{"action":"allow"}` emitted.
+    `{"continue":true}` emitted.
 14. **Row 13c:** SIGHUP during child wait → same as 13b.
 15. **Stdin parse failure:** invalid Codex JSON on stdin →
-    `{"action":"allow"}`, diagnostic.
+    `{"continue":true}`, diagnostic.
 
 ### Phase 2 — Amp Tests
 
@@ -1280,7 +1283,7 @@ Claude). Substantive resolved decisions:
 | Skeleton named adapter binaries `[TBD]` | Resolved as `bin/codex-session-init` and `bin/codex-stop-hook`. | Matches existing `bin/claude-session-init` naming convention. | Yes |
 | Skeleton "Pass criterion for no regression" `[TBD]` | Resolved as: full `bin/tests/*.sh` pass + manual smoke that an existing Claude review still spawns/waits/resolves/clears. | User-confirmed. | Yes |
 | Skeleton hint that Stop hook might wait | Codified as **never wait by default**; bounded opt-in via `CERBERUS_CODEX_STOP_WAIT_SECONDS=N`, default `0`. | Avoids trapped-user UX. | Yes |
-| Skeleton omitted explicit failure-open principle for Codex Stop | Added: any Cerberus-side failure → `{"action":"allow"}`. | Defensive default; users must never be unable to stop Codex due to a Cerberus bug. | New — design decision |
+| Skeleton omitted explicit failure-open principle for Codex Stop | Added: any Cerberus-side failure → `{"continue":true}`. | Defensive default; users must never be unable to stop Codex due to a Cerberus bug. | New — design decision |
 | Skeleton omitted explicit alias-precedence rule | Added: `CERBERUS_*` wins over legacy alias when both set non-empty; empty treated as unset; warning emitted on mismatch. | Disambiguation needed for testing and back-compat documentation. | New — design decision |
 | Skeleton omitted signal-handling spec for Codex Stop | Added: `trap INT TERM HUP` emitting safe-allow JSON; child wait/status killed via stored PID. | Avoids partial JSON to Codex stdin under cancel. | New — design decision |
 | Skeleton enumerated spawn-* sites informally | Added: explicit list of ~25 line numbers + helper-function refactor to centralize reads. | Reduces drift risk during mechanical replacement. | New — design decision |

@@ -9,8 +9,8 @@
 #
 # Hook contract:
 #   - **Always exits 0**.
-#   - Emits a single JSON blob to stdout: either {"action":"allow",...}
-#     or {"action":"continue","userMessage":...}.
+#   - Emits a single Codex Stop JSON blob to stdout: either
+#     {"continue":true,...} or {"decision":"block","reason":...}.
 #   - Diagnostics go to stderr.
 #   - Installs a SIGINT/SIGTERM/SIGHUP trap from script startup that
 #     fails open and kills any tracked child PIDs.
@@ -53,9 +53,8 @@ __CERBERUS_STOP_TMPFILES=()
 #   2. printf the body to stdout.
 #   3. Set __CERBERUS_STOP_EMITTED=true.
 #
-# Worst-case race: signal between step 2 and step 3 → trap sees
-# EMITTED=false, emits its own envelope → Codex sees two envelopes.
-# Codex parses the first; double-emit is acceptable, zero-emit is not.
+# The emitted flag is intentionally updated after stdout is written so
+# a signal before the normal-path write still fails open with JSON.
 __CERBERUS_STOP_EMITTED="false"
 
 __cerberus_stop_log() {
@@ -70,6 +69,7 @@ __cerberus_stop_log() {
 __cerberus_stop_safe_exit() {
     set +e +u
     set +o pipefail 2>/dev/null || true
+    trap '' INT TERM HUP
 
     # Kill tracked children. Bash 3.2-safe length gate (no `${arr[@]:-}`
     # array expansion with default — that form aborts under set -u on
@@ -83,11 +83,9 @@ __cerberus_stop_safe_exit() {
     done
 
     # Emit failure-open envelope unless a normal-path emit already
-    # printed the body (T009 round-2 review feedback #3: double-emit
-    # is preferable to zero-emit; Codex parses the first envelope and
-    # ignores the rest).
+    # printed the body.
     if [ "$__CERBERUS_STOP_EMITTED" != "true" ]; then
-        printf '{"action":"allow","note":"signal_trap"}\n'
+        printf '{"continue":true}\n'
         __CERBERUS_STOP_EMITTED="true"
     fi
 
@@ -110,41 +108,50 @@ trap '__cerberus_stop_safe_exit' INT TERM HUP
 # ---- Hook output emitters --------------------------------------------------
 # Each emitter:
 #   1. Builds the JSON body via $(jq ...) capture.
-#   2. printf the body to stdout (single write syscall for the small
-#      payloads emitted by this hook; bash defers signal handling
-#      across simple-command boundaries).
-#   3. Sets __CERBERUS_STOP_EMITTED=true.
-# This ordering ensures the trap never observes EMITTED=true before
-# the body has actually flushed to stdout (round-2 review feedback #3).
+#   2. Calls __cerberus_emit_body, which ignores INT/TERM/HUP only
+#      across the final stdout write plus emitted-flag update.
+# This keeps stdout to one JSON object: a signal before the final write
+# hits the failure-open trap; a signal after the flag update sees
+# EMITTED=true and exits without printing a second envelope.
+
+__cerberus_restore_signal_trap() {
+    trap '__cerberus_stop_safe_exit' INT TERM HUP
+}
+
+__cerberus_emit_body() {
+    local body="$1"
+    trap '' INT TERM HUP
+    printf '%s\n' "$body"
+    __CERBERUS_STOP_EMITTED="true"
+    __cerberus_restore_signal_trap
+}
 
 __cerberus_emit_allow() {
     local note="${1:-}"
     local body
     if [ -z "$note" ]; then
-        body='{"action":"allow"}'
+        body='{"continue":true}'
     elif command -v jq >/dev/null 2>&1; then
-        body="$(jq -nc --arg note "$note" '{action:"allow",note:$note}' 2>/dev/null)" \
-            || body='{"action":"allow"}'
+        body="$(jq -nc --arg note "$note" '{"continue":true,systemMessage:$note}' 2>/dev/null)" \
+            || body='{"continue":true}'
     else
         # No jq available: notes used here are static ASCII safe strings.
-        body="{\"action\":\"allow\",\"note\":\"$note\"}"
+        body="{\"continue\":true,\"systemMessage\":\"$note\"}"
     fi
-    printf '%s\n' "$body"
-    __CERBERUS_STOP_EMITTED="true"
+    __cerberus_emit_body "$body"
 }
 
 __cerberus_emit_continue() {
     local message="$1"
     local body
     if command -v jq >/dev/null 2>&1; then
-        body="$(jq -nc --arg msg "$message" '{action:"continue",userMessage:$msg}' 2>/dev/null)" \
-            || body='{"action":"allow"}'
+        body="$(jq -nc --arg msg "$message" '{decision:"block",reason:$msg}' 2>/dev/null)" \
+            || body='{"continue":true}'
     else
         # Without jq we cannot safely escape the message. Failure-open.
-        body='{"action":"allow"}'
+        body='{"continue":true}'
     fi
-    printf '%s\n' "$body"
-    __CERBERUS_STOP_EMITTED="true"
+    __cerberus_emit_body "$body"
 }
 
 # ---- Drain stdin via background subshell ----------------------------------
@@ -179,8 +186,7 @@ fi
 # exactly one JSON envelope.
 if ! command -v jq >/dev/null 2>&1; then
     __cerberus_stop_log "jq not on PATH; failing open"
-    printf '{"action":"allow"}\n'
-    __CERBERUS_STOP_EMITTED="true"
+    __cerberus_emit_allow ""
     exit 0
 fi
 
@@ -221,7 +227,7 @@ fi
 # registry was written under `~/.cerberus/runtime/codex/team-a/...`,
 # and Codex inherits that env into the Stop hook too. Forcing
 # `CERBERUS_PROJECT_KEY=""` here would recompute a workspace-derived
-# key, miss the registry, and emit `{"action":"allow"}` even when the
+# key, miss the registry, and emit `{"continue":true}` even when the
 # real run has a blocking gate — defeating the matrix.
 PROJECT_KEY="${CERBERUS_PROJECT_KEY:-}"
 if [ -z "$PROJECT_KEY" ]; then

@@ -286,8 +286,8 @@ Codex `Stop` is a synchronous lifecycle boundary: the hook either
 allows the stop or asks Codex to continue with a user message. The
 default Cerberus behavior is to **never block the user from stopping**
 when reviewers are still running — instead, the hook emits an
-`{"action":"allow", "note":"reviewers still running; run Cerberus:
-Status to check"}` and returns immediately.
+`{"continue":true, "systemMessage":"reviewers still running; run
+Cerberus: Status to check"}` and returns immediately.
 
 If you want a bounded wait (so reviewers that are about to finish
 have a chance to land a verdict before the user stops), set
@@ -316,28 +316,27 @@ The Codex `Stop` adapter follows a strict failure-open principle:
 Concretely:
 
 - The hook **always exits 0** and emits exactly one JSON envelope to
-  stdout (`{"action":"allow"}` or
-  `{"action":"continue","userMessage":...}`). It never aborts mid-write
-  or returns a non-zero exit.
+  stdout (`{"continue":true}` or
+  `{"decision":"block","reason":...}`). It never aborts mid-write or
+  returns a non-zero exit.
 - If `bin/review-gate status --json` exits non-zero (other than `4`
   for "no active gate"), the hook logs the error to stderr and emits
   allow.
 - If `gate-state.json` is malformed, the hook emits allow with the
-  note `"cerberus state unreadable; allowing stop"`.
+  `systemMessage` `"cerberus state unreadable; allowing stop"`.
 - If `jq` is missing or the backend isn't invokable, the hook emits
   allow.
 - A `SIGINT`, `SIGTERM`, or `SIGHUP` mid-execution triggers the
   signal trap (`__cerberus_stop_safe_exit`), which kills any tracked
-  child PIDs (`wait` / `status`), emits a single `{"action":"allow"}`
+  child PIDs (`wait` / `status`), emits a single `{"continue":true}`
   envelope, and exits 0. No long-running operations run inside the
   trap.
 
-The only state in which the hook returns `{"action":"continue", ...}`
-is when reviewers have **successfully completed** a round and the
-result is either `awaiting_decision` with blocking findings (verdict
-`FAIL` or priority `P0`/`P1`) or `resolved` with
-`consensus_verdict == "fail"`. In every other path the user keeps the
-ability to stop.
+The only state in which the hook returns `{"decision":"block", ...}` is
+when reviewers have **successfully completed** a round and the result is
+either `awaiting_decision` with blocking findings (verdict `FAIL` or
+priority `P0`/`P1`) or `resolved` with `consensus_verdict == "fail"`.
+In every other path the user keeps the ability to stop.
 
 The `SessionStart` adapter (`bin/codex-session-init`) is **not**
 failure-open — it exits non-zero on malformed stdin or invalid
@@ -490,8 +489,8 @@ CI gate.
 4. **`Stop` matrix — wait disabled.** With reviewers still running
    (`gate_status == "pending"`) and `CERBERUS_CODEX_STOP_WAIT_SECONDS`
    unset (or `0`), trigger Codex `Stop`. Confirm the hook emits
-   `{"action":"allow","note":"reviewers still running; run Cerberus:
-   Status to check"}` and Codex stops immediately.
+   `{"continue":true,"systemMessage":"reviewers still running; run
+   Cerberus: Status to check"}` and Codex stops immediately.
 5. **`Stop` matrix — wait enabled.** Set
    `CERBERUS_CODEX_STOP_WAIT_SECONDS=10`, repeat the previous step.
    Confirm the hook waits up to ~10 seconds and either:
