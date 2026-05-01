@@ -358,7 +358,19 @@ repair_review_output() {
             local -a claude_disallowed_tools
             read -r -a claude_allowed_tools <<< "$CLAUDE_READONLY_ALLOWED_TOOLS"
             read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
-            if claude -p --model "$model" --output-format json \
+            if env \
+                -u CERBERUS_RUN_KEY \
+                -u REVIEW_GATE_SESSION_KEY \
+                -u REVIEW_GATE_SESSION_SOURCE \
+                -u CERBERUS_SESSION_ID \
+                -u CLAUDE_SESSION_ID \
+                -u REVIEW_GATE_SESSION_ID \
+                -u CERBERUS_TRANSCRIPT_PATH \
+                -u CLAUDE_TRANSCRIPT_PATH \
+                -u REVIEW_GATE_TRANSCRIPT_PATH \
+                CERBERUS_REVIEWER_SUBPROCESS=1 \
+                REVIEW_GATE_REVIEWER_SUBPROCESS=1 \
+                claude -p --model "$model" --output-format json \
                 --allowedTools "${claude_allowed_tools[@]}" \
                 --disallowedTools "${claude_disallowed_tools[@]}" \
                 < "$prompt_file" > "$out_file" 2>&1; then
@@ -942,7 +954,19 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
                 fi
                 read -r -a claude_allowed_tools <<< "$CLAUDE_ALLOWED_TOOLS"
                 read -r -a claude_disallowed_tools <<< "$CLAUDE_DISALLOWED_TOOLS"
-                if "${timeout_prefix[@]}" claude -p --model "$REVIEW_MODEL" --output-format json \
+                if "${timeout_prefix[@]}" env \
+                    -u CERBERUS_RUN_KEY \
+                    -u REVIEW_GATE_SESSION_KEY \
+                    -u REVIEW_GATE_SESSION_SOURCE \
+                    -u CERBERUS_SESSION_ID \
+                    -u CLAUDE_SESSION_ID \
+                    -u REVIEW_GATE_SESSION_ID \
+                    -u CERBERUS_TRANSCRIPT_PATH \
+                    -u CLAUDE_TRANSCRIPT_PATH \
+                    -u REVIEW_GATE_TRANSCRIPT_PATH \
+                    CERBERUS_REVIEWER_SUBPROCESS=1 \
+                    REVIEW_GATE_REVIEWER_SUBPROCESS=1 \
+                    claude -p --model "$REVIEW_MODEL" --output-format json \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
                     < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then

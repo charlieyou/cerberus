@@ -121,6 +121,16 @@ review_gate_check() {
         output_allow
     fi
 
+    stop_hook_depth="${CERBERUS_REVIEW_GATE_STOP_HOOK_DEPTH:-0}"
+    case "$stop_hook_depth" in
+        ''|*[!0-9]*) stop_hook_depth=0 ;;
+    esac
+    if [[ "$stop_hook_depth" -ge 1 ]]; then
+        log "review-gate: nested Stop hook while review gate active; allowing"
+        output_allow
+    fi
+    export CERBERUS_REVIEW_GATE_STOP_HOOK_DEPTH=$((stop_hook_depth + 1))
+
     # --- Session-scoped path resolution ---
     # Exit early if no session_id - cannot enforce gate without session context
     if [[ -z "$SESSION_ID" ]]; then

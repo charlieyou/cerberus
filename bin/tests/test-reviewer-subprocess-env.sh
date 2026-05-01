@@ -7,7 +7,8 @@ unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT CERBERUS_PROJECT_KEY \
       CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CLAUDE_PROJECT_DIR \
       REVIEW_GATE_SESSION_KEY REVIEW_GATE_TRANSCRIPT_PATH \
       REVIEW_GATE_SESSION_SOURCE REVIEW_GATE_SESSION_ID \
-      CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS 2>/dev/null || true
+      CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
+      CERBERUS_REVIEW_GATE_STOP_HOOK_DEPTH 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -111,6 +112,46 @@ if ! grep -q 'reviewer subprocess Stop hook; allowing' "$bypass_stderr"; then
 fi
 
 log_pass "reviewer subprocess marker bypasses Stop-hook enforcement"
+
+log_test "nested Stop hook bypasses parent gate even without reviewer markers"
+
+nested_stdout="$TEST_DIR/nested.out"
+nested_stderr="$TEST_DIR/nested.err"
+set +e
+(
+    export HOME
+    export CERBERUS_HOST="generic"
+    export CERBERUS_PROJECT_KEY="$PARENT_PROJECT_KEY"
+    export CERBERUS_RUN_KEY="$PARENT_RUN_KEY"
+    export REVIEW_GATE_SESSION_KEY="$PARENT_RUN_KEY"
+    export CLAUDE_SESSION_ID="parent-claude-session"
+    export REVIEW_GATE_TRANSCRIPT_PATH="$PARENT_TRANSCRIPT"
+    export CERBERUS_REVIEW_GATE_STOP_HOOK_DEPTH=1
+    unset CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS
+    export REVIEW_GATE_MAX_WAIT_SECONDS=0
+    export REVIEW_GATE_POLL_INTERVAL_SECONDS=1
+    printf '{"session_id":"child-session","transcript_path":"%s"}' "$CHILD_TRANSCRIPT" \
+        | "$REVIEW_GATE" check
+) >"$nested_stdout" 2>"$nested_stderr"
+nested_rc=$?
+set -e
+
+if [[ "$nested_rc" -ne 0 ]]; then
+    log_fail "expected nested check to exit 0, got $nested_rc\nstdout:\n$(cat "$nested_stdout")\nstderr:\n$(cat "$nested_stderr")"
+fi
+
+if [[ -s "$nested_stdout" ]]; then
+    nested_decision=$(jq -r '.decision // empty' "$nested_stdout" 2>/dev/null || echo "")
+    if [[ "$nested_decision" != "allow" ]]; then
+        log_fail "expected nested check to emit no output or allow JSON, got:\n$(cat "$nested_stdout")"
+    fi
+fi
+
+if ! grep -q 'nested Stop hook while review gate active; allowing' "$nested_stderr"; then
+    log_fail "expected nested Stop-hook log line, got stderr:\n$(cat "$nested_stderr")"
+fi
+
+log_pass "nested Stop-hook depth bypasses enforcement without reviewer markers"
 
 log_test "spawn_reviewer marks reviewer subprocesses and scrubs parent gate env"
 
