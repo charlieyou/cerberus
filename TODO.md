@@ -1,7 +1,5 @@
 # TODO
 
-* Amp Agent Teams
-
 * add /constitution command (from Spec Kit)
   - Create/update project principles at `/memory/constitution.md`
   - Non-negotiable constraints that gate planning (e.g., "max 3 services", "no ORMs", "100% API test coverage")
@@ -53,3 +51,16 @@ Task review should use multi-models
 * Persist P2/P3 review issues
 * Config-driven validation, more triggers
 * File locking + enable parallel implementers
+
+
+## Amp
+
+* Agent team
+
+* Add gating, rest of the commands
+
+
+## Codex
+
+* Test it
+* Rest of commands
