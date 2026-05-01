@@ -949,8 +949,16 @@ _rdc_classify_round_outputs() {
         out_file="$staging_dir/${r}.json"
         done_file="$staging_dir/${r}.done"
         failed_file="$staging_dir/${r}.failed"
+        parsed=""
+        local parsed_failed_output="false"
 
-        if [[ -f "$failed_file" ]]; then
+        if [[ -f "$failed_file" && -s "$out_file" ]]; then
+            if parsed=$(extract_valid_review_json_no_repair "$out_file" "$r" 2>/dev/null); then
+                parsed_failed_output="true"
+            fi
+        fi
+
+        if [[ -f "$failed_file" && "$parsed_failed_output" != "true" ]]; then
             printf '%s abstained\n' "$r"
             continue
         fi
@@ -967,7 +975,7 @@ _rdc_classify_round_outputs() {
         # (which catches reviewers that died before writing any output);
         # the existence of a `.done` sentinel is the canonical proof that
         # the spawn wrapper observed the reviewer's exit-zero condition.
-        if [[ ! -f "$done_file" ]]; then
+        if [[ ! -f "$done_file" && "$parsed_failed_output" != "true" ]]; then
             echo "warning: Mode A timeout abstain for reviewer $r — no .done sentinel observed (spawn either hung or never completed)" >&2
             printf '%s abstained\n' "$r"
             continue
@@ -976,7 +984,8 @@ _rdc_classify_round_outputs() {
             printf '%s abstained\n' "$r"
             continue
         fi
-        if ! parsed=$(extract_json "$out_file" "$r" 2>/dev/null); then
+        if [[ "$parsed_failed_output" != "true" ]] && \
+           ! parsed=$(extract_json "$out_file" "$r" 2>/dev/null); then
             printf '%s abstained\n' "$r"
             continue
         fi
@@ -1609,7 +1618,7 @@ _rdc_now_ms() {
 # Args:
 #   $1  note string
 _rdc_append_aggregator_note() {
-    _RDC_AGGREGATOR_NOTES_JSON=$(printf '%s' "$_RDC_AGGREGATOR_NOTES_JSON" \
+    _RDC_AGGREGATOR_NOTES_JSON=$(printf '%s' "${_RDC_AGGREGATOR_NOTES_JSON:-[]}" \
         | jq --arg n "$1" '. + [$n]' 2>/dev/null) || true
 }
 

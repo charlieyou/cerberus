@@ -105,6 +105,22 @@ review_gate_check() {
         exit 0
     }
 
+    _reviewer_subprocess_marker_truthy() {
+        case "${1:-}" in
+            1|true|TRUE|yes|YES|on|ON) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    # Reviewer subprocesses can have their own Stop hooks. They must never
+    # enforce the parent gate, otherwise a reviewer can wait on itself until
+    # the outer per-reviewer timeout kills an otherwise valid response.
+    if _reviewer_subprocess_marker_truthy "${CERBERUS_REVIEWER_SUBPROCESS:-}" || \
+       _reviewer_subprocess_marker_truthy "${REVIEW_GATE_REVIEWER_SUBPROCESS:-}"; then
+        log "review-gate: reviewer subprocess Stop hook; allowing"
+        output_allow
+    fi
+
     # --- Session-scoped path resolution ---
     # Exit early if no session_id - cannot enforce gate without session context
     if [[ -z "$SESSION_ID" ]]; then
@@ -1130,22 +1146,22 @@ review_gate_check() {
         for reviewer in $reviewers; do
             local output_file="$REVIEWS_DIR/${reviewer}.json"
             local failed_file="$REVIEWS_DIR/${reviewer}.failed"
+            local result=""
 
-            # Skip if reviewer failed
             if [[ -f "$failed_file" ]]; then
+                if [[ -f "$output_file" ]] && \
+                   result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                    log "review-gate: ignoring stale failed sentinel for $reviewer; valid reviewer JSON parsed"
+                else
+                    ((other_count++)) || true
+                    ((reviewer_count++)) || true
+                    continue
+                fi
+            elif [[ ! -f "$output_file" ]]; then
                 ((other_count++)) || true
                 ((reviewer_count++)) || true
                 continue
-            fi
-
-            if [[ ! -f "$output_file" ]]; then
-                ((other_count++)) || true
-                ((reviewer_count++)) || true
-                continue
-            fi
-
-            local result
-            if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+            elif ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
                 ((other_count++)) || true
                 ((reviewer_count++)) || true
                 continue
@@ -1400,37 +1416,44 @@ review_gate_check() {
             local verdict="UNCLEAR"
             local confidence="-"
             local summary="No response"
+            local result=""
 
             if [[ -f "$failed_file" ]]; then
-                verdict="ERROR"
-                summary="Reviewer process failed"
+                if [[ -f "$output_file" ]] && \
+                   result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                    :
+                else
+                    verdict="ERROR"
+                    summary="Reviewer process failed"
+                fi
             elif [[ -f "$output_file" ]]; then
-                local result
                 if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
                     verdict="ERROR"
                     summary="Invalid reviewer output"
-                else
-                    verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
-                    if [[ $is_debate -eq 1 ]]; then
-                        # Debate per-reviewer JSONs carry overall_confidence
-                        # (spec L357 — gate report shows overall_confidence
-                        # only). Fall back to .confidence for forward-compat
-                        # if a future debate variant ever omits it.
-                        confidence=$(echo "$result" | jq -r '.overall_confidence // .confidence // "-"' 2>/dev/null || echo "-")
-                    else
-                        confidence=$(echo "$result" | jq -r '.confidence // "-"' 2>/dev/null || echo "-")
-                    fi
-                    summary=$(echo "$result" | jq -r '.summary // "No summary"' 2>/dev/null || echo "No summary")
+                fi
+            fi
 
-                    if [[ -z "$verdict" || "$verdict" == "null" ]]; then
-                        verdict="UNCLEAR"
-                    fi
-                    if [[ -z "$confidence" || "$confidence" == "null" ]]; then
-                        confidence="-"
-                    fi
-                    if [[ -z "$summary" || "$summary" == "null" ]]; then
-                        summary="No summary"
-                    fi
+            if [[ -n "$result" ]]; then
+                verdict=$(echo "$result" | jq -r '.verdict // "UNCLEAR"' 2>/dev/null || echo "UNCLEAR")
+                if [[ $is_debate -eq 1 ]]; then
+                    # Debate per-reviewer JSONs carry overall_confidence
+                    # (spec L357 — gate report shows overall_confidence
+                    # only). Fall back to .confidence for forward-compat
+                    # if a future debate variant ever omits it.
+                    confidence=$(echo "$result" | jq -r '.overall_confidence // .confidence // "-"' 2>/dev/null || echo "-")
+                else
+                    confidence=$(echo "$result" | jq -r '.confidence // "-"' 2>/dev/null || echo "-")
+                fi
+                summary=$(echo "$result" | jq -r '.summary // "No summary"' 2>/dev/null || echo "No summary")
+
+                if [[ -z "$verdict" || "$verdict" == "null" ]]; then
+                    verdict="UNCLEAR"
+                fi
+                if [[ -z "$confidence" || "$confidence" == "null" ]]; then
+                    confidence="-"
+                fi
+                if [[ -z "$summary" || "$summary" == "null" ]]; then
+                    summary="No summary"
                 fi
 
                 # Truncate long summaries
@@ -1522,7 +1545,10 @@ review_gate_check() {
             local failed_file="$REVIEWS_DIR/${reviewer}.failed"
 
             if [[ -f "$failed_file" ]]; then
-                continue
+                if [[ ! -f "$output_file" ]] || \
+                   ! extract_valid_review_json_no_repair "$output_file" "$reviewer" >/dev/null 2>&1; then
+                    continue
+                fi
             fi
 
             if [[ -f "$output_file" ]]; then
@@ -1601,7 +1627,10 @@ review_gate_check() {
             local failed_file="$REVIEWS_DIR/${reviewer}.failed"
 
             if [[ -f "$failed_file" ]]; then
-                continue
+                if [[ ! -f "$output_file" ]] || \
+                   ! extract_valid_review_json_no_repair "$output_file" "$reviewer" >/dev/null 2>&1; then
+                    continue
+                fi
             fi
 
             if [[ -f "$output_file" ]]; then
@@ -1687,7 +1716,10 @@ review_gate_check() {
             local failed_file="$REVIEWS_DIR/${reviewer}.failed"
 
             if [[ -f "$failed_file" ]]; then
-                continue
+                if [[ ! -f "$output_file" ]] || \
+                   ! extract_valid_review_json_no_repair "$output_file" "$reviewer" >/dev/null 2>&1; then
+                    continue
+                fi
             fi
 
             if [[ -f "$output_file" ]]; then

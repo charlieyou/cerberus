@@ -4564,7 +4564,7 @@ find_state_by_session_key() {
         )
     fi
     local state_file
-    for state_file in "${state_files[@]}"; do
+    for state_file in ${state_files[@]+"${state_files[@]}"}; do
         [[ ! -f "$state_file" ]] && continue
         local owner_key
         owner_key=$(jq -r '.owner.session_key // ""' "$state_file" 2>/dev/null || echo "")
@@ -4982,6 +4982,8 @@ USAGE
         local done_file="$reviews_dir/${reviewer}.done"
         local failed_file="$reviews_dir/${reviewer}.failed"
         local output_file="$reviews_dir/${reviewer}.json"
+        local result=""
+        local parsed_failed_output="false"
 
         if [[ "$timed_out" == "true" && ! -f "$done_file" && ! -f "$failed_file" ]]; then
             local reviewer_entry
@@ -4992,7 +4994,13 @@ USAGE
             continue
         fi
 
-        if [[ -f "$failed_file" ]]; then
+        if [[ -f "$failed_file" && -f "$output_file" ]]; then
+            if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                parsed_failed_output="true"
+            fi
+        fi
+
+        if [[ -f "$failed_file" && "$parsed_failed_output" != "true" ]]; then
             # Extract error details from the output file if it exists
             local error_details="Reviewer process failed"
             if [[ -f "$output_file" ]]; then
@@ -5050,8 +5058,8 @@ USAGE
             continue
         fi
 
-        local result
-        if ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
+        if [[ "$parsed_failed_output" != "true" ]] && \
+           ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
             local reviewer_entry
             reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Invalid reviewer output" \
                 '{verdict:$verdict, summary:$summary, findings: []}')
@@ -5457,8 +5465,16 @@ USAGE
         local done_file="$reviews_dir/${reviewer}.done"
         local failed_file="$reviews_dir/${reviewer}.failed"
         local output_file="$reviews_dir/${reviewer}.json"
+        local result=""
+        local parsed_failed_output="false"
 
-        if [[ -f "$failed_file" ]]; then
+        if [[ -f "$failed_file" && -f "$output_file" ]]; then
+            if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                parsed_failed_output="true"
+            fi
+        fi
+
+        if [[ -f "$failed_file" && "$parsed_failed_output" != "true" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \
                 '. + [{name:$name, status:"failed"}]')
@@ -5468,7 +5484,7 @@ USAGE
             continue
         fi
 
-        if [[ ! -f "$done_file" ]]; then
+        if [[ ! -f "$done_file" && "$parsed_failed_output" != "true" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \
                 '. + [{name:$name, status:"pending"}]')
@@ -5499,8 +5515,8 @@ USAGE
         # (REVIEW_REPAIR_ENABLED=false) so a malformed reviewer output
         # does NOT trigger an external CLI call from inside `status`,
         # preserving the no-blocking budget and the read-only contract.
-        local result
-        if ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) \
+        if [[ "$parsed_failed_output" != "true" ]] && \
+           ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) \
               || [[ -z "$result" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \

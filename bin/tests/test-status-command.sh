@@ -534,6 +534,54 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: stale .failed sentinels must not mask a valid parsed reviewer
+# JSON. Real Claude timeout-mask failures can leave both claude.json (valid
+# success wrapper) and claude.failed behind; status must report the verdict,
+# not a failed reviewer slot.
+# ---------------------------------------------------------------------------
+log_test "Regression: status trusts valid reviewer JSON over stale .failed sentinel"
+cR2b_dir=$(make_review_dir "regress-stale-failed-proj" "regress-stale-failed-run")
+cat > "$cR2b_dir/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "awaiting_decision",
+  "trigger_source": "test",
+  "artifact": {"path": "$cR2b_dir/latest.md", "sha256": ""},
+  "reviewers": {"claude": {}},
+  "consensus": null,
+  "decision": null,
+  "owner": {"session_key": "regress-stale-failed-run"},
+  "created_at": "2026-05-01T00:00:00Z",
+  "iteration": 0
+}
+EOF
+cat > "$cR2b_dir/reviews/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"FAIL\",\"summary\":\"valid output with stale failure\",\"findings\":[{\"title\":\"stale failed masked me\",\"body\":\"valid finding\",\"priority\":0,\"file_path\":\"src/y.c\",\"line_start\":2,\"line_end\":2}]}"
+}
+EOF
+touch "$cR2b_dir/reviews/claude.failed"
+cR2b_out="$TEST_DIR/cR2b.out"
+cR2b_err="$TEST_DIR/cR2b.err"
+run_status "regress-stale-failed-proj" "regress-stale-failed-run" "$cR2b_out" "$cR2b_err"
+cR2b_rc=$?
+cR2b_status=$(jq -r '.reviewers[0].status' "$cR2b_out" 2>/dev/null || echo "")
+cR2b_verdict=$(jq -r '.reviewers[0].verdict' "$cR2b_out" 2>/dev/null || echo "")
+cR2b_cv=$(jq -r '.consensus_verdict' "$cR2b_out" 2>/dev/null || echo "")
+cR2b_pe=$(jq -r '.parse_errors | length' "$cR2b_out" 2>/dev/null || echo "")
+cR2b_n=$(jq -r '.aggregated_findings | length' "$cR2b_out" 2>/dev/null || echo "")
+if [[ "$cR2b_rc" -eq 0 && "$cR2b_status" == "complete" \
+      && "$cR2b_verdict" == "fail" && "$cR2b_cv" == "fail" \
+      && "$cR2b_pe" == "0" && "$cR2b_n" == "1" ]]; then
+    log_pass "Regression: stale .failed ignored when Claude JSON is valid"
+else
+    log_fail "Regression: stale failed rc=$cR2b_rc status=$cR2b_status verdict=$cR2b_verdict cv=$cR2b_cv pe=$cR2b_pe n=$cR2b_n body=$(cat "$cR2b_out") stderr=$(cat "$cR2b_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Regression: round-1 review #2 (the [2]) — when both --session-id S and
 # --session-key K are passed, status MUST resolve under S, not K. Plant
 # state under run "S" only; pass --session-id S --session-key K and

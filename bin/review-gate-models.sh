@@ -750,6 +750,33 @@ extract_json() {
     printf '%s' "$json" | jq -c '.'
 }
 
+# Parse a reviewer output without invoking repair fallbacks, and only accept a
+# canonical review-shaped response. This lets downstream aggregation ignore
+# stale `.failed` sentinels when a reviewer process wrote a valid final JSON
+# before a wrapper/timeout path incorrectly left failure state behind.
+extract_valid_review_json_no_repair() {
+    local file="$1"
+    local reviewer="$2"
+    local json
+
+    [[ -f "$file" ]] || return 1
+
+    if ! json=$(REVIEW_REPAIR_ENABLED=false extract_json "$file" "$reviewer" 2>/dev/null); then
+        return 1
+    fi
+
+    if ! printf '%s' "$json" | jq -e '
+        type == "object"
+        and (.verdict == "PASS" or .verdict == "FAIL" or .verdict == "NEEDS_WORK")
+        and (.summary | type == "string")
+        and (.findings | type == "array")
+    ' >/dev/null 2>&1; then
+        return 1
+    fi
+
+    printf '%s' "$json"
+}
+
 # Spawn a reviewer subprocess.
 #
 # Args:
@@ -774,6 +801,17 @@ spawn_reviewer() {
         local script="$1"
         local bash_bin="${BASH:-/bin/bash}"
         local old_hup old_int old_term child_pid
+
+        # Reviewer CLIs may run their own Stop hooks. Mark those children so
+        # hooks can fail open, and scrub parent gate identity so a child review
+        # cannot re-enter and wait on the parent gate that spawned it.
+        script='
+export CERBERUS_REVIEWER_SUBPROCESS=1
+export REVIEW_GATE_REVIEWER_SUBPROCESS=1
+unset CERBERUS_RUN_KEY REVIEW_GATE_SESSION_KEY REVIEW_GATE_SESSION_SOURCE
+unset CERBERUS_SESSION_ID CLAUDE_SESSION_ID REVIEW_GATE_SESSION_ID
+unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PATH
+'"$script"
 
         if command -v setsid >/dev/null 2>&1; then
             nohup setsid "$bash_bin" -c "$script" </dev/null >/dev/null 2>&1 &

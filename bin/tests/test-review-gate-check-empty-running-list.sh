@@ -143,3 +143,94 @@ if [[ "$action" != "proceed" ]]; then
 fi
 
 log_pass "check handles completed reviewers without nounset failure"
+
+SESSION_ID_STALE="test-check-stale-failed-$$"
+TRANSCRIPT_PATH_STALE="$HOME/.claude/projects/-tmp-check-test/${SESSION_ID_STALE}.jsonl"
+REVIEW_DIR_STALE="$HOME/.claude/projects/-tmp-check-test/cerberus/${SESSION_ID_STALE}"
+STATE_FILE_STALE="$REVIEW_DIR_STALE/gate-state.json"
+REVIEWS_DIR_STALE="$REVIEW_DIR_STALE/reviews"
+
+mkdir -p "$REVIEWS_DIR_STALE" "$(dirname "$TRANSCRIPT_PATH_STALE")"
+touch "$TRANSCRIPT_PATH_STALE"
+
+cat > "$REVIEWS_DIR_STALE/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"PASS\",\"summary\":\"valid output with stale failure\",\"findings\":[]}"
+}
+EOF
+touch "$REVIEWS_DIR_STALE/claude.failed"
+
+created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+cat > "$STATE_FILE_STALE" <<EOF
+{
+  "version": 1,
+  "status": "pending",
+  "trigger_source": "test",
+  "artifact": {
+    "path": "$REVIEW_DIR_STALE/latest.md",
+    "sha256": "test"
+  },
+  "mode": {
+    "type": "plan",
+    "plan_path": "$REVIEW_DIR_STALE/latest.md"
+  },
+  "config": {
+    "max_rounds": 3,
+    "consensus_mode": "majority"
+  },
+  "reviewers": {
+    "claude": {
+      "output_file": "$REVIEWS_DIR_STALE/claude.json",
+      "sentinel_file": "$REVIEWS_DIR_STALE/claude.done",
+      "completed_at": null,
+      "result": null
+    }
+  },
+  "consensus": null,
+  "decision": null,
+  "created_at": "$created_at",
+  "iteration": 0
+}
+EOF
+
+log_test "check trusts valid reviewer JSON over stale .failed sentinel"
+
+stdout_file="$TEST_DIR/stale-stdout"
+stderr_file="$TEST_DIR/stale-stderr"
+
+set +e
+printf '{"session_id":"%s","transcript_path":"%s"}' "$SESSION_ID_STALE" "$TRANSCRIPT_PATH_STALE" \
+    | /bin/bash "$REVIEW_GATE" check >"$stdout_file" 2>"$stderr_file"
+status=$?
+set -e
+
+stdout=$(cat "$stdout_file")
+stderr=$(cat "$stderr_file")
+
+if [[ "$status" -ne 0 ]]; then
+    log_fail "expected check to exit 0 for valid stale-failed output, got $status\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+decision=$(jq -r '.decision // empty' "$stdout_file")
+if [[ "$decision" != "block" ]]; then
+    log_fail "expected hook to return block JSON after auto-approval summary, got stdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+state_status=$(jq -r '.status' "$STATE_FILE_STALE")
+if [[ "$state_status" != "resolved" ]]; then
+    log_fail "expected stale-failed gate to resolve, got state status $state_status"
+fi
+
+consensus=$(jq -r '.consensus.verdict // empty' "$STATE_FILE_STALE")
+if [[ "$consensus" != "auto_approve" ]]; then
+    log_fail "expected stale-failed consensus auto_approve, got $consensus"
+fi
+
+if [[ "$stdout" == *"Reviewer process failed"* ]]; then
+    log_fail "stale .failed sentinel leaked into hook output\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+log_pass "check ignores stale .failed when reviewer JSON is valid"
