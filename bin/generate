@@ -25,7 +25,23 @@ if [ -n "${CERBERUS_ROOT:-}" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] \
         "$CERBERUS_ROOT" "$CLAUDE_PLUGIN_ROOT" >&2
     export __CERBERUS_GENERATE_ROOT_WARNED=1
 fi
-PLUGIN_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
+__cerberus_generate_root_has_backend() {
+    local root="${1:-}"
+    [ -n "$root" ] \
+        && [[ "$root" == /* ]] \
+        && [ -r "$root/bin/generate" ] \
+        && [ -r "$root/bin/review-gate-models.sh" ] \
+        && [ -r "$root/config/gemini-readonly-settings.json" ] \
+        && [ -r "$root/config/gemini-readonly-policy.toml" ]
+}
+
+SCRIPT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -n "$PLUGIN_ROOT" ] && ! __cerberus_generate_root_has_backend "$PLUGIN_ROOT"; then
+    echo "[cerberus generate] warning: configured Cerberus root '$PLUGIN_ROOT' is missing backend files; using $SCRIPT_ROOT" >&2
+    PLUGIN_ROOT=""
+fi
+PLUGIN_ROOT="${PLUGIN_ROOT:-$SCRIPT_ROOT}"
 
 # Load model helpers
 source "$SCRIPT_DIR/review-gate-models.sh"

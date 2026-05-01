@@ -8,15 +8,34 @@ while [ -L "$__cerberus_skill_env_source" ]; do
     [[ $__cerberus_skill_env_source != /* ]] && __cerberus_skill_env_source="$__cerberus_skill_env_dir/$__cerberus_skill_env_source"
 done
 __cerberus_skill_env_bin_dir="$(cd -P "$(dirname "$__cerberus_skill_env_source")" && pwd)"
+__cerberus_skill_env_script_root="$(cd "$__cerberus_skill_env_bin_dir/.." && pwd)"
+
+__cerberus_skill_env_has_backend() {
+    local root="${1:-}"
+    [ -n "$root" ] \
+        && [[ "$root" == /* ]] \
+        && [ -r "$root/bin/review-gate" ] \
+        && [ -r "$root/bin/review-gate-models.sh" ] \
+        && [ -r "$root/config/gemini-readonly-settings.json" ] \
+        && [ -r "$root/config/gemini-readonly-policy.toml" ]
+}
 
 if [ -z "${CERBERUS_ROOT:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
         export CERBERUS_ROOT="$CLAUDE_PLUGIN_ROOT"
     elif [ -n "${CLAUDE_SKILL_DIR:-}" ]; then
-        export CERBERUS_ROOT="$(cd "$CLAUDE_SKILL_DIR/../.." && pwd)"
+        if __cerberus_skill_env_tmp_root="$(cd -P "$CLAUDE_SKILL_DIR/../.." 2>/dev/null && pwd)"; then
+            export CERBERUS_ROOT="$__cerberus_skill_env_tmp_root"
+        else
+            export CERBERUS_ROOT="$__cerberus_skill_env_script_root"
+        fi
+        unset __cerberus_skill_env_tmp_root
     else
-        export CERBERUS_ROOT="$(cd "$__cerberus_skill_env_bin_dir/.." && pwd)"
+        export CERBERUS_ROOT="$__cerberus_skill_env_script_root"
     fi
+fi
+if ! __cerberus_skill_env_has_backend "$CERBERUS_ROOT"; then
+    export CERBERUS_ROOT="$__cerberus_skill_env_script_root"
 fi
 
 if [ -z "${CERBERUS_HOST:-}" ]; then
@@ -66,4 +85,5 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
     fi
 fi
 
-unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir
+unset -f __cerberus_skill_env_has_backend
+unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir __cerberus_skill_env_script_root

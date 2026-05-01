@@ -93,6 +93,16 @@ __cerberus_resolve_root() {
     echo "${cer:-${leg:-}}"
 }
 
+__cerberus_root_has_backend() {
+    local root="${1:-}"
+    [ -n "$root" ] \
+        && [[ "$root" == /* ]] \
+        && [ -r "$root/bin/review-gate" ] \
+        && [ -r "$root/bin/review-gate-models.sh" ] \
+        && [ -r "$root/config/gemini-readonly-settings.json" ] \
+        && [ -r "$root/config/gemini-readonly-policy.toml" ]
+}
+
 # __cerberus_resolve_session_id — return the effective Cerberus session id.
 # Precedence: CERBERUS_SESSION_ID > CLAUDE_SESSION_ID > REVIEW_GATE_SESSION_ID > "".
 # Empty strings are treated as unset (parameter expansion `${VAR:-}`). When two
@@ -187,8 +197,13 @@ __cerberus_export_neutral_env_for_subprocess() {
     export REVIEW_GATE_SESSION_KEY="${REVIEW_GATE_SESSION_KEY:-$_rk}"
 }
 
+SCRIPT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_ROOT="$(__cerberus_resolve_root)"
-PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+if [ -n "$PLUGIN_ROOT" ] && ! __cerberus_root_has_backend "$PLUGIN_ROOT"; then
+    echo "warning: configured Cerberus root '$PLUGIN_ROOT' is missing backend files; using $SCRIPT_ROOT" >&2
+    PLUGIN_ROOT=""
+fi
+PLUGIN_ROOT="${PLUGIN_ROOT:-$SCRIPT_ROOT}"
 CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 
 # Best-effort cleanup of the alias-warning markers (created lazily by the
