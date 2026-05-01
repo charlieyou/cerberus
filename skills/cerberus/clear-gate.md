@@ -27,8 +27,13 @@ clear-gate
 
 The skill takes no arguments. The active run is resolved from the session
 registry written by `bin/codex-session-init` during `SessionStart`. If you
-want to clear a specific (non-active) run, pass `--session-key` to
-`bin/review-gate resolve` directly.
+want to clear a specific (non-active) run, export its run key in the
+environment and call the backend directly — `bin/review-gate resolve`
+itself only accepts `--reason`, so the run is selected via env:
+
+```bash
+CERBERUS_RUN_KEY=<run-key> bin/review-gate resolve --reason "manual clear of <run-key>"
+```
 
 ## Install
 

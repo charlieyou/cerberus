@@ -96,8 +96,14 @@ result_file="$review_dir/ask-result.json"
 # to `wait ... || true` and emit ASK_RESULT pointing at a no-active-gate /
 # stale gate-state.json, which the synthesis step would then misread as a
 # valid panel response.
-if ! "$review_gate" spawn-ask "$@"; then
-    rc=$?
+#
+# Capture the exit code via `|| rc=$?` rather than `if ! ... ; then rc=$?`.
+# In POSIX shells (dash, ash) `$?` inside the `then` block of `if ! cmd`
+# is the negated status (0 on failure), so `exit $rc` would silently exit 0
+# and let the synthesis step proceed against an absent panel.
+rc=0
+"$review_gate" spawn-ask "$@" || rc=$?
+if [ "$rc" -ne 0 ]; then
     echo "ask: spawn-ask failed with exit $rc; not waiting on a panel that was not started" >&2
     exit "$rc"
 fi
