@@ -11,9 +11,20 @@ while [ -L "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-# T004: alias CERBERUS_ROOT → CLAUDE_PLUGIN_ROOT so non-Claude hosts (Codex/
-# Amp/generic) can configure the plugin root without setting Claude-specific
-# env. Precedence mirrors __cerberus_resolve_root in bin/review-gate.
+# T004 + T0155: alias CERBERUS_ROOT → CLAUDE_PLUGIN_ROOT so non-Claude hosts
+# (Codex/Amp/generic) can configure the plugin root without setting Claude-
+# specific env. Precedence mirrors __cerberus_resolve_root in bin/review-gate.
+# The warning is INLINED here (rather than calling the helper) because
+# bin/generate is a separate binary and sourcing bin/review-gate at top of
+# bin/generate would pull in the entire review-gate runtime, which is wrong
+# for a generator.
+if [ -n "${CERBERUS_ROOT:-}" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] \
+   && [ "$CERBERUS_ROOT" != "$CLAUDE_PLUGIN_ROOT" ] \
+   && [ -z "${__CERBERUS_GENERATE_ROOT_WARNED:-}" ]; then
+    printf '[cerberus generate] warning: CERBERUS_ROOT (%s) and CLAUDE_PLUGIN_ROOT (%s) differ; using CERBERUS_ROOT.\n' \
+        "$CERBERUS_ROOT" "$CLAUDE_PLUGIN_ROOT" >&2
+    export __CERBERUS_GENERATE_ROOT_WARNED=1
+fi
 PLUGIN_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 
 # Load model helpers
