@@ -120,9 +120,14 @@ gemini_readonly_policy_path() {
 # bytes when --debate is absent (so the byte-parity guarantee for
 # review-schema.json holds), and the debate variant MUST add the additive
 # debate fields (overall_confidence, strategy, round, peer_responses_seen at
-# the top level; confidence inside findings[*]) as OPTIONAL properties while
-# retaining additionalProperties:false on both objects so genuinely unknown
-# fields are still rejected.
+# the top level; confidence inside findings[*]) as REQUIRED properties with
+# nullable type unions, while retaining additionalProperties:false on both
+# objects so genuinely unknown fields are still rejected. The required-
+# but-nullable shape is needed for OpenAI's strict structured-outputs mode
+# (codex), which rejects schemas where any property in `properties` is
+# absent from `required`. Mode B parsing in review-gate-debate.sh treats
+# null and missing identically (both default to 0.5 for confidence fields),
+# so this is byte-equivalent for downstream consumers.
 #
 # Selection contract:
 #   $1 (optional)            "true" enables the debate variant; anything else
@@ -186,15 +191,20 @@ _emit_review_schema() {
 }
 SCHEMA
     else
-        # Debate variant. Adds the additive debate fields as OPTIONAL
-        # top-level properties (overall_confidence, strategy, round,
-        # peer_responses_seen) and an OPTIONAL findings[*].confidence field.
-        # `required` keeps the original three core fields only — the
-        # additive fields are not required so reviewers that fail to emit
-        # them still validate (Mode B handling clamps/defaults at parse
-        # time, not schema-validation time). Both objects retain
-        # `additionalProperties: false` so genuinely unknown fields are
-        # still rejected.
+        # Debate variant. Adds the additive debate fields at the top level
+        # (overall_confidence, strategy, round, peer_responses_seen) and a
+        # findings[*].confidence field. All additive fields are listed in
+        # `required` and given a nullable type union so reviewers that do
+        # not have a meaningful value MUST still emit the key (with `null`)
+        # rather than omitting it. This is required for OpenAI's strict
+        # structured-outputs mode (the codex reviewer uses it via
+        # `--output-schema`), which rejects schemas where any property in
+        # `properties` is absent from `required`. Mode B handling at parse
+        # time (in review-gate-debate.sh) treats null and missing values
+        # identically — defaulting overall_confidence and per-finding
+        # confidence to 0.5 — so this change is byte-equivalent for
+        # downstream consumers. Both objects retain `additionalProperties:
+        # false` so genuinely unknown fields are still rejected.
         cat <<'SCHEMA'
 {
   "type": "object",
@@ -217,24 +227,24 @@ SCHEMA
           "file_path": {"type": ["string", "null"]},
           "line_start": {"type": ["integer", "null"]},
           "line_end": {"type": ["integer", "null"]},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+          "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
         },
-        "required": ["title", "body", "priority", "file_path", "line_start", "line_end"],
+        "required": ["title", "body", "priority", "file_path", "line_start", "line_end", "confidence"],
         "additionalProperties": false
       }
     },
-    "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "overall_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
     "strategy": {
-      "type": "string",
-      "enum": ["verification-first", "falsification-first", "decompose"]
+      "type": ["string", "null"],
+      "enum": ["verification-first", "falsification-first", "decompose", null]
     },
-    "round": {"type": "integer", "minimum": 1},
+    "round": {"type": ["integer", "null"], "minimum": 1},
     "peer_responses_seen": {
-      "type": "array",
+      "type": ["array", "null"],
       "items": {"type": "string"}
     }
   },
-  "required": ["verdict", "summary", "findings"],
+  "required": ["verdict", "summary", "findings", "overall_confidence", "strategy", "round", "peer_responses_seen"],
   "additionalProperties": false
 }
 SCHEMA

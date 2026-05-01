@@ -800,8 +800,10 @@ fi
 # MUST be byte-identical to the pre-feature schema when --debate is absent
 # (covered by the byte-parity sweep above) AND MUST add the additive debate
 # fields (overall_confidence, strategy, round, peer_responses_seen at the top
-# level; confidence inside findings[*]) when --debate is set, while retaining
-# `additionalProperties: false` on both objects.
+# level; confidence inside findings[*]) when --debate is set as REQUIRED
+# properties with nullable type unions (so OpenAI strict structured-outputs
+# mode accepts the schema), while retaining `additionalProperties: false` on
+# both objects.
 #
 # These assertions are unit-style on the helper functions in
 # bin/review-gate-models.sh; the runtime end-to-end flow is covered separately
@@ -897,28 +899,51 @@ else
                 log_fail "debate variant findings[*] additionalProperties != false (got: $findings_addl)"
                 debate_ok=0
             fi
-            # Top-level additive fields present (as optional, NOT required).
+            # Top-level additive fields present AND required-but-nullable.
+            # OpenAI strict structured-outputs mode (used by codex via
+            # --output-schema) rejects schemas where any property in
+            # `properties` is absent from `required`. So the additive debate
+            # fields must be listed in `required` AND given a nullable type
+            # union (e.g. ["number","null"]) so reviewers without a
+            # meaningful value can still emit `null`. Mode B parsing treats
+            # null and missing identically.
             for f in overall_confidence strategy round peer_responses_seen; do
                 present=$(jq --arg n "$f" 'if .properties[$n] then "yes" else "no" end' "$debate_emit")
                 if [[ "$present" != '"yes"' ]]; then
-                    log_fail "debate variant missing top-level optional property: $f"
+                    log_fail "debate variant missing top-level additive property: $f"
                     debate_ok=0
                 fi
                 in_required=$(jq --arg n "$f" '(.required // []) | index($n) | if . == null then "no" else "yes" end' "$debate_emit")
-                if [[ "$in_required" != '"no"' ]]; then
-                    log_fail "debate variant: $f appears in required[] but should be optional"
+                if [[ "$in_required" != '"yes"' ]]; then
+                    log_fail "debate variant: top-level $f must appear in required[] (OpenAI strict mode)"
+                    debate_ok=0
+                fi
+                has_null=$(jq --arg n "$f" '
+                    .properties[$n].type
+                    | if type == "array" then any(. == "null") else . == "null" end
+                ' "$debate_emit")
+                if [[ "$has_null" != "true" ]]; then
+                    log_fail "debate variant: top-level $f.type must allow null (OpenAI strict mode)"
                     debate_ok=0
                 fi
             done
-            # findings[*].confidence present as optional.
+            # findings[*].confidence present, required, and nullable.
             f_conf=$(jq 'if .properties.findings.items.properties.confidence then "yes" else "no" end' "$debate_emit")
             if [[ "$f_conf" != '"yes"' ]]; then
-                log_fail "debate variant missing findings[*].confidence optional property"
+                log_fail "debate variant missing findings[*].confidence property"
                 debate_ok=0
             fi
             f_conf_required=$(jq '(.properties.findings.items.required // []) | index("confidence") | if . == null then "no" else "yes" end' "$debate_emit")
-            if [[ "$f_conf_required" != '"no"' ]]; then
-                log_fail "debate variant: findings[*].confidence appears in required[] but should be optional"
+            if [[ "$f_conf_required" != '"yes"' ]]; then
+                log_fail "debate variant: findings[*].confidence must appear in required[] (OpenAI strict mode)"
+                debate_ok=0
+            fi
+            f_conf_null=$(jq '
+                .properties.findings.items.properties.confidence.type
+                | if type == "array" then any(. == "null") else . == "null" end
+            ' "$debate_emit")
+            if [[ "$f_conf_null" != "true" ]]; then
+                log_fail "debate variant: findings[*].confidence.type must allow null (OpenAI strict mode)"
                 debate_ok=0
             fi
             # The three pre-feature required top-level keys are still required.
@@ -930,7 +955,7 @@ else
                 fi
             done
             if [[ $debate_ok -eq 1 ]]; then
-                log_pass "debate variant has additive fields as optional, additionalProperties:false retained"
+                log_pass "debate variant has additive fields as required-but-nullable, additionalProperties:false retained"
                 pass_count=$((pass_count + 1))
             else
                 fail_count=$((fail_count + 1))
