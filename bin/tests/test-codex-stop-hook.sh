@@ -561,27 +561,21 @@ mkdir -p "$c11_home"
 c11_workspace="/tmp/cerberus-c11"
 c11_no_jq_dir="$TEST_DIR/no-jq-bin"
 make_no_jq_path "$c11_no_jq_dir" >/dev/null
-# Verify jq actually missing under our sanitized PATH.
-if PATH="$c11_no_jq_dir" command -v jq >/dev/null 2>&1; then
-    log_fail "Case 11 — could not hide jq from sanitized PATH (jq still resolves: $(PATH="$c11_no_jq_dir" command -v jq))"
+# Verify jq actually missing under our sanitized PATH. Use a fresh
+# environment and shell so command hashing / inherited shell state cannot
+# leak the real jq into this probe on macOS/Homebrew installations.
+if env -i PATH="$c11_no_jq_dir" bash -c 'command -v jq >/dev/null 2>&1'; then
+    c11_leaked_jq="$(env -i PATH="$c11_no_jq_dir" bash -c 'command -v jq' 2>/dev/null || echo unknown)"
+    log_fail "Case 11 — could not hide jq from sanitized PATH (jq still resolves: $c11_leaked_jq)"
 else
     c11_payload='{"session_id":"sess-c11-001","cwd":"/tmp/cerberus-c11"}'
     c11_out="$TEST_DIR/c11.out"
     c11_err="$TEST_DIR/c11.err"
     c11_rc=0
-    (
-        unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
-              CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
-              CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
-              REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
-              CERBERUS_CODEX_STOP_WAIT_SECONDS \
-              CERBERUS_REVIEW_GATE_BIN \
-              CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
-              __CERBERUS_ALIAS_WARNED || true
-        export HOME="$c11_home"
-        export PATH="$c11_no_jq_dir"
-        printf '%s' "$c11_payload" | "$CODEX_STOP_HOOK" >"$c11_out" 2>"$c11_err"
-    ) || c11_rc=$?
+    env -i HOME="$c11_home" PATH="$c11_no_jq_dir" \
+        "$CODEX_STOP_HOOK" >"$c11_out" 2>"$c11_err" <<EOF || c11_rc=$?
+$c11_payload
+EOF
     c11_body="$(cat "$c11_out" 2>/dev/null || echo "")"
     # Cannot use jq here (we just hid it). Coarse string match: action:allow.
     if [[ "$c11_rc" -eq 0 && "$c11_body" == *'"action"'*'"allow"'* ]]; then

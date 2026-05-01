@@ -1,0 +1,20 @@
+{
+  "name": "cerberus-local",
+  "interface": {
+    "displayName": "Cerberus Local"
+  },
+  "plugins": [
+    {
+      "name": "cerberus",
+      "source": {
+        "source": "local",
+        "path": "./plugins/cerberus"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Coding"
+    }
+  ]
+}
