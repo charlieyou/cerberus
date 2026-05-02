@@ -223,8 +223,20 @@ log_pass "gemini read-only paths stay anchored to Cerberus config"
 
 log_test "Codex plugin manifest declares bundled lifecycle hooks"
 marketplace_path="$(jq -r '.plugins[] | select(.name == "cerberus") | .source.path // empty' "$PLUGIN_ROOT/.agents/plugins/marketplace.json" 2>/dev/null || echo "")"
-if [[ "$marketplace_path" != "./" ]]; then
-    log_fail "expected marketplace source.path='./', got: $marketplace_path"
+marketplace_source="$(jq -r '.plugins[] | select(.name == "cerberus") | .source.source // empty' "$PLUGIN_ROOT/.agents/plugins/marketplace.json" 2>/dev/null || echo "")"
+marketplace_url="$(jq -r '.plugins[] | select(.name == "cerberus") | .source.url // empty' "$PLUGIN_ROOT/.agents/plugins/marketplace.json" 2>/dev/null || echo "")"
+marketplace_ref="$(jq -r '.plugins[] | select(.name == "cerberus") | .source.ref // empty' "$PLUGIN_ROOT/.agents/plugins/marketplace.json" 2>/dev/null || echo "")"
+if [[ "$marketplace_source" != "url" ]]; then
+    log_fail "expected marketplace source.source='url', got: $marketplace_source"
+fi
+if [[ "$marketplace_url" != "https://github.com/charlieyou/cerberus.git" ]]; then
+    log_fail "expected marketplace source.url to point at the Cerberus Git repository, got: $marketplace_url"
+fi
+if [[ "$marketplace_ref" != "main" ]]; then
+    log_fail "expected marketplace source.ref='main', got: $marketplace_ref"
+fi
+if [[ -n "$marketplace_path" ]]; then
+    log_fail "expected repo-root Git marketplace source to omit source.path, got: $marketplace_path"
 fi
 manifest_hooks="$(jq -r '.hooks // empty' "$PLUGIN_ROOT/.codex-plugin/plugin.json" 2>/dev/null || echo "")"
 if [[ "$manifest_hooks" != "./hooks/codex-hooks.json" ]]; then

@@ -55,10 +55,10 @@ to declare `skills` as a directory path. Cerberus points that field at
 the skill and has a `SKILL.md` file.
 
 The local marketplace descriptor at `.agents/plugins/marketplace.json`
-registers the repository root as `cerberus-local`; add that marketplace
-file to Codex, then install and enable `cerberus@cerberus-local` using
-your Codex plugin UI or CLI. After installation, Codex should list the
-Cerberus skills from `skills/`.
+registers the Git repository root as `cerberus-local`; add that
+marketplace file to Codex, then install and enable
+`cerberus@cerberus-local` using your Codex plugin UI or CLI. After
+installation, Codex should list the Cerberus skills from `skills/`.
 
 ### Step 2 — Runtime Root + Bundled Hooks
 
@@ -91,12 +91,11 @@ hooks call the bundled `bin/codex-session-init` and
 `bin/codex-stop-hook` without a separate `~/.codex/hooks.json`
 installation step.
 
-After changing plugin files or updating Cerberus, reinstall the local
-plugin from the plugin directory and restart Codex (or start a new
-session) so the new manifest, skills, and hooks take effect. Codex's
-`plugin marketplace upgrade` command only refreshes Git-backed
-marketplaces; for local marketplaces, re-adding the marketplace is not
-enough to refresh an already-installed cached plugin copy.
+After changing plugin files or updating Cerberus, push the change and
+run `codex plugin marketplace upgrade cerberus-local`, then reinstall
+or refresh the plugin from the plugin directory and restart Codex (or
+start a new session) so the new manifest, skills, and hooks take
+effect.
 
 #### Legacy Manual Hook Template
 
@@ -585,7 +584,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"

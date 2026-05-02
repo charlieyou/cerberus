@@ -7,8 +7,9 @@
     {
       "name": "cerberus",
       "source": {
-        "source": "local",
-        "path": "./"
+        "source": "url",
+        "url": "https://github.com/charlieyou/cerberus.git",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
