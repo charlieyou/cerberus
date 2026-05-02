@@ -91,9 +91,12 @@ hooks call the bundled `bin/codex-session-init` and
 `bin/codex-stop-hook` without a separate `~/.codex/hooks.json`
 installation step.
 
-After changing plugin files or updating Cerberus, reinstall/refresh the
-plugin and restart Codex (or start a new session) so the new manifest,
-skills, and hooks take effect.
+After changing plugin files or updating Cerberus, reinstall the local
+plugin from the plugin directory and restart Codex (or start a new
+session) so the new manifest, skills, and hooks take effect. Codex's
+`plugin marketplace upgrade` command only refreshes Git-backed
+marketplaces; for local marketplaces, re-adding the marketplace is not
+enough to refresh an already-installed cached plugin copy.
 
 #### Legacy Manual Hook Template
 
@@ -582,7 +585,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"

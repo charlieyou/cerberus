@@ -222,6 +222,10 @@ fi
 log_pass "gemini read-only paths stay anchored to Cerberus config"
 
 log_test "Codex plugin manifest declares bundled lifecycle hooks"
+marketplace_path="$(jq -r '.plugins[] | select(.name == "cerberus") | .source.path // empty' "$PLUGIN_ROOT/.agents/plugins/marketplace.json" 2>/dev/null || echo "")"
+if [[ "$marketplace_path" != "./" ]]; then
+    log_fail "expected marketplace source.path='./', got: $marketplace_path"
+fi
 manifest_hooks="$(jq -r '.hooks // empty' "$PLUGIN_ROOT/.codex-plugin/plugin.json" 2>/dev/null || echo "")"
 if [[ "$manifest_hooks" != "./hooks/codex-hooks.json" ]]; then
     log_fail "expected plugin manifest hooks='./hooks/codex-hooks.json', got: $manifest_hooks"
