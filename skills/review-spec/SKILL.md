@@ -44,6 +44,7 @@ if [ -z "$cerberus_root" ]; then
     echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
     exit 127
 fi
+export CERBERUS_ROOT="$cerberus_root"
 # shellcheck source=/dev/null
 . "$cerberus_root/bin/cerberus-skill-env" || exit $?
 ```

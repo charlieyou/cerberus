@@ -181,6 +181,36 @@ if [[ "$rendered_skill_dir_root" != "$PLUGIN_ROOT" ]]; then
 fi
 log_pass "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 
+log_test "skill bootstrap exports selected root before sourcing env helper"
+fake_backend="$TEST_DIR/fake-backend"
+mkdir -p "$fake_backend/bin" "$fake_backend/config"
+cat > "$fake_backend/bin/cerberus-skill-env" <<'EOF'
+if [ -z "${CERBERUS_ROOT:-}" ]; then
+    export CERBERUS_ROOT="${CLAUDE_PLUGIN_ROOT:-helper-used-host-root}"
+fi
+EOF
+cat > "$fake_backend/bin/review-gate" <<'EOF'
+#!/usr/bin/env bash
+:
+EOF
+chmod +x "$fake_backend/bin/review-gate"
+: > "$fake_backend/bin/review-gate-models.sh"
+: > "$fake_backend/config/gemini-readonly-settings.json"
+: > "$fake_backend/config/gemini-readonly-policy.toml"
+FAKE_BACKEND_SED="$(escape_sed_replacement "$fake_backend")"
+fake_backend_bootstrap="$TEST_DIR/bootstrap-fake-backend.sh"
+extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
+    | sed "s|\${CLAUDE_PLUGIN_ROOT}|$FAKE_BACKEND_SED|g" >"$fake_backend_bootstrap"
+fake_backend_resolved_root="$(
+    cd "$FOREIGN_CWD"
+    env -u CERBERUS_ROOT -u CLAUDE_SKILL_DIR CLAUDE_PLUGIN_ROOT="$BAD_ROOT" \
+        "$RUNNER_BASH" -c '. "$1"; printf "%s\n" "$CERBERUS_ROOT"' _ "$fake_backend_bootstrap"
+)"
+if [[ "$fake_backend_resolved_root" != "$fake_backend" ]]; then
+    log_fail "expected bootstrap to export selected backend $fake_backend before helper source, got: $fake_backend_resolved_root"
+fi
+log_pass "skill bootstrap preserves selected root across env helper source"
+
 log_test "skill bootstrap ignores stale inherited CERBERUS_ROOT with helper only"
 stale_root="$TEST_DIR/stale-helper-root"
 mkdir -p "$stale_root/bin"
