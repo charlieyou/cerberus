@@ -1402,10 +1402,6 @@ USAGE
         rm -f "$context_tmp"
     fi
 
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
-    fi
-
     # --- Write artifact for review gate ---
     local artifact_path="$review_dir/latest.md"
     {
@@ -1823,10 +1819,6 @@ JSON only, no markdown code fences:
         rm -f "$focus_tmp"
     fi
 
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
-    fi
-
     # --- Write the prompt file directly (bypass build_prompt to use our template) ---
     local reviews_dir="$review_dir/reviews"
     mkdir -p "$reviews_dir"
@@ -2165,10 +2157,6 @@ JSON only, no markdown code fences:
 - file_path, line_start, line_end are optional (use null if not applicable)"
         # Fallback path uses a synthetic prompt with no placeholders, so the
         # fallback intentionally bypasses substitute_debate_placeholders.
-    fi
-
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
     fi
 
     # --- Write the prompt file directly (bypass build_prompt to use our template) ---
@@ -2581,10 +2569,6 @@ USAGE
         rm -f "$prev_tmp"
     fi
 
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
-    fi
-
     # --- Write the prompt file ---
     mkdir -p "$reviews_dir"
     local prompt_file="$reviews_dir/review.prompt"
@@ -2922,10 +2906,6 @@ USAGE
         }
     ' "$template_substituted_tmp")
     rm -f "$ask_tmp" "$context_tmp" "$template_substituted_tmp"
-
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
-    fi
 
     mkdir -p "$reviews_dir"
     local prompt_file="$reviews_dir/review.prompt"
@@ -3659,11 +3639,6 @@ DEFAULT
 
         local previous_reviews
         previous_reviews=$(get_previous_reviews)
-
-        if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-            echo "ultrathink"
-            echo ""
-        fi
 
         # Use different framing for architecture-review (verification vs evaluation)
         local intro_text

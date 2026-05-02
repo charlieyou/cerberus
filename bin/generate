@@ -465,10 +465,6 @@ review_gate_generate() {
         fi
     fi
 
-    if [[ "${PROMPT_ULTRATHINK:-false}" == "true" ]]; then
-        prompt_content=$'ultrathink\n\n'"$prompt_content"
-    fi
-
     # Create output directory
     local draft_dir="$output_dir"
     mkdir -p "$draft_dir"
@@ -603,12 +599,13 @@ review_gate_generate() {
 
     # Spawn Claude (print mode, no interaction, stdin for prompt)
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
+    local claude_reasoning="${CLAUDE_REASONING_EFFORT:-high}"
     if command -v claude >/dev/null 2>&1; then
         local -a claude_allowed_tools
         local -a claude_disallowed_tools
         read -r -a claude_allowed_tools <<< "$CLAUDE_READONLY_ALLOWED_TOOLS"
         read -r -a claude_disallowed_tools <<< "$CLAUDE_READONLY_DISALLOWED_TOOLS"
-        echo "Spawning Claude generator (model: $claude_model, json=$claude_json_mode)..." >&2
+        echo "Spawning Claude generator (model: $claude_model, effort: $claude_reasoning, json=$claude_json_mode)..." >&2
         (
             local claude_raw="$draft_dir/claude/raw.json"
             local claude_draft="$draft_dir/claude/draft.md"
@@ -622,6 +619,7 @@ review_gate_generate() {
 
             if [[ "$claude_json_mode" == "true" ]]; then
                 if "${timeout_prefix[@]}" claude -p --model "$claude_model" \
+                    --effort "$claude_reasoning" \
                     --output-format json \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
@@ -635,6 +633,7 @@ review_gate_generate() {
             else
                 # Fallback to text mode
                 if "${timeout_prefix[@]}" claude -p --model "$claude_model" \
+                    --effort "$claude_reasoning" \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
                     < "$prompt_input" > "$claude_draft" 2>&1; then

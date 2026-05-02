@@ -56,25 +56,26 @@ resolve_intelligence_mode() {
     esac
 
     INTELLIGENCE_MODE="$mode"
-    PROMPT_ULTRATHINK="false"
 
     case "$mode" in
         fast)
             CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-medium}"
+            CLAUDE_REASONING_EFFORT="${CLAUDE_REASONING_EFFORT_OVERRIDE:-medium}"
             # Mode determines model - respect override, then base var, then mode default
             GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3-flash-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-sonnet}}"
             ;;
         smart)
             CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-high}"
+            CLAUDE_REASONING_EFFORT="${CLAUDE_REASONING_EFFORT_OVERRIDE:-high}"
             GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3.1-pro-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
             ;;
         max)
             CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-xhigh}"
+            CLAUDE_REASONING_EFFORT="${CLAUDE_REASONING_EFFORT_OVERRIDE:-max}"
             GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3.1-pro-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
-            PROMPT_ULTRATHINK="true"
             ;;
     esac
 
@@ -857,6 +858,7 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
     local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
+    local claude_reasoning="${CLAUDE_REASONING_EFFORT:-high}"
     local reviewer_timeout="${REVIEW_GATE_REVIEWER_TIMEOUT:-1800}"
     local reviewer_timeout_bin="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
 
@@ -937,7 +939,7 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
             '
             ;;
         claude)
-            echo "Spawning claude reviewer (model: $claude_model)..." >&2
+            echo "Spawning claude reviewer (model: $claude_model, effort: $claude_reasoning)..." >&2
             CLAUDE_ALLOWED_TOOLS="$CLAUDE_READONLY_ALLOWED_TOOLS" \
             CLAUDE_DISALLOWED_TOOLS="$CLAUDE_READONLY_DISALLOWED_TOOLS" \
             REVIEW_OUT="$output_file" \
@@ -945,6 +947,7 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
             REVIEW_FAIL="$failed_file" \
             REVIEW_PROMPT="$prompt_file" \
             REVIEW_MODEL="$claude_model" \
+            REVIEW_REASONING="$claude_reasoning" \
             REVIEW_TIMEOUT="$reviewer_timeout" \
             REVIEW_TIMEOUT_BIN="$reviewer_timeout_bin" \
             spawn_detached_review_shell '
@@ -966,7 +969,7 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
                     -u REVIEW_GATE_TRANSCRIPT_PATH \
                     CERBERUS_REVIEWER_SUBPROCESS=1 \
                     REVIEW_GATE_REVIEWER_SUBPROCESS=1 \
-                    claude -p --model "$REVIEW_MODEL" --output-format json \
+                    claude -p --model "$REVIEW_MODEL" --effort "$REVIEW_REASONING" --output-format json \
                     --allowedTools "${claude_allowed_tools[@]}" \
                     --disallowedTools "${claude_disallowed_tools[@]}" \
                     < "$REVIEW_PROMPT" > "$REVIEW_OUT" 2>&1; then
