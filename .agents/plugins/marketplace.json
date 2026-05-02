@@ -1,7 +1,7 @@
 {
-  "name": "cerberus-local",
+  "name": "cerberus",
   "interface": {
-    "displayName": "Cerberus Local"
+    "displayName": "Cerberus"
   },
   "plugins": [
     {
