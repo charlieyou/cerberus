@@ -221,6 +221,24 @@ if [[ "$policy_path" != "$PLUGIN_ROOT/config/gemini-readonly-policy.toml" ]]; th
 fi
 log_pass "gemini read-only paths stay anchored to Cerberus config"
 
+log_test "Codex plugin manifest declares bundled lifecycle hooks"
+manifest_hooks="$(jq -r '.hooks // empty' "$PLUGIN_ROOT/.codex-plugin/plugin.json" 2>/dev/null || echo "")"
+if [[ "$manifest_hooks" != "./hooks/codex-hooks.json" ]]; then
+    log_fail "expected plugin manifest hooks='./hooks/codex-hooks.json', got: $manifest_hooks"
+fi
+if [[ ! -f "$PLUGIN_ROOT/hooks/codex-hooks.json" ]]; then
+    log_fail "expected bundled Codex hooks file at $PLUGIN_ROOT/hooks/codex-hooks.json"
+fi
+if ! jq -e '
+    .hooks.SessionStart[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-session-init"
+    and .hooks.UserPromptSubmit[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-session-init"
+    and .hooks.Stop[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-stop-hook"
+    and .hooks.Stop[0].hooks[0].timeout == 2100
+' "$PLUGIN_ROOT/hooks/codex-hooks.json" >/dev/null 2>&1; then
+    log_fail "bundled Codex hooks file does not use expected PLUGIN_ROOT commands"
+fi
+log_pass "Codex plugin manifest and bundled hooks are wired"
+
 log_test "cerberus-skill-env reads Codex active-session registry"
 codex_home="$TEST_DIR/codex-home"
 mkdir -p "$codex_home"

@@ -16,13 +16,13 @@
 
 The Cerberus Codex integration uses the repository checkout as the
 single package root. That checkout contains `.codex-plugin/plugin.json`,
-`skills/`, `bin/`, `templates/`, and the shared review backend.
-Set `CERBERUS_ROOT` to this directory and use it when substituting the
-hook template.
+`skills/`, `hooks/`, `bin/`, and the shared review backend. Set
+`CERBERUS_ROOT` to this directory so skill shell snippets can locate
+the shared backend.
 
-Codex plugin installation discovers the skills, but it does not install
-the lifecycle hooks. Configure both the plugin package and the
-`SessionStart` / `UserPromptSubmit` / `Stop` hooks for the integration to work end-to-end.
+Codex plugin installation discovers the skills and, on current Codex
+versions, loads the bundled `SessionStart` / `UserPromptSubmit` /
+`Stop` lifecycle hooks declared by the plugin manifest.
 
 ### Prerequisites
 
@@ -60,7 +60,7 @@ file to Codex, then install and enable `cerberus@cerberus-local` using
 your Codex plugin UI or CLI. After installation, Codex should list the
 Cerberus skills from `skills/`.
 
-### Step 2 — Runtime Root + Lifecycle Hooks
+### Step 2 — Runtime Root + Bundled Hooks
 
 The Cerberus shared backend resolves run state from environment
 variables and an on-disk session registry. Codex doesn't expose a
@@ -76,37 +76,33 @@ checkout root**. Installed skills are cached
 by Codex and are not rewritten during install, so they locate the shared
 backend through `CERBERUS_ROOT` at runtime.
 
-The repository ships the hook template at
-`templates/codex-hooks.json`. The template uses a literal placeholder
-`<CERBERUS_INSTALL_ROOT>` that you replace with the absolute path to
-your backend checkout root before copying the result into Codex's hooks
-file.
+Enable Codex hooks in `~/.codex/config.toml` if your Codex install has
+not enabled them already:
 
-```bash
-# Replace the placeholder and write into Codex's hooks file. Adjust
-# the destination path if your Codex install reads hooks from a
-# different location (see Codex's own documentation).
-sed 's|<CERBERUS_INSTALL_ROOT>|/Users/me/code/cerberus|g' \
-    ~/code/cerberus/templates/codex-hooks.json \
-    > ~/.codex/hooks.json
+```toml
+[features]
+codex_hooks = true
 ```
 
-After Step 2, your Codex hooks file contains `SessionStart` and
-`UserPromptSubmit` entries that run
-`<install-root>/bin/codex-session-init`, plus a `Stop` entry that runs
-`<install-root>/bin/codex-stop-hook`. Restart Codex (or start a new
-session) so the new hooks take effect.
+The plugin manifest points `hooks` at `./hooks/codex-hooks.json`. Codex
+loads that lifecycle config from the installed plugin and substitutes
+`${PLUGIN_ROOT}` in hook commands with the installed plugin root, so the
+hooks call the bundled `bin/codex-session-init` and
+`bin/codex-stop-hook` without a separate `~/.codex/hooks.json`
+installation step.
 
-#### Alternative: shell-expanded `${CERBERUS_ROOT}`
+After changing plugin files or updating Cerberus, reinstall/refresh the
+plugin and restart Codex (or start a new session) so the new manifest,
+skills, and hooks take effect.
 
-If you prefer not to substitute the placeholder in the hook template,
-set `CERBERUS_ROOT=/Users/me/code/cerberus` in Codex's shell
-environment and replace `<CERBERUS_INSTALL_ROOT>` with the literal
-string `${CERBERUS_ROOT}`. The Cerberus backend also reads
-`CERBERUS_ROOT` first via `__cerberus_resolve_root`, so the same value
-drives both hooks and skills. The literal absolute-path substitution is
-the documented default because it is the most portable across Codex
-hook runners.
+#### Legacy Manual Hook Template
+
+Older Codex versions may not load plugin-bundled lifecycle hooks. For
+those versions, the repository still ships the fallback template at
+`templates/codex-hooks.json`; substitute `<CERBERUS_INSTALL_ROOT>` with
+the absolute checkout root and copy it to `~/.codex/hooks.json`. Do not
+keep both plugin-bundled hooks and the manual template active at the
+same time, or Codex will run duplicate Cerberus hooks.
 
 ### Verifying the install
 
@@ -116,9 +112,8 @@ skill picker). You should see a JSON document on stdout with `status`
 set to `no_active_gate` or similar, never an error like "command not
 found". If you don't, check:
 
-- `<CERBERUS_INSTALL_ROOT>` was substituted with an absolute path that
-  actually contains `bin/codex-session-init` and
-  `bin/codex-stop-hook`.
+- The installed plugin manifest includes `"hooks": "./hooks/codex-hooks.json"`
+  and the installed plugin cache contains `hooks/codex-hooks.json`.
 - `CERBERUS_ROOT` is set in Codex's shell environment and points at the
   backend checkout root, not at `` or Codex's plugin
   cache.
@@ -132,13 +127,13 @@ found". If you don't, check:
 ## Repo-Trust and Security Model
 
 Codex's lifecycle-hook execution model runs configured commands from
-the user's hooks config every `SessionStart`, `UserPromptSubmit`, and
-`Stop`. The Cerberus adapters (`bin/codex-session-init`,
-`bin/codex-stop-hook`) are scripts
-shipped from your backend checkout root and invoked by absolute path,
-so the **backend checkout root is part of your trusted compute
-boundary** — anyone who can write to that directory can change what
-runs at every Codex lifecycle boundary on your machine.
+enabled plugins and hook config layers every `SessionStart`,
+`UserPromptSubmit`, and `Stop`. The Cerberus adapters
+(`bin/codex-session-init`, `bin/codex-stop-hook`) are scripts shipped
+from the installed plugin root, so the **plugin source and installed
+plugin cache are part of your trusted compute boundary** — anyone who
+can write to those directories can change what runs at every Codex
+lifecycle boundary on your machine.
 
 Concrete consequences:
 
@@ -147,15 +142,12 @@ Concrete consequences:
   package managers. `/opt/cerberus` (root-owned, world-readable) and
   `~/code/cerberus` (your user only) are reasonable choices;
   `/tmp/cerberus` is not.
-- **Audit the backend checkout root before substituting the placeholder.** The
-  hook template uses `<CERBERUS_INSTALL_ROOT>` precisely because the
-  resolved path becomes a literal `command:` field in Codex's hook
-  runner. Treat that path with the same care you treat any other
-  `command:` in your hooks file.
-- **Do not point the hook template at a working tree you don't
-  control.** If you fork Cerberus and pull from the fork, treat the
-  fork as production code. Review changes before pulling. The
-  upstream repository is signed and tagged for releases.
+- **Audit the plugin source before installing or refreshing it.** The
+  bundled hook config resolves `${PLUGIN_ROOT}` to the installed plugin
+  root, so `bin/codex-session-init` and `bin/codex-stop-hook` from that
+  plugin copy run at lifecycle boundaries. If you fork Cerberus and
+  pull from the fork, treat the fork as production code. Review changes
+  before pulling.
 - **Sandbox / read-only constraints come from the reviewer CLIs.** The
   Cerberus backend itself does not gate writes; reviewer-side
   read-only enforcement (e.g. Gemini's Policy Engine via
@@ -590,7 +582,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"
@@ -605,6 +597,7 @@ This is the manifest shape:
     "cerberus"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json",
   "interface": {
     "displayName": "Cerberus",
     "shortDescription": "Multi-model review gates for Codex",
