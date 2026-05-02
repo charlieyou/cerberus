@@ -177,9 +177,13 @@ Each skill starts from the same prompt text that previously lived under
 `commands/`, with a small host-neutral preamble that sources
 `bin/cerberus-skill-env`. That helper resolves `CERBERUS_ROOT`, detects
 the current host when possible, and bootstraps `CERBERUS_RUN_KEY` from
-the on-disk Codex session registry written by Codex hooks. If Codex
-registry state is missing or malformed, the helper fails clearly rather
-than generating a run key the Stop hook cannot verify.
+the on-disk Codex session registry written by Codex hooks. If the
+registry is missing or stale but the skill is running in a Codex shell
+command with `CODEX_THREAD_ID`, the helper refreshes the registry with
+that host-provided session id so the Stop hook can verify the same
+identity. If neither registry state nor a Codex thread id is available,
+the helper fails clearly rather than generating a run key the Stop hook
+cannot verify.
 
 | Skill | Backend invocation | Required args | Optional flags |
 |---|---|---|---|
@@ -376,10 +380,13 @@ a review is in flight.
 
 **Fix:** Trigger `UserPromptSubmit` or `SessionStart` again (typically
 by submitting another prompt or starting a fresh Codex session).
+When a Codex skill runs through a shell command, Codex also exposes
+`CODEX_THREAD_ID`; `bin/cerberus-skill-env` uses that value to refresh a
+missing or stale registry before spawning a review.
 `bin/codex-session-init` is **last-writer-wins** by design (plan
-§Atomic Write Invariants); the new registry overwrites the old. The
-Stop hook also verifies that `active-session.json.session_id` matches
-the Stop payload's `session_id` and ignores stale registries from other
+§Atomic Write Invariants); the new registry overwrites the old. The Stop
+hook also verifies that `active-session.json.session_id` matches the
+Stop payload's `session_id` and ignores stale registries from other
 sessions. If you need to inspect or clear the registry directly:
 
 ```bash
@@ -584,7 +591,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"

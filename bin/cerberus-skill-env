@@ -20,6 +20,50 @@ __cerberus_skill_env_has_backend() {
         && [ -r "$root/config/gemini-readonly-policy.toml" ]
 }
 
+__cerberus_skill_env_bootstrap_codex_registry() {
+    local project_key="${1:-}"
+    local registry="${2:-}"
+    local workspace_root="${3:-}"
+    local codex_thread_id="${CODEX_THREAD_ID:-}"
+
+    [ -n "$project_key" ] || return 0
+    [ -n "$registry" ] || return 0
+    [ -n "$workspace_root" ] || return 0
+    [ -n "$codex_thread_id" ] || return 0
+    [ -x "$CERBERUS_ROOT/bin/codex-session-init" ] || return 0
+
+    local should_refresh="false"
+    if [ ! -r "$registry" ]; then
+        should_refresh="true"
+    elif jq -e . "$registry" >/dev/null 2>&1; then
+        local registry_session_id=""
+        local registry_run_key=""
+        registry_session_id="$(jq -r '.session_id // .codex_session_id // empty' "$registry" 2>/dev/null || true)"
+        registry_run_key="$(jq -r '.run_key // empty' "$registry" 2>/dev/null || true)"
+        if [ "$registry_session_id" != "$codex_thread_id" ] || [ -z "$registry_run_key" ]; then
+            should_refresh="true"
+        fi
+    else
+        should_refresh="true"
+    fi
+
+    [ "$should_refresh" = "true" ] || return 0
+
+    local payload=""
+    payload="$(jq -n \
+        --arg session_id "$codex_thread_id" \
+        --arg workspace_root "$workspace_root" \
+        '{
+            session_id: $session_id,
+            workspace_root: $workspace_root,
+            cwd: $workspace_root,
+            transcript_path: ""
+        }' 2>/dev/null || true)"
+    [ -n "$payload" ] || return 0
+
+    printf '%s' "$payload" | "$CERBERUS_ROOT/bin/codex-session-init" >/dev/null 2>&1 || true
+}
+
 if [ -z "${CERBERUS_ROOT:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
         export CERBERUS_ROOT="$CLAUDE_PLUGIN_ROOT"
@@ -43,7 +87,7 @@ if [ -z "${CERBERUS_HOST:-}" ]; then
         export CERBERUS_HOST="amp"
     elif [ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]; then
         export CERBERUS_HOST="claude"
-    elif [ -n "${CODEX_API_KEY:-${CODEX_HOME:-${CODEX_SANDBOX:-}}}" ]; then
+    elif [ -n "${CODEX_THREAD_ID:-${CODEX_API_KEY:-${CODEX_HOME:-${CODEX_SANDBOX:-}}}}" ]; then
         export CERBERUS_HOST="codex"
     elif [ -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ] && command -v jq >/dev/null 2>&1; then
         __cerberus_skill_cwd="$(pwd)"
@@ -89,6 +133,11 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
         )"
         __cerberus_skill_registry="$HOME/.cerberus/runtime/codex/$__cerberus_skill_project_key/active-session.json"
 
+        __cerberus_skill_env_bootstrap_codex_registry \
+            "$__cerberus_skill_project_key" \
+            "$__cerberus_skill_registry" \
+            "$__cerberus_skill_cwd"
+
         if [ -z "$__cerberus_skill_project_key" ] || [ ! -r "$__cerberus_skill_registry" ]; then
             echo "cerberus skill: Codex active-session registry not found. Start a new Codex session and ensure SessionStart/UserPromptSubmit hooks are installed: $__cerberus_skill_registry" >&2
             unset __cerberus_skill_cwd __cerberus_skill_project_key __cerberus_skill_registry
@@ -114,5 +163,5 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
     fi
 fi
 
-unset -f __cerberus_skill_env_has_backend
+unset -f __cerberus_skill_env_has_backend __cerberus_skill_env_bootstrap_codex_registry
 unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir __cerberus_skill_env_script_root

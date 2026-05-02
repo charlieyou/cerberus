@@ -309,6 +309,37 @@ if [[ "$codex_resolved_run" != "codex-run-001" ]]; then
 fi
 log_pass "cerberus-skill-env exports Codex registry project/run key"
 
+log_test "cerberus-skill-env bootstraps missing Codex registry from CODEX_THREAD_ID"
+thread_home="$TEST_DIR/codex-thread-home"
+mkdir -p "$thread_home"
+thread_output="$TEST_DIR/codex-thread.out"
+thread_registry="$thread_home/.cerberus/runtime/codex/$codex_pk/active-session.json"
+(
+    cd "$FOREIGN_CWD"
+    env -u AMP_THREAD_ID -u AMP_CURRENT_THREAD_ID \
+        HOME="$thread_home" CODEX_THREAD_ID=codex-thread-001 CERBERUS_ROOT="$PLUGIN_ROOT" \
+        "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env" || exit $?; printf "%s\n%s\n%s\n" "$CERBERUS_HOST" "$CERBERUS_PROJECT_KEY" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT"
+) > "$thread_output"
+thread_host="$(sed -n '1p' "$thread_output")"
+thread_resolved_pk="$(sed -n '2p' "$thread_output")"
+thread_resolved_run="$(sed -n '3p' "$thread_output")"
+if [[ "$thread_host" != "codex" ]]; then
+    log_fail "expected CODEX_THREAD_ID to select Codex host, got: $thread_host"
+fi
+if [[ "$thread_resolved_pk" != "$codex_pk" ]]; then
+    log_fail "expected Codex thread bootstrap to export project key $codex_pk, got: $thread_resolved_pk"
+fi
+if [[ "$thread_resolved_run" != "codex-thread-001" ]]; then
+    log_fail "expected Codex thread bootstrap to export run key codex-thread-001, got: $thread_resolved_run"
+fi
+if [[ ! -f "$thread_registry" ]]; then
+    log_fail "expected Codex thread bootstrap to write registry at $thread_registry"
+fi
+if [[ "$(jq -r '.session_id' "$thread_registry")" != "codex-thread-001" ]]; then
+    log_fail "expected bootstrapped registry session_id codex-thread-001, got: $(cat "$thread_registry")"
+fi
+log_pass "cerberus-skill-env writes Codex registry from CODEX_THREAD_ID"
+
 log_test "cerberus-skill-env fails clearly when Codex registry is missing"
 missing_home="$TEST_DIR/codex-missing-home"
 mkdir -p "$missing_home"
@@ -316,13 +347,13 @@ missing_stderr="$TEST_DIR/codex-missing.err"
 missing_rc=0
 (
     cd "$FOREIGN_CWD"
-    env HOME="$missing_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
+    env -u CODEX_THREAD_ID HOME="$missing_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
 ) 2> "$missing_stderr" || missing_rc=$?
 if [[ "$missing_rc" -eq 0 ]]; then
     log_fail "expected missing Codex registry to make cerberus-skill-env fail"
 fi
 assert_contains "missing Codex registry diagnostic" "$(cat "$missing_stderr")" "Codex active-session registry not found"
-log_pass "cerberus-skill-env does not invent a Codex run key without registry"
+log_pass "cerberus-skill-env does not invent a Codex run key without registry or CODEX_THREAD_ID"
 
 log_test "cerberus-skill-env fails clearly when Codex registry is malformed"
 malformed_home="$TEST_DIR/codex-malformed-home"
@@ -333,7 +364,7 @@ malformed_stderr="$TEST_DIR/codex-malformed.err"
 malformed_rc=0
 (
     cd "$FOREIGN_CWD"
-    env HOME="$malformed_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
+    env -u CODEX_THREAD_ID HOME="$malformed_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
 ) 2> "$malformed_stderr" || malformed_rc=$?
 if [[ "$malformed_rc" -eq 0 ]]; then
     log_fail "expected malformed Codex registry to make cerberus-skill-env fail"

@@ -73,7 +73,7 @@ Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
 
-When running under Codex, `bin/cerberus-skill-env` reads the active run key from `~/.cerberus/runtime/codex/<project-key>/active-session.json`, written by the Codex `SessionStart` / `UserPromptSubmit` hooks. If that registry is missing, start a new Codex session and verify the hooks are installed; skills must not invent run keys because the Stop hook would be unable to associate them with Codex's `session_id`.
+When running under Codex, `bin/cerberus-skill-env` reads the active run key from `~/.cerberus/runtime/codex/<project-key>/active-session.json`, written by the Codex `SessionStart` / `UserPromptSubmit` hooks. If that registry is missing or stale and the skill shell command has `CODEX_THREAD_ID`, the helper refreshes it with that host-provided session id so the Stop hook can associate the run with Codex's `session_id`; without either registry state or `CODEX_THREAD_ID`, start a new Codex session and verify the hooks are installed.
 
 Examples:
 ```bash
