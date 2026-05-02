@@ -41,11 +41,17 @@ extract_skill_bootstrap() {
     ' "$1"
 }
 
+escape_sed_replacement() {
+    printf '%s' "$1" | sed 's/[&|\]/\\&/g'
+}
+
 TEST_DIR="$(mktemp -d -t cerberus-root-resolution.XXXXXX)"
 BAD_ROOT="$TEST_DIR/not-cerberus"
 FOREIGN_CWD="$TEST_DIR/foreign-cwd"
 mkdir -p "$BAD_ROOT"
 mkdir -p "$FOREIGN_CWD"
+PLUGIN_ROOT_SED="$(escape_sed_replacement "$PLUGIN_ROOT")"
+REVIEW_CODE_SKILL_DIR_SED="$(escape_sed_replacement "$PLUGIN_ROOT/skills/review-code")"
 
 log_test "review-gate falls back when CERBERUS_ROOT points at a project root"
 review_stdout="$TEST_DIR/review.out"
@@ -161,7 +167,7 @@ log_pass "cerberus-skill-env survives invalid CLAUDE_SKILL_DIR"
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
 extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
-    | sed "s|\${CLAUDE_SKILL_DIR}|$PLUGIN_ROOT/skills/review-code|g" >"$rendered_bootstrap"
+    | sed "s|\${CLAUDE_SKILL_DIR}|$REVIEW_CODE_SKILL_DIR_SED|g" >"$rendered_bootstrap"
 rendered_skill_dir_root="$(
     cd "$FOREIGN_CWD"
     env -u CERBERUS_ROOT -u CLAUDE_PLUGIN_ROOT -u CLAUDE_SKILL_DIR "$RUNNER_BASH" -c '. "$1"; printf "%s\n" "$CERBERUS_ROOT"' _ "$rendered_bootstrap"
@@ -170,6 +176,23 @@ if [[ "$rendered_skill_dir_root" != "$PLUGIN_ROOT" ]]; then
     log_fail "expected rendered skill bootstrap to resolve $PLUGIN_ROOT, got: $rendered_skill_dir_root"
 fi
 log_pass "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
+
+log_test "skill bootstrap ignores stale inherited CERBERUS_ROOT with helper only"
+stale_root="$TEST_DIR/stale-helper-root"
+mkdir -p "$stale_root/bin"
+cp "$PLUGIN_ROOT/bin/cerberus-skill-env" "$stale_root/bin/cerberus-skill-env"
+stale_bootstrap="$TEST_DIR/bootstrap-stale-root.sh"
+extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
+    | sed "s|\${CLAUDE_PLUGIN_ROOT}|$PLUGIN_ROOT_SED|g" >"$stale_bootstrap"
+stale_resolved_root="$(
+    cd "$FOREIGN_CWD"
+    env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_SKILL_DIR CERBERUS_ROOT="$stale_root" \
+        "$RUNNER_BASH" -c '. "$1"; printf "%s\n" "$CERBERUS_ROOT"' _ "$stale_bootstrap"
+)"
+if [[ "$stale_resolved_root" != "$PLUGIN_ROOT" ]]; then
+    log_fail "expected skill bootstrap to ignore stale helper-only CERBERUS_ROOT and resolve $PLUGIN_ROOT, got: $stale_resolved_root"
+fi
+log_pass "skill bootstrap ignores stale helper-only CERBERUS_ROOT"
 
 log_test "skill bootstrap falls back to current Cerberus git checkout"
 unrendered_bootstrap="$TEST_DIR/bootstrap-unrendered.sh"

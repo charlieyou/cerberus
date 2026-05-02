@@ -28,7 +28,13 @@ if [ -n "$cerberus_git_root" ]; then
     cerberus_candidates+=("$cerberus_git_root")
 fi
 for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ]; then
+    if [ -n "$cerberus_candidate" ] \
+        && [[ "$cerberus_candidate" == /* ]] \
+        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
+        && [ -x "$cerberus_candidate/bin/review-gate" ] \
+        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
+        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
         break
     fi
@@ -80,7 +86,13 @@ if [ -n "$cerberus_git_root" ]; then
     cerberus_candidates+=("$cerberus_git_root")
 fi
 for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ]; then
+    if [ -n "$cerberus_candidate" ] \
+        && [[ "$cerberus_candidate" == /* ]] \
+        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
+        && [ -x "$cerberus_candidate/bin/review-gate" ] \
+        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
+        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
         break
     fi
