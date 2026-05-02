@@ -103,8 +103,33 @@ __cerberus_root_has_backend() {
         && [ -r "$root/config/gemini-readonly-policy.toml" ]
 }
 
+# __cerberus_session_id_from_transcript_path <path>
+# Claude transcript filenames are the Stop hook's authoritative session id
+# source. Use only .jsonl basenames so arbitrary paths do not become session
+# ids accidentally.
+__cerberus_session_id_from_transcript_path() {
+    local transcript_path="${1:-}"
+    local transcript_base=""
+    if [ -z "$transcript_path" ]; then
+        return 1
+    fi
+    transcript_base="$(basename "$transcript_path")"
+    case "$transcript_base" in
+        *.jsonl)
+            transcript_base="${transcript_base%.jsonl}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    if [ -z "$transcript_base" ]; then
+        return 1
+    fi
+    echo "$transcript_base"
+}
+
 # __cerberus_resolve_session_id — return the effective Cerberus session id.
-# Precedence: CERBERUS_SESSION_ID > CLAUDE_SESSION_ID > REVIEW_GATE_SESSION_ID > "".
+# Precedence: CERBERUS_SESSION_ID > transcript basename > CLAUDE_SESSION_ID > REVIEW_GATE_SESSION_ID > "".
 # Empty strings are treated as unset (parameter expansion `${VAR:-}`). When two
 # or more aliases of this family are set non-empty and disagree, emit a SINGLE
 # warning to stderr (once per process) guarded by a $$-keyed file marker — same
@@ -113,9 +138,10 @@ __cerberus_root_has_backend() {
 # Note: REVIEW_GATE_SESSION_ID is NOT the same as REVIEW_GATE_SESSION_KEY. The
 # latter is owner-keying for run gate ownership and is resolved by
 # __cerberus_resolve_run_key (a different concept). REVIEW_GATE_SESSION_ID is
-# included here only for symmetry with the alias-resolution contract; current
-# code does not export it, so the helper effectively reduces to the existing
-# 2-level CERBERUS_SESSION_ID > CLAUDE_SESSION_ID precedence in practice.
+# included here only for symmetry with the alias-resolution contract. Claude
+# transcript basenames sit above CLAUDE_SESSION_ID because Claude /new can leave
+# stale CLAUDE_SESSION_ID in the shell env, while the Stop hook keys off the
+# current transcript/session from hook input.
 #
 # Sentinel: __CERBERUS_SESSION_ID_WARNED. Do NOT reuse __CERBERUS_ALIAS_WARNED
 # (reserved for RUN_KEY/ROOT) — sharing it would suppress those warnings.
@@ -123,6 +149,8 @@ __cerberus_resolve_session_id() {
     local cer="${CERBERUS_SESSION_ID:-}"
     local cla="${CLAUDE_SESSION_ID:-}"
     local leg="${REVIEW_GATE_SESSION_ID:-}"
+    local transcript_path=""
+    local transcript_sid=""
     local _mismatch=0
     if [ -n "$cer" ] && [ -n "$cla" ] && [ "$cer" != "$cla" ]; then _mismatch=1; fi
     if [ -n "$cer" ] && [ -n "$leg" ] && [ "$cer" != "$leg" ]; then _mismatch=1; fi
@@ -130,10 +158,31 @@ __cerberus_resolve_session_id() {
     if [ "$_mismatch" -eq 1 ]; then
         local _sid_marker="${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$"
         if [ ! -e "$_sid_marker" ] && [ -z "${__CERBERUS_SESSION_ID_WARNED:-}" ]; then
-            echo "warning: SESSION_ID alias mismatch (CERBERUS_SESSION_ID/CLAUDE_SESSION_ID/REVIEW_GATE_SESSION_ID); using CERBERUS_SESSION_ID > CLAUDE_SESSION_ID > REVIEW_GATE_SESSION_ID precedence" >&2
+            echo "warning: SESSION_ID alias mismatch (CERBERUS_SESSION_ID/CLAUDE_SESSION_ID/REVIEW_GATE_SESSION_ID); using CERBERUS_SESSION_ID > transcript basename > CLAUDE_SESSION_ID > REVIEW_GATE_SESSION_ID precedence when applicable" >&2
             : > "$_sid_marker" 2>/dev/null || true
         fi
         export __CERBERUS_SESSION_ID_WARNED=1
+    fi
+    if [ -z "$cer" ]; then
+        if declare -f __cerberus_resolve_transcript_path >/dev/null 2>&1; then
+            transcript_path="$(__cerberus_resolve_transcript_path)"
+        else
+            transcript_path="${CERBERUS_TRANSCRIPT_PATH:-${CLAUDE_TRANSCRIPT_PATH:-${REVIEW_GATE_TRANSCRIPT_PATH:-}}}"
+        fi
+        transcript_sid="$(__cerberus_session_id_from_transcript_path "$transcript_path" 2>/dev/null || true)"
+        if [ -n "$transcript_sid" ]; then
+            if { [ -n "$cla" ] && [ "$cla" != "$transcript_sid" ]; } || \
+               { [ -n "$leg" ] && [ "$leg" != "$transcript_sid" ]; }; then
+                local _sid_tp_marker="${TMPDIR:-/tmp}/cerberus-session-transcript-warned.$$"
+                if [ ! -e "$_sid_tp_marker" ] && [ -z "${__CERBERUS_SESSION_TRANSCRIPT_WARNED:-}" ]; then
+                    echo "warning: SESSION_ID disagrees with transcript basename; using transcript session id" >&2
+                    : > "$_sid_tp_marker" 2>/dev/null || true
+                fi
+                export __CERBERUS_SESSION_TRANSCRIPT_WARNED=1
+            fi
+            echo "$transcript_sid"
+            return 0
+        fi
     fi
     echo "${cer:-${cla:-${leg:-}}}"
 }
@@ -213,7 +262,7 @@ CLI_CMD="${PLUGIN_ROOT}/bin/review-gate"
 # is acceptable: the markers are 0-byte files keyed on $$ that the OS
 # reaps as part of routine TMPDIR cleanup. The trap below ensures cleanup
 # in the common subcommand paths that don't register their own EXIT trap.
-trap '__cerberus_marker_dir="${TMPDIR:-/tmp}"; rm -f "$__cerberus_marker_dir/cerberus-alias-warned.$$" "$__cerberus_marker_dir/cerberus-root-alias-warned.$$" "$__cerberus_marker_dir/cerberus-session-id-alias-warned.$$" "$__cerberus_marker_dir/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
+trap '__cerberus_marker_dir="${TMPDIR:-/tmp}"; rm -f "$__cerberus_marker_dir/cerberus-alias-warned.$$" "$__cerberus_marker_dir/cerberus-root-alias-warned.$$" "$__cerberus_marker_dir/cerberus-session-id-alias-warned.$$" "$__cerberus_marker_dir/cerberus-session-transcript-warned.$$" "$__cerberus_marker_dir/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
 
 # Load shared helpers
 source "$SCRIPT_DIR/review-gate-lib.sh"
@@ -3102,7 +3151,7 @@ USAGE
     local temp_file="${state_file}.tmp.$$"
     # T002: include the alias-warning marker in cleanup so the top-level
     # marker-cleanup EXIT trap (which we clobber here) is not lost.
-    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-transcript-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
 
     if [[ "$clear" == "true" ]]; then
         jq 'del(.author_context)' "$state_file" > "$temp_file"
@@ -4671,7 +4720,7 @@ review_gate_resolve() {
     local temp_file="${state_file}.tmp.$$"
     # T002: include the alias-warning marker in the cleanup so the top-level
     # marker-cleanup trap (which we clobber here) is not lost.
-    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
+    trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-transcript-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
 
     # Update shas to current values so subsequent hook runs don't detect "changes"
     # This prevents respawning reviewers after auto_approve when files were edited during review
@@ -5189,7 +5238,7 @@ USAGE
         local temp_file="${state_file}.tmp.$$"
         # T002: include the alias-warning marker in cleanup so the top-level
         # marker-cleanup EXIT trap (which we clobber here) is not lost.
-        trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
+        trap 'rm -f "${temp_file:-}" "${TMPDIR:-/tmp}/cerberus-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-root-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-id-alias-warned.$$" "${TMPDIR:-/tmp}/cerberus-session-transcript-warned.$$" "${TMPDIR:-/tmp}/cerberus-transcript-path-alias-warned.$$" 2>/dev/null || true' EXIT
         jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
            --arg consensus "$consensus_verdict" \
