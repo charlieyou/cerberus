@@ -211,6 +211,12 @@ if [ -z "$WORKSPACE_ROOT" ]; then
     WORKSPACE_ROOT="$(pwd)"
 fi
 
+if [ -z "$SESSION_ID" ]; then
+    __cerberus_stop_log "missing required Stop field 'session_id'; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
 # ---- Compute project_key via review-gate-lib.sh ---------------------------
 # Source review-gate-lib.sh purely to access `get_project_hash` and
 # `resolve_review_dir`. Failure to source is treated as failure-open per
@@ -221,22 +227,12 @@ if ! source "$SCRIPT_DIR/review-gate-lib.sh" 2>/dev/null; then
     exit 0
 fi
 
-# project_key precedence MUST match codex-session-init's writer side
-# (round-1 review feedback): CERBERUS_PROJECT_KEY env wins. If a Codex
-# session started with `CERBERUS_PROJECT_KEY=team-a` exported, the
-# registry was written under `~/.cerberus/runtime/codex/team-a/...`,
-# and Codex inherits that env into the Stop hook too. Forcing
-# `CERBERUS_PROJECT_KEY=""` here would recompute a workspace-derived
-# key, miss the registry, and emit `{"continue":true}` even when the
-# real run has a blocking gate — defeating the matrix.
-PROJECT_KEY="${CERBERUS_PROJECT_KEY:-}"
-if [ -z "$PROJECT_KEY" ]; then
-    # No env override → derive from Codex-supplied workspace_root /
-    # cwd (anchored via CLAUDE_PROJECT_DIR for the single call;
-    # mirrors codex-session-init's derivation path).
-    PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" \
-        get_project_hash "$TRANSCRIPT_PATH" 2>/dev/null || true)"
-fi
+# Codex's Stop stdin is the authoritative workspace identity. Mirror
+# codex-session-init: ignore inherited CERBERUS_PROJECT_KEY and derive
+# from Stop cwd/workspace_root so stale shell env cannot steer us to a
+# registry from another workspace/session.
+PROJECT_KEY="$(CERBERUS_PROJECT_KEY= CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" \
+    get_project_hash "" 2>/dev/null || true)"
 
 # Validate project_key shape (path-traversal rejection). resolve_review_dir
 # enforces the same rule; we reject up-front so the Row 2 / Row 3
@@ -269,6 +265,13 @@ fi
 # Read run_key from the registry. Treat malformed registry as failure-open.
 if ! jq -e . "$REGISTRY_FILE" >/dev/null 2>&1; then
     __cerberus_stop_log "registry malformed at $REGISTRY_FILE; failing open"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
+REGISTRY_SESSION_ID="$(jq -r '.session_id // .codex_session_id // empty' "$REGISTRY_FILE" 2>/dev/null || echo "")"
+if [ "$REGISTRY_SESSION_ID" != "$SESSION_ID" ]; then
+    __cerberus_stop_log "registry session_id '$REGISTRY_SESSION_ID' does not match Stop session_id '$SESSION_ID'; ignoring stale registry"
     __cerberus_emit_allow ""
     exit 0
 fi

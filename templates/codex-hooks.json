@@ -28,12 +28,23 @@
     "Codex release ships a stable env var (e.g. CODEX_PLUGIN_ROOT), update this template",
     "to default to ${CODEX_PLUGIN_ROOT} and demote the placeholder to fallback.",
     "",
-    "OUT OF SCOPE (Phase 1, plan §L811-L812): this template intentionally registers",
-    "ONLY the SessionStart and Stop lifecycle hooks. Claude-only team-automation",
-    "lifecycle hooks are deferred to Phase 4 and are not wired up here."
+    "This template registers SessionStart and UserPromptSubmit to keep the Codex",
+    "active-session registry fresh, plus Stop to enforce the review gate.",
+    "Claude-only team-automation lifecycle hooks are deferred to Phase 4 and are",
+    "not wired up here."
   ],
   "hooks": {
     "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-session-init"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
       {
         "hooks": [
           {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# bin/codex-session-init — Codex SessionStart adapter (T008).
+# bin/codex-session-init — Codex active-session registry writer (T008).
 #
-# Reads Codex `SessionStart` JSON from stdin and atomically writes the
-# session registry at:
+# Reads Codex hook JSON from stdin (`SessionStart` / `UserPromptSubmit`)
+# and atomically writes the session registry at:
 #
 #   ~/.cerberus/runtime/codex/<workspace-key>/active-session.json
 #
@@ -17,7 +17,7 @@
 #   1. CERBERUS_RUN_KEY (canonical neutral env)
 #   2. REVIEW_GATE_SESSION_KEY (back-compat alias)
 #   3. Existing registry's run_key when same Codex session id (Case 2:
-#      a SessionStart refresh preserves the original run_key so reviewers
+#      a hook refresh preserves the original run_key so reviewers
 #      reattach to the same review_dir).
 #   4. Codex session id (default).
 #
@@ -86,15 +86,11 @@ if [ -z "$WORKSPACE_ROOT" ]; then
 fi
 
 # ---- 2. Compute project_key ---------------------------------------------
-# Reuse get_project_hash (plan §Reuse). The function honors
-# CERBERUS_PROJECT_KEY first, then transcript_path, then
-# CLAUDE_PROJECT_DIR / git / cwd. We override CLAUDE_PROJECT_DIR for
-# the duration of the call so the workspace_root from Codex's payload
-# anchors the hash even when no transcript_path / CERBERUS_PROJECT_KEY
-# is set. CLAUDE_PROJECT_DIR is the existing project-root env in
-# get_project_hash; setting it on this single call does not leak into
-# the script's environment.
-PROJECT_KEY="$(CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" get_project_hash "$TRANSCRIPT_PATH")"
+# Codex's hook stdin is the authoritative workspace identity. Ignore any
+# inherited CERBERUS_PROJECT_KEY or transcript-derived project so stale
+# shell env cannot put the registry under a key the Stop hook will not
+# derive from its own cwd payload.
+PROJECT_KEY="$(CERBERUS_PROJECT_KEY= CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" get_project_hash "")"
 
 case "$PROJECT_KEY" in
     ""|.|..)

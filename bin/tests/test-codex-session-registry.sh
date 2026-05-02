@@ -5,7 +5,7 @@
 # (plan L1136-L1149) and §Data Model, "Codex session registry" (plan
 # L478-L508) plus the atomic-write algorithm (plan L509-L523).
 #
-# Coverage matrix (7 cases + 2 happy-path probes carried forward from
+# Coverage matrix (8 cases + 2 happy-path probes carried forward from
 # T007). Every case is a real PASS/FAIL; no TODO scaffolds remain.
 #
 #   Case 1: Fresh SessionStart writes registry with all required v1
@@ -24,6 +24,8 @@
 #           remains.
 #   Case 7: Schema correctness: written JSON validates against the v1
 #           registry schema (all required fields present and typed).
+#   Case 8: Inherited CERBERUS_PROJECT_KEY is ignored; registry path is
+#           derived from Codex hook cwd/workspace_root.
 #
 # Happy path A (carried over from T007): script entry point exists,
 #   regular file, executable.
@@ -433,6 +435,34 @@ if [[ "$case7_check" == "ok" ]]; then
     log_pass "Case 7 — registry JSON conforms to schema v1"
 else
     log_fail "Case 7 — schema check returned '$case7_check'; payload=$(cat "$case7_registry")"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 8 — Inherited CERBERUS_PROJECT_KEY is ignored for Codex registry
+# namespace. Hook stdin cwd/workspace_root is authoritative.
+# ---------------------------------------------------------------------------
+log_test "Case 8 — inherited CERBERUS_PROJECT_KEY ignored for registry path"
+case8_home="$TEST_DIR/case8"
+mkdir -p "$case8_home"
+case8_workspace="/tmp/some-codex-workspace-c8"
+case8_payload="$(jq -nc \
+    --arg sid "sess-c8-001" \
+    --arg ws "$case8_workspace" \
+    '{session_id: $sid, cwd: $ws}')"
+case8_registry="$(expected_registry_path "$case8_home" "$case8_workspace")"
+case8_wrong_registry="$case8_home/.cerberus/runtime/codex/wrong-env-key/active-session.json"
+case8_rc=0
+run_init "$case8_home" "$case8_payload" \
+    "$TEST_DIR/c8.out" "$TEST_DIR/c8.err" \
+    "CERBERUS_PROJECT_KEY=wrong-env-key" || case8_rc=$?
+if [[ "$case8_rc" -ne 0 ]]; then
+    log_fail "Case 8 — exited with $case8_rc; stderr=$(cat "$TEST_DIR/c8.err")"
+elif [[ ! -f "$case8_registry" ]]; then
+    log_fail "Case 8 — cwd-derived registry not written at $case8_registry"
+elif [[ -e "$case8_wrong_registry" ]]; then
+    log_fail "Case 8 — wrote registry under inherited CERBERUS_PROJECT_KEY: $case8_wrong_registry"
+else
+    log_pass "Case 8 — registry path derived from Codex cwd, not inherited env"
 fi
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@
 > used by Claude and Amp from `skills/<skill>/SKILL.md`. The
 > Tier-1 review skills (`review-code`, `review-plan`, `review-spec`,
 > `ask`, `status`, `clear-gate`) are the supported Codex lifecycle
-> workflows and use the **`SessionStart` + `Stop`** hooks.
+> workflows and use the **`SessionStart` + `UserPromptSubmit` + `Stop`** hooks.
 
 ## Install
 
@@ -22,7 +22,7 @@ hook template.
 
 Codex plugin installation discovers the skills, but it does not install
 the lifecycle hooks. Configure both the plugin package and the
-`SessionStart` / `Stop` hooks for the integration to work end-to-end.
+`SessionStart` / `UserPromptSubmit` / `Stop` hooks for the integration to work end-to-end.
 
 ### Prerequisites
 
@@ -64,11 +64,12 @@ Cerberus skills from `skills/`.
 
 The Cerberus shared backend resolves run state from environment
 variables and an on-disk session registry. Codex doesn't expose a
-stable session-id env var, so the `SessionStart` hook
-(`bin/codex-session-init`) writes the registry that the skills and the
-`Stop` hook later read. You must install the lifecycle hook template
-into your Codex hooks configuration for skills to behave correctly
-across stop boundaries.
+stable session-id env var to skill shell commands, so the
+`SessionStart` and `UserPromptSubmit` hooks run
+`bin/codex-session-init` with Codex's hook JSON on stdin. That registry
+is the only source skills use for the active run key; skills do not
+invent fallback run keys because `Stop` would be unable to associate
+them with Codex's `session_id`.
 
 Set `CERBERUS_ROOT` in Codex's shell environment to the **repository
 checkout root**. Installed skills are cached
@@ -90,10 +91,11 @@ sed 's|<CERBERUS_INSTALL_ROOT>|/Users/me/code/cerberus|g' \
     > ~/.codex/hooks.json
 ```
 
-After Step 2, your Codex hooks file contains a `SessionStart` entry
-that runs `<install-root>/bin/codex-session-init` and a `Stop` entry
-that runs `<install-root>/bin/codex-stop-hook`. Restart Codex (or
-start a new session) so the new hooks take effect.
+After Step 2, your Codex hooks file contains `SessionStart` and
+`UserPromptSubmit` entries that run
+`<install-root>/bin/codex-session-init`, plus a `Stop` entry that runs
+`<install-root>/bin/codex-stop-hook`. Restart Codex (or start a new
+session) so the new hooks take effect.
 
 #### Alternative: shell-expanded `${CERBERUS_ROOT}`
 
@@ -125,13 +127,14 @@ found". If you don't, check:
 - `jq` is on the `PATH` Codex's hook runner uses (not just your
   interactive shell).
 - `~/.cerberus/runtime/codex/<workspace-key>/active-session.json`
-  exists after `SessionStart` fires.
+  exists after `SessionStart` or `UserPromptSubmit` fires.
 
 ## Repo-Trust and Security Model
 
 Codex's lifecycle-hook execution model runs configured commands from
-the user's hooks config every `SessionStart` and `Stop`. The Cerberus
-adapters (`bin/codex-session-init`, `bin/codex-stop-hook`) are scripts
+the user's hooks config every `SessionStart`, `UserPromptSubmit`, and
+`Stop`. The Cerberus adapters (`bin/codex-session-init`,
+`bin/codex-stop-hook`) are scripts
 shipped from your backend checkout root and invoked by absolute path,
 so the **backend checkout root is part of your trusted compute
 boundary** — anyone who can write to that directory can change what
@@ -161,8 +164,8 @@ Concrete consequences:
   file, that protection goes with it.
 
 The Codex `Stop` adapter never writes to your repo; it only reads
-review-gate state and emits a hook response. The `SessionStart`
-adapter writes a single JSON file under
+review-gate state and emits a hook response. The `SessionStart` /
+`UserPromptSubmit` adapter writes a single JSON file under
 `~/.cerberus/runtime/codex/<workspace-key>/active-session.json`. No
 files outside `~/.cerberus/` are touched by the lifecycle hooks
 themselves.
@@ -180,8 +183,9 @@ Each skill starts from the same prompt text that previously lived under
 `commands/`, with a small host-neutral preamble that sources
 `bin/cerberus-skill-env`. That helper resolves `CERBERUS_ROOT`, detects
 the current host when possible, and bootstraps `CERBERUS_RUN_KEY` from
-the on-disk Codex session registry when a Codex `SessionStart` hook has
-run.
+the on-disk Codex session registry written by Codex hooks. If Codex
+registry state is missing or malformed, the helper fails clearly rather
+than generating a run key the Stop hook cannot verify.
 
 | Skill | Backend invocation | Required args | Optional flags |
 |---|---|---|---|
@@ -312,13 +316,14 @@ either `awaiting_decision` with blocking findings (verdict `FAIL` or
 priority `P0`/`P1`) or `resolved` with `consensus_verdict == "fail"`.
 In every other path the user keeps the ability to stop.
 
-The `SessionStart` adapter (`bin/codex-session-init`) is **not**
-failure-open — it exits non-zero on malformed stdin or invalid
-project key / run key. SessionStart failure cannot trap the user the
-way a Stop failure could; the worst-case is that subsequent skills
-fall back to env-var defaults instead of the registry. The atomic
-write algorithm (write to `<file>.tmp.$$`, validate, `mv`) ensures
-that a kill mid-write leaves the previous valid registry intact.
+The `SessionStart` / `UserPromptSubmit` adapter
+(`bin/codex-session-init`) is **not** failure-open — it exits non-zero
+on malformed stdin or invalid project key / run key. Hook writer
+failure cannot trap the user the way a Stop failure could; the
+worst-case is that subsequent skills fail with a clear registry setup
+diagnostic. The atomic write algorithm (write to `<file>.tmp.$$`,
+validate, `mv`) ensures that a kill mid-write leaves the previous valid
+registry intact.
 
 ## Troubleshooting
 
@@ -375,10 +380,13 @@ hard-errors with fewer than two reviewers.
 session, or `Cerberus: Status` returns `no_active_gate` when you know
 a review is in flight.
 
-**Fix:** Trigger `SessionStart` again (typically by starting a fresh
-Codex session). `bin/codex-session-init` is **last-writer-wins** by
-design (plan §Atomic Write Invariants); the new registry overwrites
-the old. If you need to inspect or clear the registry directly:
+**Fix:** Trigger `UserPromptSubmit` or `SessionStart` again (typically
+by submitting another prompt or starting a fresh Codex session).
+`bin/codex-session-init` is **last-writer-wins** by design (plan
+§Atomic Write Invariants); the new registry overwrites the old. The
+Stop hook also verifies that `active-session.json.session_id` matches
+the Stop payload's `session_id` and ignores stale registries from other
+sessions. If you need to inspect or clear the registry directly:
 
 ```bash
 ls -l ~/.cerberus/runtime/codex/
@@ -449,8 +457,9 @@ CI gate.
    the backend checkout root, and substitute the hook placeholder with
    that same backend root. Confirm the resulting hooks file points at
    absolute paths inside the backend checkout root.
-2. **`SessionStart` registry.** Trigger Codex `SessionStart` (start a
-   new Codex session). Confirm
+2. **Codex session registry.** Trigger Codex `SessionStart` (start a
+   new Codex session), then submit a prompt to exercise
+   `UserPromptSubmit`. Confirm
    `~/.cerberus/runtime/codex/<workspace-key>/active-session.json`
    exists and contains `host: "codex"`, `session_id`, `run_key`, and
    a recent `last_seen`.
@@ -497,8 +506,8 @@ These are the testable exit criteria from the plan
 
 | Criterion | Verified by |
 |---|---|
-| Codex `SessionStart` creates or refreshes the session registry atomically | `bin/tests/test-codex-session-registry.sh` (T008) |
-| Codex review skills spawn reviewers and reattach across `SessionStart` / `Stop` transitions | T010 skills + manual smoke step 3-6 |
+| Codex `SessionStart` / `UserPromptSubmit` creates or refreshes the session registry atomically | `bin/tests/test-codex-session-registry.sh` (T008) |
+| Codex review skills spawn reviewers and reattach across `SessionStart` / `UserPromptSubmit` / `Stop` transitions | T010 skills + manual smoke step 3-6 |
 | Codex `Stop` matrix behaves per spec for every row 1–13 | `bin/tests/test-codex-stop-hook.sh` (T009) + manual smoke step 4-5 |
 | `Clear Gate` resolves the intended run | T010 skills + manual smoke step 7 |
 | Claude plugin behavior remains unchanged (full Claude suite passes) | Existing `bin/tests/*.sh` (regression) |
@@ -581,7 +590,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"

@@ -786,51 +786,103 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Regression — round-1 review #1: CERBERUS_PROJECT_KEY env honored for
-# registry lookup. codex-session-init writes the registry under the
-# env-supplied project_key when CERBERUS_PROJECT_KEY is set; the Stop
-# hook MUST use the same key. If the hook recomputes a workspace-derived
-# key it will treat the registry as missing and emit a false allow even
-# when there's a blocking gate.
+# Regression — stale registry session mismatch is ignored. Stop stdin's
+# session_id is authoritative; a registry for another Codex session in
+# the same cwd must not block this Stop.
 # ---------------------------------------------------------------------------
-log_test "Regression #1 — CERBERUS_PROJECT_KEY env honored for registry lookup"
+log_test "Regression #1 — stale registry session_id mismatch is ignored"
 cR1_home="$TEST_DIR/regress1"
 mkdir -p "$cR1_home"
 cR1_workspace="/tmp/cerberus-regress1"
-cR1_pk="team-alpha-explicit"           # NOT what workspace-derive would produce
 cR1_run="regress1-run-001"
-# Plant registry under the explicit project_key.
-cR1_reg_dir="$cR1_home/.cerberus/runtime/codex/$cR1_pk"
-mkdir -p "$cR1_reg_dir"
-jq -nc \
-    --argjson schema_version 1 \
-    --arg ws "$cR1_workspace" --arg pk "$cR1_pk" \
-    --arg sid "sess-regress1-001" --arg run "$cR1_run" \
-    '{schema_version:$schema_version, host:"codex", workspace_root:$ws,
-      project_key:$pk, session_id:$sid, codex_session_id:$sid,
-      run_key:$run, transcript_path:"", last_seen:"2026-04-30T00:00:00Z"}' \
-    > "$cR1_reg_dir/active-session.json"
-# Plant a blocking-finding fixture under the explicit-PK review_dir.
-cR1_rd="$cR1_home/.cerberus/projects/$cR1_pk/$cR1_run"
-mkdir -p "$cR1_rd/reviews"
+make_registry "$cR1_home" "$cR1_workspace" "$cR1_run" "sess-regress1-old"
+cR1_rd="$(make_review_dir "$cR1_home" "$cR1_workspace" "$cR1_run")"
 write_gate_state "$cR1_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR1_run"
 cat > "$cR1_rd/reviews/codex.json" <<'EOF'
-{"verdict":"FAIL","summary":"blocking","findings":[{"title":"x","body":"y","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
+{"verdict":"FAIL","summary":"blocking stale run","findings":[{"title":"x","body":"y","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
 EOF
 touch "$cR1_rd/reviews/codex.done"
 cR1_out="$TEST_DIR/cR1.out"
 cR1_err="$TEST_DIR/cR1.err"
 cR1_rc=0
-run_hook "$cR1_home" "$cR1_workspace" "sess-regress1-001" \
-    "$cR1_out" "$cR1_err" \
-    "CERBERUS_PROJECT_KEY=$cR1_pk" \
-    || cR1_rc=$?
+run_hook "$cR1_home" "$cR1_workspace" "sess-regress1-new" \
+    "$cR1_out" "$cR1_err" || cR1_rc=$?
 cR1_action="$(stop_action "$cR1_out")"
-cR1_msg="$(stop_reason "$cR1_out")"
-if [[ "$cR1_rc" -eq 0 && "$cR1_action" == "continue" && -n "$cR1_msg" ]]; then
-    log_pass "Regression #1 — CERBERUS_PROJECT_KEY env honored; row-6 continue fired"
+cR1_diag=""
+if grep -q "does not match Stop session_id" "$cR1_err" 2>/dev/null; then
+    cR1_diag="found"
+fi
+if [[ "$cR1_rc" -eq 0 && "$cR1_action" == "allow" && "$cR1_diag" == "found" ]]; then
+    log_pass "Regression #1 — stale registry ignored; Stop allowed"
 else
-    log_fail "Regression #1: rc=$cR1_rc action=$cR1_action msg='$cR1_msg' body=$(cat "$cR1_out") stderr=$(cat "$cR1_err")"
+    log_fail "Regression #1: rc=$cR1_rc action=$cR1_action diag=$cR1_diag body=$(cat "$cR1_out") stderr=$(cat "$cR1_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — missing Stop session_id fails open before consulting any
+# registry. Codex documents session_id as required; malformed/missing hook
+# payloads must never block stop.
+# ---------------------------------------------------------------------------
+log_test "Regression #2 — missing Stop session_id fails open"
+cR2_home="$TEST_DIR/regress2"
+mkdir -p "$cR2_home"
+cR2_out="$TEST_DIR/cR2.out"
+cR2_err="$TEST_DIR/cR2.err"
+cR2_rc=0
+(
+    unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
+          CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
+          CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
+          CERBERUS_CODEX_STOP_WAIT_SECONDS \
+          CERBERUS_REVIEW_GATE_BIN \
+          CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
+          __CERBERUS_ALIAS_WARNED || true
+    export HOME="$cR2_home"
+    printf '{"cwd":"/tmp/cerberus-regress2"}' | "$CODEX_STOP_HOOK" \
+        >"$cR2_out" 2>"$cR2_err"
+) || cR2_rc=$?
+cR2_action="$(stop_action "$cR2_out")"
+cR2_diag=""
+if grep -q "missing required Stop field 'session_id'" "$cR2_err" 2>/dev/null; then
+    cR2_diag="found"
+fi
+if [[ "$cR2_rc" -eq 0 && "$cR2_action" == "allow" && "$cR2_diag" == "found" ]]; then
+    log_pass "Regression #2 — missing session_id → continue:true"
+else
+    log_fail "Regression #2: rc=$cR2_rc action=$cR2_action diag=$cR2_diag body=$(cat "$cR2_out") stderr=$(cat "$cR2_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — inherited CERBERUS_PROJECT_KEY is ignored for registry lookup.
+# codex-session-init derives the registry namespace from hook cwd; Stop must
+# derive the same key from its Stop payload and not from stale shell env.
+# ---------------------------------------------------------------------------
+log_test "Regression #3 — inherited CERBERUS_PROJECT_KEY ignored for registry lookup"
+cR3_home="$TEST_DIR/regress3"
+mkdir -p "$cR3_home"
+cR3_workspace="/tmp/cerberus-regress3"
+cR3_run="regress3-run-001"
+make_registry "$cR3_home" "$cR3_workspace" "$cR3_run" "sess-regress3-001"
+cR3_rd="$(make_review_dir "$cR3_home" "$cR3_workspace" "$cR3_run")"
+write_gate_state "$cR3_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR3_run"
+cat > "$cR3_rd/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"blocking","findings":[{"title":"x","body":"y","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+touch "$cR3_rd/reviews/codex.done"
+cR3_out="$TEST_DIR/cR3.out"
+cR3_err="$TEST_DIR/cR3.err"
+cR3_rc=0
+run_hook "$cR3_home" "$cR3_workspace" "sess-regress3-001" \
+    "$cR3_out" "$cR3_err" \
+    "CERBERUS_PROJECT_KEY=wrong-env-key" \
+    || cR3_rc=$?
+cR3_action="$(stop_action "$cR3_out")"
+cR3_msg="$(stop_reason "$cR3_out")"
+if [[ "$cR3_rc" -eq 0 && "$cR3_action" == "continue" && -n "$cR3_msg" ]]; then
+    log_pass "Regression #3 — cwd-derived registry found despite stale CERBERUS_PROJECT_KEY"
+else
+    log_fail "Regression #3: rc=$cR3_rc action=$cR3_action msg='$cR3_msg' body=$(cat "$cR3_out") stderr=$(cat "$cR3_err")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -840,41 +892,41 @@ fi
 # lives under $CERBERUS_STATE_ROOT/<pk>/<run>/. Hardcoding
 # $HOME/.cerberus/projects/... would emit a false "no review dir" allow.
 # ---------------------------------------------------------------------------
-log_test "Regression #2 — CERBERUS_STATE_ROOT honored for run-dir lookup"
-cR2_home="$TEST_DIR/regress2"
-mkdir -p "$cR2_home"
-cR2_workspace="/tmp/cerberus-regress2"
-cR2_run="regress2-run-001"
-cR2_state_root="$TEST_DIR/regress2-state"  # absolute path required
-mkdir -p "$cR2_state_root"
+log_test "Regression #4 — CERBERUS_STATE_ROOT honored for run-dir lookup"
+cR4_home="$TEST_DIR/regress4"
+mkdir -p "$cR4_home"
+cR4_workspace="/tmp/cerberus-regress4"
+cR4_run="regress4-run-001"
+cR4_state_root="$TEST_DIR/regress4-state"  # absolute path required
+mkdir -p "$cR4_state_root"
 # Registry stays under $HOME/.cerberus/runtime/codex/...
-make_registry "$cR2_home" "$cR2_workspace" "$cR2_run" "sess-regress2-001"
+make_registry "$cR4_home" "$cR4_workspace" "$cR4_run" "sess-regress4-001"
 # Plant the review_dir under CERBERUS_STATE_ROOT, NOT under the default
 # $HOME/.cerberus/projects.
-cR2_pk="$(expected_project_key "$cR2_workspace")"
-cR2_rd="$cR2_state_root/$cR2_pk/$cR2_run"
-mkdir -p "$cR2_rd/reviews"
-write_gate_state "$cR2_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR2_run"
-cat > "$cR2_rd/reviews/codex.json" <<'EOF'
+cR4_pk="$(expected_project_key "$cR4_workspace")"
+cR4_rd="$cR4_state_root/$cR4_pk/$cR4_run"
+mkdir -p "$cR4_rd/reviews"
+write_gate_state "$cR4_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR4_run"
+cat > "$cR4_rd/reviews/codex.json" <<'EOF'
 {"verdict":"FAIL","summary":"blocking","findings":[{"title":"a","body":"b","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
 EOF
-touch "$cR2_rd/reviews/codex.done"
-cR2_out="$TEST_DIR/cR2.out"
-cR2_err="$TEST_DIR/cR2.err"
-cR2_rc=0
-run_hook "$cR2_home" "$cR2_workspace" "sess-regress2-001" \
-    "$cR2_out" "$cR2_err" \
-    "CERBERUS_STATE_ROOT=$cR2_state_root" \
-    || cR2_rc=$?
-cR2_action="$(stop_action "$cR2_out")"
-cR2_note="$(stop_system_message "$cR2_out")"
-cR2_msg="$(stop_reason "$cR2_out")"
+touch "$cR4_rd/reviews/codex.done"
+cR4_out="$TEST_DIR/cR4.out"
+cR4_err="$TEST_DIR/cR4.err"
+cR4_rc=0
+run_hook "$cR4_home" "$cR4_workspace" "sess-regress4-001" \
+    "$cR4_out" "$cR4_err" \
+    "CERBERUS_STATE_ROOT=$cR4_state_root" \
+    || cR4_rc=$?
+cR4_action="$(stop_action "$cR4_out")"
+cR4_note="$(stop_system_message "$cR4_out")"
+cR4_msg="$(stop_reason "$cR4_out")"
 # Pass conditions: action=continue AND no "no review dir" note.
-if [[ "$cR2_rc" -eq 0 && "$cR2_action" == "continue" \
-      && "$cR2_note" != *"no review dir"* && -n "$cR2_msg" ]]; then
-    log_pass "Regression #2 — CERBERUS_STATE_ROOT honored; row-6 continue fired"
+if [[ "$cR4_rc" -eq 0 && "$cR4_action" == "continue" \
+      && "$cR4_note" != *"no review dir"* && -n "$cR4_msg" ]]; then
+    log_pass "Regression #4 — CERBERUS_STATE_ROOT honored; row-6 continue fired"
 else
-    log_fail "Regression #2: rc=$cR2_rc action=$cR2_action note='$cR2_note' msg='$cR2_msg' body=$(cat "$cR2_out") stderr=$(cat "$cR2_err")"
+    log_fail "Regression #4: rc=$cR4_rc action=$cR4_action note='$cR4_note' msg='$cR4_msg' body=$(cat "$cR4_out") stderr=$(cat "$cR4_err")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -884,29 +936,29 @@ fi
 # verdict (needs_revision, null, or unknown) is non-blocking and must
 # allow stop. The prior code blocked anything not equal to "pass".
 # ---------------------------------------------------------------------------
-log_test "Regression #3 — resolved + needs_revision (non-FAIL) → allow"
-cR3_home="$TEST_DIR/regress3"
-mkdir -p "$cR3_home"
-cR3_workspace="/tmp/cerberus-regress3"
-cR3_run="regress3-run-001"
-make_registry "$cR3_home" "$cR3_workspace" "$cR3_run" "sess-regress3-001"
-cR3_rd="$(make_review_dir "$cR3_home" "$cR3_workspace" "$cR3_run")"
-write_gate_state "$cR3_rd" "resolved" '{"codex":{}}' '{"verdict":"NEEDS_WORK"}' "$cR3_run"
-cat > "$cR3_rd/reviews/codex.json" <<'EOF'
+log_test "Regression #5 — resolved + needs_revision (non-FAIL) → allow"
+cR5_home="$TEST_DIR/regress5"
+mkdir -p "$cR5_home"
+cR5_workspace="/tmp/cerberus-regress5"
+cR5_run="regress5-run-001"
+make_registry "$cR5_home" "$cR5_workspace" "$cR5_run" "sess-regress5-001"
+cR5_rd="$(make_review_dir "$cR5_home" "$cR5_workspace" "$cR5_run")"
+write_gate_state "$cR5_rd" "resolved" '{"codex":{}}' '{"verdict":"NEEDS_WORK"}' "$cR5_run"
+cat > "$cR5_rd/reviews/codex.json" <<'EOF'
 {"verdict":"NEEDS_WORK","summary":"non-blocking","findings":[{"title":"x","body":"y","priority":2,"file_path":null,"line_start":null,"line_end":null}]}
 EOF
-touch "$cR3_rd/reviews/codex.done"
-cR3_out="$TEST_DIR/cR3.out"
-cR3_err="$TEST_DIR/cR3.err"
-cR3_rc=0
-run_hook "$cR3_home" "$cR3_workspace" "sess-regress3-001" \
-    "$cR3_out" "$cR3_err" \
-    || cR3_rc=$?
-cR3_action="$(stop_action "$cR3_out")"
-if [[ "$cR3_rc" -eq 0 && "$cR3_action" == "allow" ]]; then
-    log_pass "Regression #3 — resolved + needs_revision → continue:true"
+touch "$cR5_rd/reviews/codex.done"
+cR5_out="$TEST_DIR/cR5.out"
+cR5_err="$TEST_DIR/cR5.err"
+cR5_rc=0
+run_hook "$cR5_home" "$cR5_workspace" "sess-regress5-001" \
+    "$cR5_out" "$cR5_err" \
+    || cR5_rc=$?
+cR5_action="$(stop_action "$cR5_out")"
+if [[ "$cR5_rc" -eq 0 && "$cR5_action" == "allow" ]]; then
+    log_pass "Regression #5 — resolved + needs_revision → continue:true"
 else
-    log_fail "Regression #3: rc=$cR3_rc action=$cR3_action body=$(cat "$cR3_out") stderr=$(cat "$cR3_err")"
+    log_fail "Regression #5: rc=$cR5_rc action=$cR5_action body=$(cat "$cR5_out") stderr=$(cat "$cR5_err")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -916,15 +968,15 @@ fi
 # we deliver SIGTERM. The hook MUST emit the failure-open envelope and
 # exit 0 within seconds — not block until status returns.
 # ---------------------------------------------------------------------------
-log_test "Regression #4 — SIGTERM during slow status probe → prompt allow"
-cR4_home="$TEST_DIR/regress4"
-mkdir -p "$cR4_home"
-cR4_workspace="/tmp/cerberus-regress4"
-cR4_run="regress4-run-001"
-make_registry "$cR4_home" "$cR4_workspace" "$cR4_run" "sess-regress4-001"
-make_review_dir "$cR4_home" "$cR4_workspace" "$cR4_run" >/dev/null
-cR4_stub="$TEST_DIR/cR4-slow-review-gate"
-cat > "$cR4_stub" <<'EOF'
+log_test "Regression #6 — SIGTERM during slow status probe → prompt allow"
+cR6_home="$TEST_DIR/regress6"
+mkdir -p "$cR6_home"
+cR6_workspace="/tmp/cerberus-regress6"
+cR6_run="regress6-run-001"
+make_registry "$cR6_home" "$cR6_workspace" "$cR6_run" "sess-regress6-001"
+make_review_dir "$cR6_home" "$cR6_workspace" "$cR6_run" >/dev/null
+cR6_stub="$TEST_DIR/cR6-slow-review-gate"
+cat > "$cR6_stub" <<'EOF'
 #!/usr/bin/env bash
 # Simulate a slow status backend: sleep 30s then emit a no-active-gate
 # body. The hook must NOT wait this long under SIGTERM.
@@ -932,34 +984,34 @@ sleep 30
 printf '{"status":"no_active_gate"}\n'
 exit 4
 EOF
-chmod +x "$cR4_stub"
-cR4_out="$TEST_DIR/cR4.out"
-cR4_err="$TEST_DIR/cR4.err"
-cR4_payload="$TEST_DIR/cR4.payload"
-cR4_pid_file="$TEST_DIR/cR4.pid"
-spawn_hook_bg "$cR4_home" "$cR4_workspace" "sess-regress4-001" \
-    "$cR4_out" "$cR4_err" "$cR4_payload" "$cR4_pid_file" \
-    "CERBERUS_REVIEW_GATE_BIN=$cR4_stub"
-cR4_pid="$(cat "$cR4_pid_file")"
+chmod +x "$cR6_stub"
+cR6_out="$TEST_DIR/cR6.out"
+cR6_err="$TEST_DIR/cR6.err"
+cR6_payload="$TEST_DIR/cR6.payload"
+cR6_pid_file="$TEST_DIR/cR6.pid"
+spawn_hook_bg "$cR6_home" "$cR6_workspace" "sess-regress6-001" \
+    "$cR6_out" "$cR6_err" "$cR6_payload" "$cR6_pid_file" \
+    "CERBERUS_REVIEW_GATE_BIN=$cR6_stub"
+cR6_pid="$(cat "$cR6_pid_file")"
 sleep 1
-cR4_t0=$(date +%s)
-kill -TERM "$cR4_pid" 2>/dev/null || true
+cR6_t0=$(date +%s)
+kill -TERM "$cR6_pid" 2>/dev/null || true
 # Hook MUST exit within ~5s (signal trap is prompt). If it waits 30s
 # for the stub, the trap was deferred — round-2 finding #1 regressed.
 for _ in $(seq 1 12); do
-    if ! kill -0 "$cR4_pid" 2>/dev/null; then break; fi
+    if ! kill -0 "$cR6_pid" 2>/dev/null; then break; fi
     sleep 0.5
 done
-wait "$cR4_pid" 2>/dev/null
-cR4_rc=$?
-cR4_t1=$(date +%s)
-cR4_elapsed=$((cR4_t1 - cR4_t0))
-cR4_action="$(stop_action "$cR4_out")"
-if [[ "$cR4_rc" -eq 0 && "$cR4_action" == "allow" \
-      && "$cR4_elapsed" -le 8 ]]; then
-    log_pass "Regression #4 — SIGTERM during slow status → exit ${cR4_elapsed}s, continue:true"
+wait "$cR6_pid" 2>/dev/null
+cR6_rc=$?
+cR6_t1=$(date +%s)
+cR6_elapsed=$((cR6_t1 - cR6_t0))
+cR6_action="$(stop_action "$cR6_out")"
+if [[ "$cR6_rc" -eq 0 && "$cR6_action" == "allow" \
+      && "$cR6_elapsed" -le 8 ]]; then
+    log_pass "Regression #6 — SIGTERM during slow status → exit ${cR6_elapsed}s, continue:true"
 else
-    log_fail "Regression #4: rc=$cR4_rc action=$cR4_action elapsed=${cR4_elapsed}s body=$(cat "$cR4_out") stderr=$(cat "$cR4_err")"
+    log_fail "Regression #6: rc=$cR6_rc action=$cR6_action elapsed=${cR6_elapsed}s body=$(cat "$cR6_out") stderr=$(cat "$cR6_err")"
 fi
 
 # ---------------------------------------------------------------------------

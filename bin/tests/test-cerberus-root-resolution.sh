@@ -45,6 +45,10 @@ escape_sed_replacement() {
     printf '%s' "$1" | sed 's/[&|\]/\\&/g'
 }
 
+expected_project_key() {
+    echo "$1" | sed 's|^/|-|' | tr '/' '-'
+}
+
 TEST_DIR="$(mktemp -d -t cerberus-root-resolution.XXXXXX)"
 BAD_ROOT="$TEST_DIR/not-cerberus"
 FOREIGN_CWD="$TEST_DIR/foreign-cwd"
@@ -216,5 +220,61 @@ if [[ "$policy_path" != "$PLUGIN_ROOT/config/gemini-readonly-policy.toml" ]]; th
     log_fail "expected Gemini policy path under Cerberus config, got: $policy_path"
 fi
 log_pass "gemini read-only paths stay anchored to Cerberus config"
+
+log_test "cerberus-skill-env reads Codex active-session registry"
+codex_home="$TEST_DIR/codex-home"
+mkdir -p "$codex_home"
+codex_pk="$(expected_project_key "$FOREIGN_CWD")"
+codex_registry_dir="$codex_home/.cerberus/runtime/codex/$codex_pk"
+mkdir -p "$codex_registry_dir"
+cat > "$codex_registry_dir/active-session.json" <<EOF
+{"schema_version":1,"host":"codex","workspace_root":"$FOREIGN_CWD","project_key":"$codex_pk","session_id":"codex-sess-001","codex_session_id":"codex-sess-001","run_key":"codex-run-001","transcript_path":"","last_seen":"2026-05-02T00:00:00Z"}
+EOF
+codex_env_output="$TEST_DIR/codex-env.out"
+(
+    cd "$FOREIGN_CWD"
+    env HOME="$codex_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env" || exit $?; printf "%s\n%s\n" "$CERBERUS_PROJECT_KEY" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT"
+) > "$codex_env_output"
+codex_resolved_pk="$(sed -n '1p' "$codex_env_output")"
+codex_resolved_run="$(sed -n '2p' "$codex_env_output")"
+if [[ "$codex_resolved_pk" != "$codex_pk" ]]; then
+    log_fail "expected Codex skill env to export project key $codex_pk, got: $codex_resolved_pk"
+fi
+if [[ "$codex_resolved_run" != "codex-run-001" ]]; then
+    log_fail "expected Codex skill env to export run key codex-run-001, got: $codex_resolved_run"
+fi
+log_pass "cerberus-skill-env exports Codex registry project/run key"
+
+log_test "cerberus-skill-env fails clearly when Codex registry is missing"
+missing_home="$TEST_DIR/codex-missing-home"
+mkdir -p "$missing_home"
+missing_stderr="$TEST_DIR/codex-missing.err"
+missing_rc=0
+(
+    cd "$FOREIGN_CWD"
+    env HOME="$missing_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
+) 2> "$missing_stderr" || missing_rc=$?
+if [[ "$missing_rc" -eq 0 ]]; then
+    log_fail "expected missing Codex registry to make cerberus-skill-env fail"
+fi
+assert_contains "missing Codex registry diagnostic" "$(cat "$missing_stderr")" "Codex active-session registry not found"
+log_pass "cerberus-skill-env does not invent a Codex run key without registry"
+
+log_test "cerberus-skill-env fails clearly when Codex registry is malformed"
+malformed_home="$TEST_DIR/codex-malformed-home"
+malformed_dir="$malformed_home/.cerberus/runtime/codex/$codex_pk"
+mkdir -p "$malformed_dir"
+printf '{not json' > "$malformed_dir/active-session.json"
+malformed_stderr="$TEST_DIR/codex-malformed.err"
+malformed_rc=0
+(
+    cd "$FOREIGN_CWD"
+    env HOME="$malformed_home" CERBERUS_HOST=codex CERBERUS_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"' _ "$PLUGIN_ROOT"
+) 2> "$malformed_stderr" || malformed_rc=$?
+if [[ "$malformed_rc" -eq 0 ]]; then
+    log_fail "expected malformed Codex registry to make cerberus-skill-env fail"
+fi
+assert_contains "malformed Codex registry diagnostic" "$(cat "$malformed_stderr")" "Codex active-session registry is malformed"
+log_pass "cerberus-skill-env rejects malformed Codex registry"
 
 log_pass "Cerberus root resolution fallback coverage complete"

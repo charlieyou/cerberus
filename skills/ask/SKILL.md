@@ -45,7 +45,7 @@ if [ -z "$cerberus_root" ]; then
     exit 127
 fi
 # shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env"
+. "$cerberus_root/bin/cerberus-skill-env" || exit $?
 ```
 
 Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.

@@ -45,7 +45,7 @@ if [ -z "$cerberus_root" ]; then
     exit 127
 fi
 # shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env"
+. "$cerberus_root/bin/cerberus-skill-env" || exit $?
 ```
 
 Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
@@ -67,34 +67,36 @@ Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review $ARGUMENTS
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review $ARGUMENTS
 ```
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
 
+When running under Codex, `bin/cerberus-skill-env` reads the active run key from `~/.cerberus/runtime/codex/<project-key>/active-session.json`, written by the Codex `SessionStart` / `UserPromptSubmit` hooks. If that registry is missing, start a new Codex session and verify the hooks are installed; skills must not invent run keys because the Stop hook would be unable to associate them with Codex's `session_id`.
+
 Examples:
 ```bash
 # User: /review-plan path/to/plan.md
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review path/to/plan.md
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review path/to/plan.md
 
 # User: /review-plan "focus on error handling"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --focus "focus on error handling"
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --focus "focus on error handling"
 
 # User: /review-plan --mode max plan.md "check dependencies"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --mode max --focus "check dependencies" plan.md
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --mode max --focus "check dependencies" plan.md
 
 # User: /review-plan --agents codex,gemini path/to/plan.md
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --agents codex,gemini path/to/plan.md
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --agents codex,gemini path/to/plan.md
 
 # User: /review-plan --max-rounds 3 path/to/plan.md
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --max-rounds 3 path/to/plan.md
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 3 path/to/plan.md
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
 
 # User: /review-plan --consensus any path/to/plan.md
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --consensus any path/to/plan.md
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --consensus any path/to/plan.md
 
 # User: /review-plan plan.md focus on error handling
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review plan.md focus on error handling
+"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review plan.md focus on error handling
 ```
 
 If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
@@ -136,6 +138,6 @@ Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) â
 The iterative review continues until:
 - Consensus is reached (per `--consensus` mode, default: majority)
 - Maximum iterations (default 3, configurable via --max-rounds; set `0` to disable auto-respawn) are reached
-- You manually resolve with `${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate resolve`
+- You manually resolve with `"$CERBERUS_ROOT/bin/review-gate" resolve`
 
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
