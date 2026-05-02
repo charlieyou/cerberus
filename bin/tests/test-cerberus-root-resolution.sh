@@ -33,6 +33,14 @@ assert_contains() {
     esac
 }
 
+extract_skill_bootstrap() {
+    awk '
+        /^```bash$/ { in_block=1; next }
+        in_block && /^```$/ { exit }
+        in_block { print }
+    ' "$1"
+}
+
 TEST_DIR="$(mktemp -d -t cerberus-root-resolution.XXXXXX)"
 BAD_ROOT="$TEST_DIR/not-cerberus"
 FOREIGN_CWD="$TEST_DIR/foreign-cwd"
@@ -149,6 +157,31 @@ if [[ "$skill_dir_root" != "$PLUGIN_ROOT" ]]; then
     log_fail "expected cerberus-skill-env to fall back after invalid CLAUDE_SKILL_DIR, got: $skill_dir_root"
 fi
 log_pass "cerberus-skill-env survives invalid CLAUDE_SKILL_DIR"
+
+log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
+rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
+extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
+    | sed "s|\${CLAUDE_SKILL_DIR}|$PLUGIN_ROOT/skills/review-code|g" >"$rendered_bootstrap"
+rendered_skill_dir_root="$(
+    cd "$FOREIGN_CWD"
+    env -u CERBERUS_ROOT -u CLAUDE_PLUGIN_ROOT -u CLAUDE_SKILL_DIR "$RUNNER_BASH" -c '. "$1"; printf "%s\n" "$CERBERUS_ROOT"' _ "$rendered_bootstrap"
+)"
+if [[ "$rendered_skill_dir_root" != "$PLUGIN_ROOT" ]]; then
+    log_fail "expected rendered skill bootstrap to resolve $PLUGIN_ROOT, got: $rendered_skill_dir_root"
+fi
+log_pass "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
+
+log_test "skill bootstrap falls back to current Cerberus git checkout"
+unrendered_bootstrap="$TEST_DIR/bootstrap-unrendered.sh"
+extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" >"$unrendered_bootstrap"
+git_fallback_root="$(
+    cd "$PLUGIN_ROOT"
+    env -u CERBERUS_ROOT -u CLAUDE_PLUGIN_ROOT -u CLAUDE_SKILL_DIR "$RUNNER_BASH" -c '. "$1"; printf "%s\n" "$CERBERUS_ROOT"' _ "$unrendered_bootstrap"
+)"
+if [[ "$git_fallback_root" != "$PLUGIN_ROOT" ]]; then
+    log_fail "expected unrendered skill bootstrap to resolve $PLUGIN_ROOT from git checkout, got: $git_fallback_root"
+fi
+log_pass "skill bootstrap falls back to current Cerberus git checkout"
 
 log_test "gemini read-only paths stay anchored to Cerberus config after fallback"
 settings_path="$(CERBERUS_ROOT="$BAD_ROOT" PLUGIN_ROOT="$PLUGIN_ROOT" "$RUNNER_BASH" -c 'source "$PLUGIN_ROOT/bin/review-gate-models.sh"; gemini_readonly_settings_path')"

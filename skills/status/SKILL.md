@@ -9,11 +9,31 @@ disable-model-invocation: true
 Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, Amp, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
 
 ```bash
-cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
-if [ -z "$cerberus_root" ] && [ -n "${CLAUDE_SKILL_DIR:-}" ]; then
-    cerberus_root="$(cd "$CLAUDE_SKILL_DIR/../.." && pwd)"
+cerberus_root=""
+cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
+case "$cerberus_plugin_root" in
+    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
+esac
+cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
+case "$cerberus_skill_dir" in
+    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
+esac
+
+cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
+if [ -n "$cerberus_skill_dir" ]; then
+    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
 fi
-if [ -z "$cerberus_root" ] || [ ! -r "$cerberus_root/bin/cerberus-skill-env" ]; then
+cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$cerberus_git_root" ]; then
+    cerberus_candidates+=("$cerberus_git_root")
+fi
+for cerberus_candidate in "${cerberus_candidates[@]}"; do
+    if [ -n "$cerberus_candidate" ] && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ]; then
+        cerberus_root="$cerberus_candidate"
+        break
+    fi
+done
+if [ -z "$cerberus_root" ]; then
     echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
     exit 127
 fi
@@ -41,16 +61,37 @@ The active run key is resolved by the shared backend from the current host envir
 Use the Bash tool to run the backend status command:
 
 ```bash
-cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
-if [ -z "$cerberus_root" ] && [ -n "${CLAUDE_SKILL_DIR:-}" ]; then
-    cerberus_root="$(cd "$CLAUDE_SKILL_DIR/../.." && pwd)"
+cerberus_root=""
+cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
+case "$cerberus_plugin_root" in
+    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
+esac
+cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
+case "$cerberus_skill_dir" in
+    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
+esac
+
+cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
+if [ -n "$cerberus_skill_dir" ]; then
+    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
 fi
-if [ -z "$cerberus_root" ] || [ ! -x "$cerberus_root/bin/review-gate" ]; then
-    echo "status: cannot find Cerberus backend; set CERBERUS_ROOT to the Cerberus checkout root (the directory containing bin/review-gate)" >&2
+cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$cerberus_git_root" ]; then
+    cerberus_candidates+=("$cerberus_git_root")
+fi
+for cerberus_candidate in "${cerberus_candidates[@]}"; do
+    if [ -n "$cerberus_candidate" ] && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ]; then
+        cerberus_root="$cerberus_candidate"
+        break
+    fi
+done
+if [ -z "$cerberus_root" ]; then
+    echo "status: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
     exit 127
 fi
-export CERBERUS_ROOT="$cerberus_root"
-"$cerberus_root/bin/review-gate" status --json $ARGUMENTS
+# shellcheck source=/dev/null
+. "$cerberus_root/bin/cerberus-skill-env"
+"$CERBERUS_ROOT/bin/review-gate" status --json $ARGUMENTS
 ```
 
 ## Output
