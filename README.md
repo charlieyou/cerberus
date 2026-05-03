@@ -216,7 +216,7 @@ All review and generator commands accept `--mode <fast|smart|max>` to trade off 
 | Mode | Codex reasoning | Gemini model | Claude model | Claude effort |
 |------|-----------------|--------------|--------------|---------------|
 | fast | medium | `gemini-3-flash-preview` | `sonnet` | medium |
-| smart | high | `gemini-3.1-pro-preview` | `opus` | high |
+| smart | medium | `gemini-3.1-pro-preview` | `opus` | high |
 | max | xhigh | `gemini-3.1-pro-preview` | `opus` | max |
 
 Examples:

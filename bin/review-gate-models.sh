@@ -66,7 +66,7 @@ resolve_intelligence_mode() {
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-sonnet}}"
             ;;
         smart)
-            CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-high}"
+            CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT_OVERRIDE:-medium}"
             CLAUDE_REASONING_EFFORT="${CLAUDE_REASONING_EFFORT_OVERRIDE:-high}"
             GEMINI_MODEL_EFFECTIVE="${GEMINI_MODEL_OVERRIDE:-${GEMINI_MODEL:-gemini-3.1-pro-preview}}"
             CLAUDE_MODEL_EFFECTIVE="${CLAUDE_MODEL_OVERRIDE:-${CLAUDE_MODEL:-opus}}"
@@ -911,7 +911,7 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
     local codex_model="${CODEX_MODEL_EFFECTIVE:-$CODEX_MODEL}"
     local gemini_model="${GEMINI_MODEL_EFFECTIVE:-$GEMINI_MODEL}"
     local claude_model="${CLAUDE_MODEL_EFFECTIVE:-$CLAUDE_MODEL}"
-    local codex_reasoning="${CODEX_REASONING_EFFORT:-high}"
+    local codex_reasoning="${CODEX_REASONING_EFFORT:-medium}"
     local claude_reasoning="${CLAUDE_REASONING_EFFORT:-high}"
     local reviewer_timeout="${REVIEW_GATE_REVIEWER_TIMEOUT:-1800}"
     local reviewer_timeout_bin="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || true)}"
