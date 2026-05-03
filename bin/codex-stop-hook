@@ -180,6 +180,23 @@ __cerberus_emit_continue() {
     __cerberus_emit_body "$body"
 }
 
+__cerberus_reviewer_subprocess_marker_truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Reviewer subprocesses can run their own Codex Stop hooks during finalization.
+# They must not enforce the parent gate, or a reviewer can wait on itself before
+# Codex writes the review artifact/sentinel that would let the gate complete.
+if __cerberus_reviewer_subprocess_marker_truthy "${CERBERUS_REVIEWER_SUBPROCESS:-}" || \
+   __cerberus_reviewer_subprocess_marker_truthy "${REVIEW_GATE_REVIEWER_SUBPROCESS:-}"; then
+    __cerberus_stop_log "reviewer subprocess Stop hook; allowing"
+    __cerberus_emit_allow ""
+    exit 0
+fi
+
 # ---- Drain stdin via background subshell ----------------------------------
 # Bash defers running TERM/INT/HUP traps while a foreground external
 # command is blocked in a read syscall. Backgrounding the drainer and

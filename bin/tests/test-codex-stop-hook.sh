@@ -30,6 +30,7 @@
 #   Case 13 — Row 13b: SIGINT during child wait → child killed, allow.
 #   Case 14 — Row 13c: SIGHUP during child wait → child killed, allow.
 #   Case 15 —          Stdin parse failure → allow + stderr diagnostic.
+#   Regression — reviewer subprocess marker → allow before registry/status/wait.
 #
 # Happy-path probes carried forward from T007:
 #   Happy A — script entry point exists, executable.
@@ -184,6 +185,7 @@ run_hook() {
         unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
               CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
               CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+              CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
               REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
               REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
               CERBERUS_REVIEW_GATE_BIN \
@@ -215,6 +217,7 @@ run_session_init() {
         unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
               CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
               CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+              CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
               REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
               REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
               CERBERUS_REVIEW_GATE_BIN \
@@ -253,6 +256,7 @@ spawn_hook_bg() {
         unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
               CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
               CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+              CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
               REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
               REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
               CERBERUS_REVIEW_GATE_BIN \
@@ -367,6 +371,52 @@ if [[ "$c2_rc" -eq 0 && "$c2_action" == "allow" ]]; then
     log_pass "Case 2 — Row 2: no registry → {continue:true}, exit 0"
 else
     log_fail "Case 2: rc=$c2_rc action=$c2_action body=$(cat "$c2_out") stderr=$(cat "$c2_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — reviewer subprocess markers fail open before registry/status/wait.
+# Nested Codex reviewers can run Stop hooks during finalization. If the hook
+# follows the active registry back to the parent pending gate, it can wait on
+# the reviewer process that is currently trying to finish. Either reviewer
+# marker must short-circuit before invoking review-gate at all.
+# ---------------------------------------------------------------------------
+log_test "Regression — reviewer subprocess marker allows before registry/status/wait"
+c2b_home="$TEST_DIR/case2b"
+mkdir -p "$c2b_home"
+c2b_workspace="/tmp/cerberus-c2b"
+c2b_run="run-c2b-001"
+make_registry "$c2b_home" "$c2b_workspace" "$c2b_run" "sess-c2b-001"
+c2b_rd="$(make_review_dir "$c2b_home" "$c2b_workspace" "$c2b_run")"
+write_gate_state "$c2b_rd" "pending" '{"codex":{}}' "null" "$c2b_run"
+c2b_called="$TEST_DIR/c2b-review-gate-called"
+c2b_stub="$TEST_DIR/c2b-review-gate-must-not-run"
+cat > "$c2b_stub" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_CALLED_FILE"
+exit 2
+EOF
+chmod +x "$c2b_stub"
+c2b_ok=1
+for marker in CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS; do
+    rm -f "$c2b_called"
+    c2b_out="$TEST_DIR/c2b-$marker.out"
+    c2b_err="$TEST_DIR/c2b-$marker.err"
+    c2b_rc=0
+    run_hook "$c2b_home" "$c2b_workspace" "sess-c2b-001" \
+        "$c2b_out" "$c2b_err" \
+        "CERBERUS_REVIEW_GATE_BIN=$c2b_stub" \
+        "STUB_CALLED_FILE=$c2b_called" \
+        "$marker=1" \
+        "REVIEW_GATE_MAX_WAIT_SECONDS=30" \
+        || c2b_rc=$?
+    c2b_action="$(stop_action "$c2b_out")"
+    if [[ "$c2b_rc" -ne 0 || "$c2b_action" != "allow" || -e "$c2b_called" ]]; then
+        c2b_ok=0
+        log_fail "Regression reviewer marker $marker: rc=$c2b_rc action=$c2b_action called=$(cat "$c2b_called" 2>/dev/null || true) body=$(cat "$c2b_out" 2>/dev/null || true) stderr=$(cat "$c2b_err" 2>/dev/null || true)"
+    fi
+done
+if [[ "$c2b_ok" -eq 1 ]]; then
+    log_pass "Regression — reviewer subprocess markers bypass active registry and review-gate"
 fi
 
 # ---------------------------------------------------------------------------
@@ -997,6 +1047,7 @@ c15_rc=0
     unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
           CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
           CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
           REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
           REVIEW_GATE_MAX_WAIT_SECONDS \
           CERBERUS_REVIEW_GATE_BIN \
@@ -1109,6 +1160,7 @@ cR2_rc=0
     unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
           CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
           CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+          CERBERUS_REVIEWER_SUBPROCESS REVIEW_GATE_REVIEWER_SUBPROCESS \
           REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
           REVIEW_GATE_MAX_WAIT_SECONDS \
           CERBERUS_REVIEW_GATE_BIN \
