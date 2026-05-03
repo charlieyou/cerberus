@@ -110,6 +110,36 @@ write_state "resolved" "FAIL" "manual_resolve"
 body="$(run_check)"
 assert_decision "manual resolve" "allow" "manual_resolve" "$body"
 
+log_test "completion-check userMessage distinguishes pending reviewers from awaiting decision"
+# All reviewers complete (pending_count=0) on a still-pending gate => the
+# message must NOT misleadingly say reviewers are pending; it must mention
+# 'reviewers complete' and reference the consensus verdict.
+write_state "pending" "FAIL"
+body="$(run_check)"
+message="$(printf '%s' "$body" | jq -r '.userMessage // empty')"
+if [[ "$message" == *"reviewers complete but gate not cleared"* ]]; then
+    log_pass "reviewers-complete wording"
+else
+    log_fail "reviewers-complete wording missing; userMessage='$message'"
+fi
+# And when reviewers are still pending, the original wording remains.
+mkdir -p "$REVIEWS_DIR"
+jq -n '{
+    status: "pending",
+    host: "amp",
+    owner: {project_key: "completion-project", session_key: "completion-run"},
+    reviewers: {claude: {}, codex: {}},
+    consensus: {},
+    decision: {}
+}' > "$RUN_DIR/gate-state.json"
+body="$(run_check)"
+message="$(printf '%s' "$body" | jq -r '.userMessage // empty')"
+if [[ "$message" == *"Pending reviewers: 2"* ]]; then
+    log_pass "pending-reviewers wording"
+else
+    log_fail "pending-reviewers wording missing; userMessage='$message'"
+fi
+
 echo ""
 echo "completion-check test summary:"
 echo "  Passed: $TESTS_PASSED"

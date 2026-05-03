@@ -124,11 +124,11 @@ delete process.env.CERBERUS_RUN_KEY
 delete process.env.CERBERUS_REVIEWER_SUBPROCESS
 delete process.env.AMP_THREAD_ID
 delete process.env.AMP_CURRENT_THREAD_ID
+delete process.env.REVIEW_GATE_SESSION_KEY
 process.env.CLAUDE_PLUGIN_ROOT = '/poison/claude-plugin-root'
 process.env.CLAUDE_PROJECT_DIR = '/poison/claude-project-dir'
 process.env.CLAUDE_SESSION_ID = 'poison-claude-session'
 process.env.CLAUDE_TRANSCRIPT_PATH = '/poison/claude-transcript.jsonl'
-process.env.REVIEW_GATE_SESSION_KEY = 'poison-session-key'
 process.env.REVIEW_GATE_SESSION_ID = 'poison-session-id'
 process.env.REVIEW_GATE_TRANSCRIPT_PATH = '/poison/review-gate-transcript.jsonl'
 process.env.REVIEW_GATE_REVIEWER_SUBPROCESS = '1'
@@ -174,6 +174,29 @@ const nextThread = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd69'
 const nextSession = ensureAmpSession({ status: 'done' }, { thread: { id: nextThread } })
 assert(nextSession.runKey === nextThread, 'a later valid thread id should become the run key')
 
+// REVIEW_GATE_SESSION_KEY is the legacy alias for CERBERUS_RUN_KEY. It must
+// (a) win as the runKey when no explicit CERBERUS_RUN_KEY is set, (b) act as
+// a one-shot bypass that does NOT rebind the persisted active-session
+// registry, and (c) still be stripped from the backend env handed to
+// bin/review-gate.
+const persistedRunKey = nextSession.runKey
+const persistedRegistry = read(resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json'))
+const aliasRunKey = 'legacy-alias-run-key'
+process.env.REVIEW_GATE_SESSION_KEY = aliasRunKey
+const aliasSession = ensureAmpSession({ status: 'done' }, {})
+assert(aliasSession.runKey === aliasRunKey, 'REVIEW_GATE_SESSION_KEY should be honored as the legacy run key alias')
+const registryAfterAlias = read(resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json'))
+assert(registryAfterAlias === persistedRegistry, 'explicit run key override must not rebind the persisted active-session registry')
+
+const explicitOverride = 'explicit-cerberus-override'
+process.env.CERBERUS_RUN_KEY = explicitOverride
+const explicitSession = ensureAmpSession({ status: 'done' }, { thread: { id: thread } })
+assert(explicitSession.runKey === explicitOverride, 'CERBERUS_RUN_KEY override should win over thread id')
+const registryAfterExplicit = read(resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json'))
+assert(registryAfterExplicit === persistedRegistry, 'explicit CERBERUS_RUN_KEY must not rebind the persisted active-session registry')
+delete process.env.CERBERUS_RUN_KEY
+delete process.env.REVIEW_GATE_SESSION_KEY
+
 const output = executeCerberusCommand('review-plan', { plan_path: '/tmp/plan.md' }, event, ctx)
 assert(output.includes(`Cerberus run key: ${thread}`), 'run key header missing from command output')
 assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.1')).trim() === 'spawn-plan-review\n/tmp/plan.md', 'review-plan argv mismatch')
@@ -215,6 +238,19 @@ const first = mapAgentEndDecision(event, ctx)
 assert(first?.action === 'continue' && first.userMessage === 'Fix Cerberus findings', 'continue completion should map to agent.end continue')
 const second = mapAgentEndDecision(event, ctx)
 assert(second === undefined, 'same fingerprint should not continue twice')
+
+// agent.end loop-guard fingerprint write must NOT persist an explicit
+// CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY override into the registry.
+const persistedBeforeOverride = read(resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json'))
+process.env.CERBERUS_RUN_KEY = 'override-during-completion'
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'continue', userMessage: 'Override probe', fingerprint: 'fp-override' })
+mapAgentEndDecision({ status: 'done' }, {})
+const persistedAfterOverride = read(resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json'))
+const beforeRunKey = JSON.parse(persistedBeforeOverride).run_key
+const afterRunKey = JSON.parse(persistedAfterOverride).run_key
+assert(beforeRunKey === afterRunKey, `loop-guard write must preserve persisted run key (${beforeRunKey} != ${afterRunKey})`)
+assert(afterRunKey !== 'override-during-completion', 'explicit override must not rebind the active-session registry via agent.end')
+delete process.env.CERBERUS_RUN_KEY
 
 process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'continue', userMessage: 'Do not loop', fingerprint: 'fp-2' })
 process.env.CERBERUS_REVIEWER_SUBPROCESS = '1'

@@ -14,8 +14,8 @@ In scope:
 - Codex plugin lifecycle scripts and shared backend scripts used by
   `.codex-plugin/plugin.json` and `hooks/codex-hooks.json`.
 - Shared shell helper libraries sourced by the plugin scripts.
-- The Amp toolbox adapter, because it uses the same host-neutral backend and
-  constrains shared script behavior.
+- The Amp plugin adapter (`.amp/plugins/cerberus.ts`), because it uses the
+  same host-neutral backend and constrains shared script behavior.
 - The release/update helper for installed Claude plugins.
 
 Out of scope:
@@ -44,7 +44,7 @@ Out of scope:
 | `bin/cerberus-task-completed-hook` | hook executable | Claude | Gates Claude agent-team task completion through verification and code review. |
 | `bin/cerberus-teammate-idle-hook` | hook executable | Claude | Suppresses duplicate idle notifications for Cerberus implementer teammates. |
 | `bin/update-plugin` | executable | Claude maintainer | Updates installed plugin cache and rewrites Claude allowlist paths. |
-| `.amp/toolbox/cerberus.sh` | toolbox executable | Amp | Provides the Amp command adapter over the same backend. |
+| `.amp/plugins/cerberus.ts` | Amp plugin | Amp | TypeScript Amp plugin that registers Cerberus tools/commands and dispatches to the shared `bin/review-gate` backend. |
 
 ## Hook Manifests
 
@@ -802,51 +802,61 @@ Functional requirements:
 - Exit non-zero if the version cannot be determined or settings JSON cannot
   be rewritten validly.
 
-## `.amp/toolbox/cerberus.sh`
+## `.amp/plugins/cerberus.ts`
 
 ### Purpose
 
-The Amp adapter exposes the shared Cerberus backend through Amp Toolbox
-actions. It is included here because it uses the same host-neutral state
-contract and is a compatibility consumer of `review-gate`.
+The Amp plugin adapter exposes the shared Cerberus backend through the Amp
+Plugin API (`@ampcode/plugin`). It is included here because it uses the same
+host-neutral state contract and is a compatibility consumer of `review-gate`.
 
-Toolbox actions:
+Registered surfaces:
 
-| `TOOLBOX_ACTION` | Behavior |
-|---|---|
-| `describe` | Emit JSON metadata and supported command list. |
-| `execute` | Read JSON params from stdin and dispatch a Cerberus command. |
-
-Supported commands:
-
-| Command | Required params | Backend call |
+| Surface | Names | Behavior |
 |---|---|---|
-| `review-code` | none | `review-gate spawn-code-review` |
+| Tools | `review-code`, `review-plan`, `review-spec`, `ask`, `ask-panel`, `status`, `clear-gate` | Each tool dispatches one or more `bin/review-gate` subcommands and returns the combined stdout/stderr to the model. |
+| Slash commands | Same names as tools, under the `Cerberus` category | Prompt the user via `ctx.ui.input` for required arguments, then invoke the same backend dispatcher and notify the user with the output. |
+| Lifecycle hooks | `session.start`, `agent.start`, `agent.end` | `session.start` and `agent.start` ensure the Amp session registry exists. `agent.end` runs `review-gate completion-check --host amp --json` and, when the gate requires action, returns `{ action: 'continue', userMessage }` to keep Amp engaged. |
+
+Backend dispatch (per command):
+
+| Command | Required input | Backend call(s) |
+|---|---|---|
+| `review-code` | optional `diff_mode` and matching `base`/`commit`/`commits`/`range` plus reviewer flags | `review-gate spawn-code-review [...flags]` |
 | `review-plan` | `plan_path` | `review-gate spawn-plan-review <plan_path>` |
 | `review-spec` | `spec_path` | `review-gate spawn-spec-review <spec_path>` |
-| `ask-panel` | `question` | `review-gate spawn-ask <question>` then `wait --json --finalize` |
-| `status` | none | `review-gate status --json` |
-| `clear-gate` | optional `reason` | `review-gate resolve --reason <reason>` |
+| `ask` / `ask-panel` | `question` | `review-gate spawn-ask <question>` then `review-gate wait --json --finalize` |
+| `status` | none | `review-gate status --json` (exit code `4` is treated as "no active gate" and ignored) |
+| `clear-gate` | optional `reason` | `review-gate resolve --reason <reason>` (defaults to `manual clear via Amp plugin`) |
 
 Run-key behavior:
 
-- Explicit `CERBERUS_RUN_KEY` or `REVIEW_GATE_SESSION_KEY` wins.
+- Explicit `CERBERUS_RUN_KEY` (or the legacy alias `REVIEW_GATE_SESSION_KEY`)
+  wins and is treated as a one-shot bypass: the plugin uses the override for
+  the current invocation but does not persist it into the workspace's
+  active-session registry.
 - A valid `AMP_THREAD_ID` or `AMP_CURRENT_THREAD_ID` is preferred for new
-  thread-bound runs.
+  thread-bound runs and is persisted into the registry.
 - If prior registry state used a generated UUID because no thread id existed,
-  the adapter preserves that UUID for continuity and logs a warning.
+  the adapter preserves that UUID for continuity.
 - If no valid thread id or registry exists, generate and persist a UUID.
 
-Before dispatch, the adapter must export:
+Before each backend call, the plugin exports:
 
 ```text
 CERBERUS_HOST=amp
-CERBERUS_ROOT=<adapter-resolved root>
+CERBERUS_ROOT=<plugin-resolved root>
 CERBERUS_STATE_ROOT=<default or override>
 CERBERUS_PROJECT_KEY=<workspace key>
 CERBERUS_RUN_KEY=<resolved run key>
-CLAUDE_PLUGIN_ROOT=<compat alias>
+AMP_THREAD_ID=<resolved thread id, if any>
+AMP_CURRENT_THREAD_ID=<resolved thread id, if any>
 ```
+
+The plugin also strips inherited `REVIEW_GATE_*` variables and Claude-specific
+`CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` / `CLAUDE_SESSION_ID` /
+`CLAUDE_TRANSCRIPT_PATH` from the backend environment so cross-host state
+cannot leak.
 
 ## Security and Safety Requirements
 

@@ -6038,10 +6038,19 @@ USAGE
     pending_count=$(printf '%s' "$body" | jq -r '(.pending_reviewers // []) | length' 2>/dev/null || echo 0)
     finding_count=$(printf '%s' "$body" | jq -r '(.aggregated_findings // []) | length' 2>/dev/null || echo 0)
     message=$(printf '%s' "$body" | jq -r --arg reason "$reason" --arg pending_count "$pending_count" --arg finding_count "$finding_count" '
-        "Cerberus review gate is not clear (" + $reason + "). " +
-        "Run key: " + (.run_key // "unknown") + ". " +
-        "Pending reviewers: " + $pending_count + "; findings: " + $finding_count + ".\n" +
-        "Inspect with Cerberus status, address the review findings, or use clear-gate with an explicit reason if a human is overriding the gate."
+        ($pending_count | tonumber) as $pc |
+        ($finding_count | tonumber) as $fc |
+        if $pc == 0 then
+            "Cerberus reviewers complete but gate not cleared (" + ((.consensus_verdict // "") | if . == "" then $reason else . end) + "). " +
+            "Run key: " + (.run_key // "unknown") + ". " +
+            "Findings: " + $finding_count + ".\n" +
+            "Address the review findings, or use clear-gate with an explicit reason if a human is overriding the gate."
+        else
+            "Cerberus review gate is not clear (" + $reason + "). " +
+            "Run key: " + (.run_key // "unknown") + ". " +
+            "Pending reviewers: " + $pending_count + "; findings: " + $finding_count + ".\n" +
+            "Inspect with Cerberus status, address the review findings, or use clear-gate with an explicit reason if a human is overriding the gate."
+        end
     ' 2>/dev/null || echo "Cerberus review gate is not clear. Inspect status, address findings, or use clear-gate with an explicit reason.")
 
     jq -nc \

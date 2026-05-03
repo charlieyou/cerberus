@@ -20,6 +20,7 @@ interface AmpSession {
 	runKey: string
 	threadID: string
 	registryPath: string
+	explicitOverride: boolean
 }
 
 interface RegistryState {
@@ -116,7 +117,7 @@ export function ensureAmpSession(event?: Record<string, unknown>, ctx?: Record<s
 
 	const registryPath = registryPathFor(projectKey)
 	const registry = readRegistry(registryPath)
-	const explicitRunKey = process.env.CERBERUS_RUN_KEY || ''
+	const explicitRunKey = process.env.CERBERUS_RUN_KEY || process.env.REVIEW_GATE_SESSION_KEY || ''
 	const threadID = threadIDFrom(event, ctx)
 
 	let runKey = explicitRunKey
@@ -138,21 +139,26 @@ export function ensureAmpSession(event?: Record<string, unknown>, ctx?: Record<s
 		}
 	}
 
-	const nextRegistry: RegistryState = {
-		schema_version: 1,
-		host: 'amp',
-		workspace_root: root,
-		project_key: projectKey,
-		run_key: runKey,
-		amp_thread_id: registryThreadID,
-		last_seen: new Date().toISOString(),
+	// Only persist the registry when the run key was auto-derived. An explicit
+	// CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY override must remain a one-shot
+	// bypass and not corrupt the workspace's normal session tracking.
+	if (!explicitRunKey) {
+		const nextRegistry: RegistryState = {
+			schema_version: 1,
+			host: 'amp',
+			workspace_root: root,
+			project_key: projectKey,
+			run_key: runKey,
+			amp_thread_id: registryThreadID,
+			last_seen: new Date().toISOString(),
+		}
+		if (registry?.run_key === runKey && typeof registry?.last_blocking_fingerprint === 'string') {
+			nextRegistry.last_blocking_fingerprint = registry.last_blocking_fingerprint
+		}
+		writeRegistry(registryPath, nextRegistry)
 	}
-	if (registry?.run_key === runKey && typeof registry?.last_blocking_fingerprint === 'string') {
-		nextRegistry.last_blocking_fingerprint = registry.last_blocking_fingerprint
-	}
-	writeRegistry(registryPath, nextRegistry)
 
-	return { workspaceRoot: root, projectKey, runKey, threadID, registryPath }
+	return { workspaceRoot: root, projectKey, runKey, threadID, registryPath, explicitOverride: !!explicitRunKey }
 }
 
 function backendEnv(session: AmpSession): NodeJS.ProcessEnv {
@@ -360,13 +366,23 @@ function fingerprintFor(decision: CompletionDecision): string {
 
 function rememberBlockingFingerprint(session: AmpSession, fingerprint: string): void {
 	const current = readRegistry(session.registryPath) || {}
+	// Preserve the persisted run key when the caller is using an explicit
+	// CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY override; the override must
+	// remain a one-shot bypass and never rebind the workspace's normal
+	// session tracking, even when the loop guard records a fingerprint.
+	const persistedRunKey = typeof current.run_key === 'string' && current.run_key ? current.run_key : ''
+	const persistedThreadID = typeof current.amp_thread_id === 'string' ? current.amp_thread_id : ''
+	const runKey = session.explicitOverride && persistedRunKey ? persistedRunKey : session.runKey
+	const ampThreadID = session.explicitOverride
+		? (persistedThreadID || null)
+		: (session.threadID && isValidThreadID(session.threadID) ? session.threadID : null)
 	writeRegistry(session.registryPath, {
 		schema_version: 1,
 		host: 'amp',
 		workspace_root: session.workspaceRoot,
 		project_key: session.projectKey,
-		run_key: session.runKey,
-		amp_thread_id: session.threadID && isValidThreadID(session.threadID) ? session.threadID : null,
+		run_key: runKey,
+		amp_thread_id: ampThreadID,
 		last_seen: new Date().toISOString(),
 		last_blocking_fingerprint: fingerprint || current.last_blocking_fingerprint,
 	})
