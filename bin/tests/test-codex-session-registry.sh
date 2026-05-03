@@ -230,6 +230,112 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression — lifecycle session id can change across Codex prompt turns while
+# the same Cerberus gate is still active. Preserve the existing active run_key
+# so the Stop hook keeps looking at the review directory that spawn created.
+# ---------------------------------------------------------------------------
+log_test "Regression — changed lifecycle id preserves active pending run_key"
+c2b_home="$TEST_DIR/case2b"
+mkdir -p "$c2b_home"
+c2b_workspace="/tmp/some-codex-workspace-c2b"
+c2b_pk="$(expected_project_key "$c2b_workspace")"
+c2b_registry="$(expected_registry_path "$c2b_home" "$c2b_workspace")"
+c2b_run="active-run-c2b"
+c2b_payload_old="$(jq -nc \
+    --arg sid "sess-c2b-old" \
+    --arg ws "$c2b_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+c2b_payload_new="$(jq -nc \
+    --arg sid "sess-c2b-new" \
+    --arg ws "$c2b_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+run_init "$c2b_home" "$c2b_payload_old" \
+    "$TEST_DIR/c2b-1.out" "$TEST_DIR/c2b-1.err" \
+    "CERBERUS_RUN_KEY=$c2b_run"
+mkdir -p "$c2b_home/.cerberus/projects/$c2b_pk/$c2b_run"
+jq -n --arg status "pending" '{version:1,status:$status}' \
+    > "$c2b_home/.cerberus/projects/$c2b_pk/$c2b_run/gate-state.json"
+run_init "$c2b_home" "$c2b_payload_new" \
+    "$TEST_DIR/c2b-2.out" "$TEST_DIR/c2b-2.err"
+c2b_sid="$(jq -r '.session_id // empty' "$c2b_registry" 2>/dev/null || echo "")"
+c2b_run_after="$(jq -r '.run_key // empty' "$c2b_registry" 2>/dev/null || echo "")"
+if [[ "$c2b_sid" == "sess-c2b-new" && "$c2b_run_after" == "$c2b_run" ]]; then
+    log_pass "Regression — active pending gate keeps prior run_key across lifecycle id change"
+else
+    log_fail "Regression c2b: session_id='$c2b_sid' run_key='$c2b_run_after' registry=$(cat "$c2b_registry" 2>/dev/null || true) stderr=$(cat "$TEST_DIR/c2b-2.err" 2>/dev/null || true)"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — once the prior gate is resolved, a new lifecycle id may become
+# the next run_key. This avoids pinning future reviews to stale completed runs.
+# ---------------------------------------------------------------------------
+log_test "Regression — resolved prior gate does not preserve stale run_key"
+c2c_home="$TEST_DIR/case2c"
+mkdir -p "$c2c_home"
+c2c_workspace="/tmp/some-codex-workspace-c2c"
+c2c_pk="$(expected_project_key "$c2c_workspace")"
+c2c_registry="$(expected_registry_path "$c2c_home" "$c2c_workspace")"
+c2c_run="resolved-run-c2c"
+c2c_payload_old="$(jq -nc \
+    --arg sid "sess-c2c-old" \
+    --arg ws "$c2c_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+c2c_payload_new="$(jq -nc \
+    --arg sid "sess-c2c-new" \
+    --arg ws "$c2c_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+run_init "$c2c_home" "$c2c_payload_old" \
+    "$TEST_DIR/c2c-1.out" "$TEST_DIR/c2c-1.err" \
+    "CERBERUS_RUN_KEY=$c2c_run"
+mkdir -p "$c2c_home/.cerberus/projects/$c2c_pk/$c2c_run"
+jq -n --arg status "resolved" '{version:1,status:$status,consensus:{verdict:"PASS"}}' \
+    > "$c2c_home/.cerberus/projects/$c2c_pk/$c2c_run/gate-state.json"
+run_init "$c2c_home" "$c2c_payload_new" \
+    "$TEST_DIR/c2c-2.out" "$TEST_DIR/c2c-2.err"
+c2c_sid="$(jq -r '.session_id // empty' "$c2c_registry" 2>/dev/null || echo "")"
+c2c_run_after="$(jq -r '.run_key // empty' "$c2c_registry" 2>/dev/null || echo "")"
+if [[ "$c2c_sid" == "sess-c2c-new" && "$c2c_run_after" == "sess-c2c-new" ]]; then
+    log_pass "Regression — resolved gate allows new lifecycle id to become run_key"
+else
+    log_fail "Regression c2c: session_id='$c2c_sid' run_key='$c2c_run_after' registry=$(cat "$c2c_registry" 2>/dev/null || true) stderr=$(cat "$TEST_DIR/c2c-2.err" 2>/dev/null || true)"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — explicit run-key env still wins over active-gate preservation.
+# ---------------------------------------------------------------------------
+log_test "Regression — explicit CERBERUS_RUN_KEY overrides active-gate preservation"
+c2d_home="$TEST_DIR/case2d"
+mkdir -p "$c2d_home"
+c2d_workspace="/tmp/some-codex-workspace-c2d"
+c2d_pk="$(expected_project_key "$c2d_workspace")"
+c2d_registry="$(expected_registry_path "$c2d_home" "$c2d_workspace")"
+c2d_run="active-run-c2d"
+c2d_explicit="explicit-new-run-c2d"
+c2d_payload_old="$(jq -nc \
+    --arg sid "sess-c2d-old" \
+    --arg ws "$c2d_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+c2d_payload_new="$(jq -nc \
+    --arg sid "sess-c2d-new" \
+    --arg ws "$c2d_workspace" \
+    '{session_id: $sid, workspace_root: $ws}')"
+run_init "$c2d_home" "$c2d_payload_old" \
+    "$TEST_DIR/c2d-1.out" "$TEST_DIR/c2d-1.err" \
+    "CERBERUS_RUN_KEY=$c2d_run"
+mkdir -p "$c2d_home/.cerberus/projects/$c2d_pk/$c2d_run"
+jq -n --arg status "awaiting_decision" '{version:1,status:$status}' \
+    > "$c2d_home/.cerberus/projects/$c2d_pk/$c2d_run/gate-state.json"
+run_init "$c2d_home" "$c2d_payload_new" \
+    "$TEST_DIR/c2d-2.out" "$TEST_DIR/c2d-2.err" \
+    "CERBERUS_RUN_KEY=$c2d_explicit"
+c2d_run_after="$(jq -r '.run_key // empty' "$c2d_registry" 2>/dev/null || echo "")"
+if [[ "$c2d_run_after" == "$c2d_explicit" ]]; then
+    log_pass "Regression — explicit CERBERUS_RUN_KEY wins over active-gate preservation"
+else
+    log_fail "Regression c2d: run_key='$c2d_run_after' registry=$(cat "$c2d_registry" 2>/dev/null || true) stderr=$(cat "$TEST_DIR/c2d-2.err" 2>/dev/null || true)"
+fi
+
+# ---------------------------------------------------------------------------
 # Case 3 — Concurrent writes (distinct PIDs); final JSON valid; last
 # writer wins. Both invocations use distinct stdin payloads with the
 # same workspace_root so they target the same registry file.

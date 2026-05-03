@@ -40,6 +40,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_STOP_HOOK="$SCRIPT_DIR/../codex-stop-hook"
+CODEX_SESSION_INIT="$SCRIPT_DIR/../codex-session-init"
 REVIEW_GATE="$SCRIPT_DIR/../review-gate"
 
 if [[ ! -f "$CODEX_STOP_HOOK" ]]; then
@@ -48,6 +49,14 @@ if [[ ! -f "$CODEX_STOP_HOOK" ]]; then
 fi
 if [[ ! -x "$CODEX_STOP_HOOK" ]]; then
     echo "FATAL: bin/codex-stop-hook not executable at $CODEX_STOP_HOOK" >&2
+    exit 2
+fi
+if [[ ! -f "$CODEX_SESSION_INIT" ]]; then
+    echo "FATAL: bin/codex-session-init not found at $CODEX_SESSION_INIT" >&2
+    exit 2
+fi
+if [[ ! -x "$CODEX_SESSION_INIT" ]]; then
+    echo "FATAL: bin/codex-session-init not executable at $CODEX_SESSION_INIT" >&2
     exit 2
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -185,6 +194,37 @@ run_hook() {
             export "$kv"
         done
         printf '%s' "$payload" | "$CODEX_STOP_HOOK" >"$out" 2>"$err"
+    ) || rc=$?
+    return $rc
+}
+
+# Run codex-session-init in a controlled env to simulate a lifecycle hook
+# refresh before Stop.
+run_session_init() {
+    local home="$1"
+    local workspace="$2"
+    local session_id="$3"
+    local out="$4"
+    local err="$5"
+    shift 5
+    local payload
+    payload="$(jq -nc --arg sid "$session_id" --arg ws "$workspace" \
+        '{session_id:$sid, workspace_root:$ws, cwd:$ws}')"
+    local rc=0
+    (
+        unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_PROJECT_KEY \
+              CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
+              CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
+              REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
+              REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
+              CERBERUS_REVIEW_GATE_BIN \
+              CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
+              __CERBERUS_ALIAS_WARNED || true
+        export HOME="$home"
+        for kv in "$@"; do
+            export "$kv"
+        done
+        printf '%s' "$payload" | "$CODEX_SESSION_INIT" >"$out" 2>"$err"
     ) || rc=$?
     return $rc
 }
@@ -1008,6 +1048,50 @@ if [[ "$cR1_rc" -eq 0 && "$cR1_action" == "allow" && "$cR1_diag" == "found" ]]; 
     log_pass "Regression #1 — stale registry ignored; Stop allowed"
 else
     log_fail "Regression #1: rc=$cR1_rc action=$cR1_action diag=$cR1_diag body=$(cat "$cR1_out") stderr=$(cat "$cR1_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — Codex lifecycle session ids can change between the prompt that
+# spawns a review and the Stop hook that should present it. The session-init
+# refresh should update registry.session_id for Stop validation while preserving
+# the active review run_key, so Stop blocks on findings from the original run.
+# ---------------------------------------------------------------------------
+log_test "Regression — changed lifecycle id preserves active run for Stop"
+cR1b_home="$TEST_DIR/regress1b"
+mkdir -p "$cR1b_home"
+cR1b_workspace="/tmp/cerberus-regress1b"
+cR1b_run="regress1b-run-001"
+make_registry "$cR1b_home" "$cR1b_workspace" "$cR1b_run" "sess-regress1b-old"
+cR1b_rd="$(make_review_dir "$cR1b_home" "$cR1b_workspace" "$cR1b_run")"
+write_gate_state "$cR1b_rd" "awaiting_decision" '{"codex":{}}' "null" "$cR1b_run"
+cat > "$cR1b_rd/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"blocking after lifecycle refresh","findings":[{"title":"x","body":"y","priority":0,"file_path":null,"line_start":null,"line_end":null}]}
+EOF
+touch "$cR1b_rd/reviews/codex.done"
+cR1b_init_out="$TEST_DIR/cR1b-init.out"
+cR1b_init_err="$TEST_DIR/cR1b-init.err"
+cR1b_init_rc=0
+run_session_init "$cR1b_home" "$cR1b_workspace" "sess-regress1b-new" \
+    "$cR1b_init_out" "$cR1b_init_err" || cR1b_init_rc=$?
+cR1b_registry="$cR1b_home/.cerberus/runtime/codex/$(expected_project_key "$cR1b_workspace")/active-session.json"
+cR1b_registry_sid="$(jq -r '.session_id // empty' "$cR1b_registry" 2>/dev/null || echo "")"
+cR1b_registry_run="$(jq -r '.run_key // empty' "$cR1b_registry" 2>/dev/null || echo "")"
+cR1b_out="$TEST_DIR/cR1b.out"
+cR1b_err="$TEST_DIR/cR1b.err"
+cR1b_rc=0
+run_hook "$cR1b_home" "$cR1b_workspace" "sess-regress1b-new" \
+    "$cR1b_out" "$cR1b_err" || cR1b_rc=$?
+cR1b_action="$(stop_action "$cR1b_out")"
+cR1b_msg="$(stop_reason "$cR1b_out")"
+if [[ "$cR1b_init_rc" -eq 0 \
+      && "$cR1b_registry_sid" == "sess-regress1b-new" \
+      && "$cR1b_registry_run" == "$cR1b_run" \
+      && "$cR1b_rc" -eq 0 \
+      && "$cR1b_action" == "continue" \
+      && "$cR1b_msg" == *"blocking"* ]]; then
+    log_pass "Regression — refreshed lifecycle session validates Stop while preserving active run_key"
+else
+    log_fail "Regression #1b: init_rc=$cR1b_init_rc registry_sid='$cR1b_registry_sid' registry_run='$cR1b_registry_run' rc=$cR1b_rc action=$cR1b_action msg='$cR1b_msg' init_err=$(cat "$cR1b_init_err" 2>/dev/null || true) body=$(cat "$cR1b_out" 2>/dev/null || true) stderr=$(cat "$cR1b_err" 2>/dev/null || true)"
 fi
 
 # ---------------------------------------------------------------------------

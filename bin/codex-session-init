@@ -16,9 +16,11 @@
 # Run-key precedence (plan §Phase 1 work, L905-L913):
 #   1. CERBERUS_RUN_KEY (canonical neutral env)
 #   2. REVIEW_GATE_SESSION_KEY (back-compat alias)
-#   3. Existing registry's run_key when same Codex session id (Case 2:
-#      a hook refresh preserves the original run_key so reviewers
-#      reattach to the same review_dir).
+#   3. Existing registry's run_key when the same Codex session id is
+#      refreshed, or when the previous run_key still owns an active
+#      pending/awaiting-decision gate. Codex lifecycle ids can change
+#      across prompt turns; preserving the active run_key keeps the Stop
+#      hook attached to the review_dir that spawn created.
 #   4. Codex session id (default).
 #
 # Atomic-write algorithm (plan L509-L523, identical to existing
@@ -110,6 +112,34 @@ if [ -z "$RUN_KEY" ]; then
     RUN_KEY="$SESSION_ID"
 fi
 
+__codex_init_safe_run_key() {
+    local run_key="${1:-}"
+    case "$run_key" in
+        ""|*/*|.|..) return 1 ;;
+        *)           return 0 ;;
+    esac
+}
+
+__codex_init_has_active_gate() {
+    local run_key="${1:-}"
+    local review_dir=""
+    local status=""
+
+    __codex_init_safe_run_key "$run_key" || return 1
+
+    review_dir="$(CERBERUS_HOST=codex CERBERUS_PROJECT_KEY="$PROJECT_KEY" CERBERUS_RUN_KEY="$run_key" \
+        CLAUDE_PROJECT_DIR="$WORKSPACE_ROOT" resolve_review_dir "" "$TRANSCRIPT_PATH" 2>/dev/null || true)"
+    [ -n "$review_dir" ] || return 1
+    [ -r "$review_dir/gate-state.json" ] || return 1
+    jq -e . "$review_dir/gate-state.json" >/dev/null 2>&1 || return 1
+
+    status="$(jq -r '.status // empty' "$review_dir/gate-state.json" 2>/dev/null || true)"
+    case "$status" in
+        pending|awaiting_decision) return 0 ;;
+        *)                         return 1 ;;
+    esac
+}
+
 # Validate run_key (path-traversal rejection — same surface as
 # resolve_review_dir).
 case "$RUN_KEY" in
@@ -119,25 +149,27 @@ case "$RUN_KEY" in
         ;;
 esac
 
-# ---- 4. Registry-refresh path: preserve run_key when same session_id ----
+# ---- 4. Registry-refresh path -------------------------------------------
 REGISTRY_DIR="$HOME/.cerberus/runtime/codex/$PROJECT_KEY"
 REGISTRY_FILE="$REGISTRY_DIR/active-session.json"
 
-# Only consult the existing registry to preserve run_key when the env
-# did NOT explicitly override. If user supplied CERBERUS_RUN_KEY /
-# REVIEW_GATE_SESSION_KEY, that wins unconditionally.
+# Only consult the existing registry to preserve run_key when the env did NOT
+# explicitly override. If user supplied CERBERUS_RUN_KEY / REVIEW_GATE_SESSION_KEY,
+# that wins unconditionally.
+#
+# Codex lifecycle payloads have used ids that can change across prompt turns in
+# the same visible thread. If a later UserPromptSubmit refresh overwrites
+# run_key with the new payload id while a Cerberus gate is still pending, the
+# Stop hook will look in an empty run directory and fail open. Preserve the
+# previous run_key when either (a) the payload session id is unchanged, or (b)
+# that previous run_key still owns an active gate for this workspace. Once the
+# gate is resolved, a new lifecycle id can become the next run key as before.
 if [ -z "$ENV_RUN_KEY" ] && [ -f "$REGISTRY_FILE" ]; then
     PREV_SESSION_ID="$(jq -r '.session_id // empty' "$REGISTRY_FILE" 2>/dev/null || true)"
-    if [ "$PREV_SESSION_ID" = "$SESSION_ID" ]; then
-        PREV_RUN_KEY="$(jq -r '.run_key // empty' "$REGISTRY_FILE" 2>/dev/null || true)"
-        if [ -n "$PREV_RUN_KEY" ]; then
-            # Re-validate (defensive: prior writer's run_key is
-            # ostensibly already validated, but registry could be
-            # corrupt or hand-edited).
-            case "$PREV_RUN_KEY" in
-                */*|.|..) ;;
-                *) RUN_KEY="$PREV_RUN_KEY" ;;
-            esac
+    PREV_RUN_KEY="$(jq -r '.run_key // empty' "$REGISTRY_FILE" 2>/dev/null || true)"
+    if __codex_init_safe_run_key "$PREV_RUN_KEY"; then
+        if [ "$PREV_SESSION_ID" = "$SESSION_ID" ] || __codex_init_has_active_gate "$PREV_RUN_KEY"; then
+            RUN_KEY="$PREV_RUN_KEY"
         fi
     fi
 fi
