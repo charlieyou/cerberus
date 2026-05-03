@@ -46,6 +46,8 @@ interface CompletionDecision {
 	userMessage?: string
 	run_key?: string
 	fingerprint?: string
+	pending_count?: number
+	finding_count?: number
 }
 
 interface ThreadLike {
@@ -698,6 +700,8 @@ export function mapAgentEndDecision(event: Record<string, unknown>, ctx: Record<
 	// Sanity: if completion-check resolved a different gate than ours, do not
 	// continue this Amp turn for someone else's run.
 	if (decision.run_key && session.runKey && decision.run_key !== session.runKey) return
+	if (decision.reason === 'pending' && typeof decision.pending_count === 'number' && decision.pending_count > 0) return
+	if (NOTIFIED_KEYS.has(monitorKey(session))) return
 
 	const fingerprint = fingerprintFor(decision)
 	const registry = readRegistry(session.registryPath)

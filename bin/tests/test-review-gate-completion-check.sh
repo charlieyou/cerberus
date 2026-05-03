@@ -69,6 +69,14 @@ run_check() {
         "$REVIEW_GATE" completion-check --host amp --json
 }
 
+run_resolve() {
+    CERBERUS_HOST=amp \
+    CERBERUS_STATE_ROOT="$STATE_ROOT" \
+    CERBERUS_PROJECT_KEY="$PROJECT_KEY" \
+    CERBERUS_RUN_KEY="$RUN_KEY" \
+        "$REVIEW_GATE" resolve --reason "$1" >/dev/null
+}
+
 assert_decision() {
     local name="$1"
     local expected_decision="$2"
@@ -94,6 +102,13 @@ log_test "completion-check continues for pending gate"
 write_state "pending" ""
 body="$(run_check)"
 assert_decision "pending gate" "continue" "pending" "$body"
+pending_count="$(printf '%s' "$body" | jq -r '.pending_count // empty')"
+finding_count="$(printf '%s' "$body" | jq -r '.finding_count // empty')"
+if [[ "$pending_count" == "0" && "$finding_count" == "0" ]]; then
+    log_pass "pending gate exposes counts"
+else
+    log_fail "pending gate counts missing/wrong; pending_count='$pending_count' finding_count='$finding_count' body=$body"
+fi
 
 log_test "completion-check allows resolved PASS"
 write_state "resolved" "PASS"
@@ -110,6 +125,18 @@ write_state "resolved" "FAIL" "manual_resolve"
 body="$(run_check)"
 assert_decision "manual resolve" "allow" "manual_resolve" "$body"
 
+log_test "resolve records manual_resolve so clear-gate overrides failed consensus"
+write_state "awaiting_decision" "FAIL"
+run_resolve "manual clear via test"
+action="$(jq -r '.decision.action // empty' "$RUN_DIR/gate-state.json")"
+body="$(run_check)"
+if [[ "$action" == "manual_resolve" ]]; then
+    log_pass "resolve writes manual_resolve"
+else
+    log_fail "resolve action '$action' (expected manual_resolve)"
+fi
+assert_decision "resolved manual clear" "allow" "manual_resolve" "$body"
+
 log_test "completion-check userMessage distinguishes pending reviewers from awaiting decision"
 # All reviewers complete (pending_count=0) on a still-pending gate => the
 # message must NOT misleadingly say reviewers are pending; it must mention
@@ -122,7 +149,31 @@ if [[ "$message" == *"reviewers complete but gate not cleared"* ]]; then
 else
     log_fail "reviewers-complete wording missing; userMessage='$message'"
 fi
+
+rm -f "$REVIEWS_DIR"/*
+jq -n '{
+    status: "pending",
+    host: "amp",
+    owner: {project_key: "completion-project", session_key: "completion-run"},
+    reviewers: {gemini: {}},
+    consensus: {verdict: "FAIL"},
+    decision: {}
+}' > "$RUN_DIR/gate-state.json"
+cat > "$REVIEWS_DIR/gemini.json" <<'JSON'
+{"verdict":"FAIL","summary":"Bad","findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}]}
+JSON
+touch "$REVIEWS_DIR/gemini.done"
+body="$(run_check)"
+pending_count="$(printf '%s' "$body" | jq -r '.pending_count // empty')"
+finding_count="$(printf '%s' "$body" | jq -r '.finding_count // empty')"
+if [[ "$pending_count" == "0" && "$finding_count" == "1" ]]; then
+    log_pass "completed reviewer finding count exposed"
+else
+    log_fail "completed reviewer counts missing/wrong; pending_count='$pending_count' finding_count='$finding_count' body=$body"
+fi
+
 # And when reviewers are still pending, the original wording remains.
+rm -f "$REVIEWS_DIR"/*
 mkdir -p "$REVIEWS_DIR"
 jq -n '{
     status: "pending",
@@ -138,6 +189,12 @@ if [[ "$message" == *"Pending reviewers: 2"* ]]; then
     log_pass "pending-reviewers wording"
 else
     log_fail "pending-reviewers wording missing; userMessage='$message'"
+fi
+pending_count="$(printf '%s' "$body" | jq -r '.pending_count // empty')"
+if [[ "$pending_count" == "2" ]]; then
+    log_pass "pending-reviewers count exposed"
+else
+    log_fail "pending-reviewers count missing/wrong; pending_count='$pending_count' body=$body"
 fi
 
 echo ""

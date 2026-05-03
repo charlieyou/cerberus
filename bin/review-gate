@@ -4832,14 +4832,20 @@ review_gate_resolve() {
         artifact_sha=$(compute_sha256 "$artifact_path" 2>/dev/null || echo "")
     fi
 
+    local decision_action="manual_resolve"
+    if [[ "$reason" == "auto_proceed_max_iter" ]]; then
+        decision_action="proceed"
+    fi
+
     if [[ -n "$reason" ]]; then
         jq --arg timestamp "$timestamp" \
            --arg reason "$reason" \
+           --arg action "$decision_action" \
            --arg plan_sha "$plan_sha" \
            --arg spec_sha "$spec_sha" \
            --arg artifact_sha "$artifact_sha" \
            '.status = "resolved"
-            | .decision.action = "proceed"
+            | .decision.action = $action
             | .decision.decided_at = $timestamp
             | .decision.reason = $reason
             | if $plan_sha != "" then .artifact.plan_sha = $plan_sha else . end
@@ -4848,11 +4854,12 @@ review_gate_resolve() {
            "$state_file" > "$temp_file"
     else
         jq --arg timestamp "$timestamp" \
+           --arg action "$decision_action" \
            --arg plan_sha "$plan_sha" \
            --arg spec_sha "$spec_sha" \
            --arg artifact_sha "$artifact_sha" \
            '.status = "resolved"
-            | .decision.action = "proceed"
+            | .decision.action = $action
             | .decision.decided_at = $timestamp
             | del(.decision.reason)
             | if $plan_sha != "" then .artifact.plan_sha = $plan_sha else . end
@@ -5999,7 +6006,8 @@ USAGE
         exit 0
     fi
 
-    local should_continue="false" reason=""
+    local consensus_normalized should_continue="false" reason=""
+    consensus_normalized=$(printf '%s' "$consensus" | tr '[:upper:]' '[:lower:]')
     case "$gate_status" in
         pending)
             should_continue="true"
@@ -6010,14 +6018,14 @@ USAGE
             reason="awaiting_decision"
             ;;
         resolved)
-            case "$consensus" in
-                fail|needs_revision)
+            case "$consensus_normalized" in
+                fail|needs_revision|needs_work)
                     should_continue="true"
-                    reason="resolved_${consensus}"
+                    reason="resolved_${consensus_normalized}"
                     ;;
                 *)
                     should_continue="false"
-                    reason="resolved_${consensus:-unknown}"
+                    reason="resolved_${consensus_normalized:-unknown}"
                     ;;
             esac
             ;;
@@ -6058,7 +6066,17 @@ USAGE
         --arg message "$message" \
         --arg run_key "$run_key" \
         --arg fingerprint "$fingerprint" \
-        '{decision:"continue",reason:$reason,userMessage:$message,run_key:$run_key,fingerprint:$fingerprint}'
+        --arg pending_count "$pending_count" \
+        --arg finding_count "$finding_count" \
+        '{
+            decision:"continue",
+            reason:$reason,
+            userMessage:$message,
+            run_key:$run_key,
+            fingerprint:$fingerprint,
+            pending_count:($pending_count | tonumber),
+            finding_count:($finding_count | tonumber)
+        }'
     exit 0
 }
 

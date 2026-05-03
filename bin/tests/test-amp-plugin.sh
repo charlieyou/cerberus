@@ -241,6 +241,14 @@ delete process.env.CERBERUS_AMP_STUB_STATUS_NO_GATE
 process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'allow', reason: 'no_active_gate' })
 assert(mapAgentEndDecision(event, ctx) === undefined, 'allow completion should not continue')
 
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'continue', reason: 'pending', userMessage: 'Reviewers still running', fingerprint: 'fp-pending-running', pending_count: 3, finding_count: 0 })
+assert(mapAgentEndDecision(event, ctx) === undefined, 'pending reviewers should wait for monitor updates instead of continuing immediately')
+
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'continue', reason: 'pending', userMessage: 'Reviewers complete', fingerprint: 'fp-pending-complete', pending_count: 0, finding_count: 1 })
+const completedDecisionThread = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd6a'
+const pendingComplete = mapAgentEndDecision({ thread: { id: completedDecisionThread }, status: 'done' }, { thread: { id: completedDecisionThread } })
+assert(pendingComplete?.action === 'continue' && pendingComplete.userMessage === 'Reviewers complete', 'completed pending gate should still continue')
+
 process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({ decision: 'continue', userMessage: 'Fix Cerberus findings', fingerprint: 'fp-1' })
 const first = mapAgentEndDecision(event, ctx)
 assert(first?.action === 'continue' && first.userMessage === 'Fix Cerberus findings', 'continue completion should map to agent.end continue')
@@ -328,6 +336,18 @@ assert(completeCalls[0][0].content.includes(monitorSession.runKey), 'completion 
 assert(completeCalls[0][0].content.includes('verdict: fail'), 'completion message should normalize verdict to lowercase')
 assert(completeCalls[0][0].content.includes('1 finding'), 'completion message should mention finding count')
 assert(completeCalls[0][0].content.includes('Address the findings'), 'completion message should advise addressing findings')
+
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({
+  decision: 'continue',
+  reason: 'pending',
+  userMessage: 'Backend blocking continuation',
+  fingerprint: 'fp-after-monitor',
+  run_key: monitorSession.runKey,
+  pending_count: 0,
+  finding_count: 1,
+})
+const afterMonitorDecision = mapAgentEndDecision({ thread: { id: monitorSession.threadID }, status: 'done' }, { thread: { id: monitorSession.threadID } })
+assert(afterMonitorDecision === undefined, 'agent.end must not duplicate the monitor completion message')
 
 // pollCerberusOnce dedupes notifications per monitor key — a second poll with
 // the same key must not re-notify even if status still reports complete.
