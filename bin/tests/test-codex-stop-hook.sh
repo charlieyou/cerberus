@@ -355,6 +355,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: pending gate with valid reviewer JSON but no .done/.failed
+# sentinel is effectively complete. With MAX_WAIT=0 the hook must decide from
+# the status body instead of reporting "reviewers still running".
+# ---------------------------------------------------------------------------
+log_test "Regression — pending + no-sentinel valid FAIL JSON blocks immediately"
+c3b_home="$TEST_DIR/case3b"
+mkdir -p "$c3b_home"
+c3b_workspace="/tmp/cerberus-c3b"
+c3b_run="run-c3b-001"
+make_registry "$c3b_home" "$c3b_workspace" "$c3b_run" "sess-c3b-001"
+c3b_rd="$(make_review_dir "$c3b_home" "$c3b_workspace" "$c3b_run")"
+write_gate_state "$c3b_rd" "pending" '{"claude":{}}' "null" "$c3b_run"
+cat > "$c3b_rd/reviews/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"FAIL\",\"summary\":\"blocking no-sentinel result\",\"findings\":[{\"title\":\"must block\",\"body\":\"valid JSON without sentinel\",\"priority\":1,\"file_path\":\"src/z.c\",\"line_start\":1,\"line_end\":1}]}"
+}
+EOF
+rm -f "$c3b_rd/reviews/claude.done" "$c3b_rd/reviews/claude.failed"
+c3b_out="$TEST_DIR/c3b.out"
+c3b_err="$TEST_DIR/c3b.err"
+c3b_rc=0
+run_hook "$c3b_home" "$c3b_workspace" "sess-c3b-001" "$c3b_out" "$c3b_err" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=0" \
+    || c3b_rc=$?
+c3b_action="$(stop_action "$c3b_out")"
+c3b_msg="$(stop_reason "$c3b_out")"
+c3b_note="$(stop_system_message "$c3b_out")"
+if [[ "$c3b_rc" -eq 0 && "$c3b_action" == "continue" \
+      && "$c3b_msg" == *"blocking finding"* \
+      && "$c3b_note" != *"still running"* \
+      && ! -e "$c3b_rd/reviews/claude.done" \
+      && ! -e "$c3b_rd/reviews/claude.failed" ]]; then
+    log_pass "Regression — no-sentinel valid FAIL JSON drives stop-hook blocking decision"
+else
+    log_fail "Regression no-sentinel stop-hook: rc=$c3b_rc action=$c3b_action msg='$c3b_msg' note='$c3b_note' body=$(cat "$c3b_out") stderr=$(cat "$c3b_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Case 4 — Row 5a: pending + MAX_WAIT=2, reviewers don't finish → fall
 # through to row-4 message.
 # ---------------------------------------------------------------------------
@@ -817,6 +858,90 @@ if [[ "$c14_rc" -eq 0 && "$c14_valid" == "true" && "$c14_action" == "allow" ]]; 
     log_pass "Case 14 — Row 13c: SIGHUP → valid {continue:true}, exit 0"
 else
     log_fail "Case 14: rc=$c14_rc valid=$c14_valid action=$c14_action body='$c14_body' stderr=$(cat "$c14_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression: if the tracked `review-gate wait` child ignores TERM, the
+# stop-hook signal handler must follow with KILL so the wait loop cannot
+# survive as an orphan after the hook exits.
+# ---------------------------------------------------------------------------
+log_test "Regression — SIGTERM kills TERM-ignoring review-gate wait child"
+c14b_home="$TEST_DIR/case14b"
+mkdir -p "$c14b_home"
+c14b_workspace="/tmp/cerberus-c14b"
+c14b_run="run-c14b-001"
+make_registry "$c14b_home" "$c14b_workspace" "$c14b_run" "sess-c14b-001"
+make_review_dir "$c14b_home" "$c14b_workspace" "$c14b_run" >/dev/null
+c14b_wait_pid_file="$TEST_DIR/c14b.wait.pid"
+c14b_stub="$TEST_DIR/c14b-stubborn-review-gate"
+cat > "$c14b_stub" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    status)
+        printf '{"gate_status":"pending","pending_reviewers":["codex"],"consensus_verdict":null,"aggregated_findings":[]}\n'
+        exit 0
+        ;;
+    wait)
+        printf '%s\n' "$$" > "$WAIT_PID_FILE"
+        trap '' TERM
+        while :; do
+            sleep 1
+        done
+        ;;
+    *)
+        printf 'unexpected command: %s\n' "$*" >&2
+        exit 2
+        ;;
+esac
+EOF
+chmod +x "$c14b_stub"
+c14b_out="$TEST_DIR/c14b.out"
+c14b_err="$TEST_DIR/c14b.err"
+c14b_payload="$TEST_DIR/c14b.payload"
+c14b_pid_file="$TEST_DIR/c14b.pid"
+spawn_hook_bg "$c14b_home" "$c14b_workspace" "sess-c14b-001" \
+    "$c14b_out" "$c14b_err" "$c14b_payload" "$c14b_pid_file" \
+    "CERBERUS_REVIEW_GATE_BIN=$c14b_stub" \
+    "WAIT_PID_FILE=$c14b_wait_pid_file" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=30" \
+    "REVIEW_GATE_POLL_INTERVAL_SECONDS=1"
+c14b_pid="$(cat "$c14b_pid_file")"
+c14b_wait_pid=""
+for _ in $(seq 1 20); do
+    if [[ -s "$c14b_wait_pid_file" ]]; then
+        c14b_wait_pid="$(cat "$c14b_wait_pid_file")"
+        break
+    fi
+    sleep 0.2
+done
+if [[ -z "$c14b_wait_pid" ]]; then
+    kill -KILL "$c14b_pid" 2>/dev/null || true
+    log_fail "Regression stubborn wait: wait child never started; stdout=$(cat "$c14b_out" 2>/dev/null || true) stderr=$(cat "$c14b_err" 2>/dev/null || true)"
+    c14b_wait_pid="999999"
+fi
+kill -TERM "$c14b_pid" 2>/dev/null || true
+for _ in $(seq 1 20); do
+    if ! kill -0 "$c14b_pid" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+wait "$c14b_pid" 2>/dev/null
+c14b_rc=$?
+c14b_action="$(stop_action "$c14b_out")"
+c14b_wait_alive="true"
+for _ in $(seq 1 20); do
+    if ! kill -0 "$c14b_wait_pid" 2>/dev/null; then
+        c14b_wait_alive="false"
+        break
+    fi
+    sleep 0.2
+done
+if [[ "$c14b_wait_alive" == "true" ]]; then
+    kill -KILL "$c14b_wait_pid" 2>/dev/null || true
+fi
+if [[ "$c14b_rc" -eq 0 && "$c14b_action" == "allow" && "$c14b_wait_alive" == "false" ]]; then
+    log_pass "Regression — TERM-ignoring wait child was killed by stop-hook cleanup"
+else
+    log_fail "Regression stubborn wait: rc=$c14b_rc action=$c14b_action wait_alive=$c14b_wait_alive wait_pid=$c14b_wait_pid body=$(cat "$c14b_out" 2>/dev/null || true) stderr=$(cat "$c14b_err" 2>/dev/null || true)"
 fi
 
 # ---------------------------------------------------------------------------

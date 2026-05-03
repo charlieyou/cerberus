@@ -582,6 +582,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: a valid reviewer JSON without .done/.failed sentinels is a
+# terminal reviewer result. Status remains read-only: it must not backfill
+# either sentinel while deriving pending_reviewers/reviewer status.
+# ---------------------------------------------------------------------------
+log_test "Regression: status treats valid reviewer JSON without sentinels as complete"
+cR2c_dir=$(make_review_dir "regress-missing-sentinel-proj" "regress-missing-sentinel-run")
+cat > "$cR2c_dir/gate-state.json" <<EOF
+{
+  "version": 1,
+  "status": "pending",
+  "trigger_source": "test",
+  "artifact": {"path": "$cR2c_dir/latest.md", "sha256": ""},
+  "reviewers": {"claude": {}},
+  "consensus": null,
+  "decision": null,
+  "owner": {"session_key": "regress-missing-sentinel-run"},
+  "created_at": "2026-05-01T00:00:00Z",
+  "iteration": 0
+}
+EOF
+cat > "$cR2c_dir/reviews/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"PASS\",\"summary\":\"valid output without sentinel\",\"findings\":[]}"
+}
+EOF
+rm -f "$cR2c_dir/reviews/claude.done" "$cR2c_dir/reviews/claude.failed"
+cR2c_out="$TEST_DIR/cR2c.out"
+cR2c_err="$TEST_DIR/cR2c.err"
+run_status "regress-missing-sentinel-proj" "regress-missing-sentinel-run" "$cR2c_out" "$cR2c_err"
+cR2c_rc=$?
+cR2c_status=$(jq -r '.reviewers[0].status' "$cR2c_out" 2>/dev/null || echo "")
+cR2c_verdict=$(jq -r '.reviewers[0].verdict' "$cR2c_out" 2>/dev/null || echo "")
+cR2c_pending=$(jq -r '.pending_reviewers | length' "$cR2c_out" 2>/dev/null || echo "")
+cR2c_cv=$(jq -r '.consensus_verdict' "$cR2c_out" 2>/dev/null || echo "")
+cR2c_pe=$(jq -r '.parse_errors | length' "$cR2c_out" 2>/dev/null || echo "")
+if [[ "$cR2c_rc" -eq 0 && "$cR2c_status" == "complete" \
+      && "$cR2c_verdict" == "pass" && "$cR2c_pending" == "0" \
+      && "$cR2c_cv" == "pass" && "$cR2c_pe" == "0" \
+      && ! -e "$cR2c_dir/reviews/claude.done" \
+      && ! -e "$cR2c_dir/reviews/claude.failed" ]]; then
+    log_pass "Regression: no-sentinel reviewer JSON is complete and status stayed read-only"
+else
+    log_fail "Regression: missing sentinel rc=$cR2c_rc status=$cR2c_status verdict=$cR2c_verdict pending=$cR2c_pending cv=$cR2c_cv pe=$cR2c_pe done=$(test -e "$cR2c_dir/reviews/claude.done" && echo yes || echo no) failed=$(test -e "$cR2c_dir/reviews/claude.failed" && echo yes || echo no) body=$(cat "$cR2c_out") stderr=$(cat "$cR2c_err")"
+fi
+
+# ---------------------------------------------------------------------------
 # Regression: round-1 review #2 (the [2]) — when both --session-id S and
 # --session-key K are passed, status MUST resolve under S, not K. Plant
 # state under run "S" only; pass --session-id S --session-key K and

@@ -73,12 +73,18 @@ __cerberus_stop_safe_exit() {
 
     # Kill tracked children. Bash 3.2-safe length gate (no `${arr[@]:-}`
     # array expansion with default — that form aborts under set -u on
-    # bash 3.2). T007 round-1 review feedback.
+    # bash 3.2). Send TERM first, then KILL so a review-gate wait child
+    # that ignores TERM cannot survive as an orphan after the hook exits.
     local _n _i
     _n=${#__CERBERUS_STOP_CHILD_PIDS[@]}
     _i=0
     while [ "$_i" -lt "$_n" ]; do
         kill -TERM "${__CERBERUS_STOP_CHILD_PIDS[$_i]}" 2>/dev/null
+        _i=$((_i + 1))
+    done
+    _i=0
+    while [ "$_i" -lt "$_n" ]; do
+        kill -KILL "${__CERBERUS_STOP_CHILD_PIDS[$_i]}" 2>/dev/null
         _i=$((_i + 1))
     done
 
@@ -436,6 +442,20 @@ __cerberus_decide() {
 
     case "$gs" in
         pending)
+            local pending_count
+            pending_count="$(__jq_get "$body" 'if has("pending_reviewers") then (.pending_reviewers | length) else -1 end')"
+            if [ "$pending_count" = "0" ]; then
+                local n
+                n="$(__cerberus_count_blocking "$body")"
+                if [ "$n" -gt 0 ]; then
+                    local msg
+                    msg="$(__cerberus_format_blocking_message "$body")"
+                    __cerberus_emit_continue "$msg"
+                else
+                    __cerberus_emit_allow ""
+                fi
+                return 0
+            fi
             if [ "$mode" = "initial" ] && [ "$MAX_WAIT_SECONDS" -gt 0 ]; then
                 __cerberus_run_wait_then_reeval
                 return 0

@@ -576,7 +576,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"

@@ -4628,6 +4628,28 @@ find_state_by_session_key() {
     printf '%s' "$candidate"
 }
 
+# reviewer_has_terminal_marker_or_valid_output <reviews-dir> <reviewer>
+#
+# Reviewer wrapper sentinels are an optimization, not the only durable source
+# of terminal state: host shutdown can kill the wrapper after the model CLI has
+# written canonical JSON but before it touches .done/.failed. Keep this helper
+# read-only so status/progress paths never backfill sentinels.
+reviewer_has_terminal_marker_or_valid_output() {
+    local reviews_dir="$1"
+    local reviewer="$2"
+    local done_file="$reviews_dir/${reviewer}.done"
+    local failed_file="$reviews_dir/${reviewer}.failed"
+    local output_file="$reviews_dir/${reviewer}.json"
+
+    if [[ -f "$done_file" || -f "$failed_file" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$output_file" ]]; then
+        return 1
+    fi
+    extract_valid_review_json_no_repair "$output_file" "$reviewer" >/dev/null 2>&1
+}
+
 review_gate_resolve() {
     local reason=""
 
@@ -4985,9 +5007,7 @@ USAGE
         local all_done="true"
         local reviewer
         for reviewer in $reviewers; do
-            local done_file="$reviews_dir/${reviewer}.done"
-            local failed_file="$reviews_dir/${reviewer}.failed"
-            if [[ -f "$done_file" || -f "$failed_file" ]]; then
+            if reviewer_has_terminal_marker_or_valid_output "$reviews_dir" "$reviewer"; then
                 continue
             fi
             all_done="false"
@@ -5024,7 +5044,8 @@ USAGE
         local result=""
         local parsed_failed_output="false"
 
-        if [[ "$timed_out" == "true" && ! -f "$done_file" && ! -f "$failed_file" ]]; then
+        if [[ "$timed_out" == "true" ]] && \
+           ! reviewer_has_terminal_marker_or_valid_output "$reviews_dir" "$reviewer"; then
             local reviewer_entry
             reviewer_entry=$(jq -n --arg verdict "PENDING" --arg summary "Timed out waiting for reviewer" \
                 '{verdict:$verdict, summary:$summary, findings: []}')
@@ -5485,10 +5506,10 @@ USAGE
 
     # Reviewer aggregation (read-only). Iterate reviewer names from
     # gate-state.json keys; bucket each into pending/complete/failed
-    # using the .done/.failed sentinel files. For complete reviewers,
-    # pull verdict + findings from <name>.json directly via jq (we
-    # deliberately avoid extract_json's repair_review_output path, which
-    # may invoke external CLIs and violate the <1s no-blocking budget).
+    # using .done/.failed sentinels OR valid canonical reviewer JSON.
+    # For complete reviewers, pull verdict + findings from <name>.json
+    # without repair fallbacks (which may invoke external CLIs and violate
+    # the <1s no-blocking budget).
     local reviews_dir="$review_dir/reviews"
     local reviewer_names
     reviewer_names=$(jq -r '.reviewers | keys[]?' "$state_file" 2>/dev/null || echo "")
@@ -5506,10 +5527,15 @@ USAGE
         local output_file="$reviews_dir/${reviewer}.json"
         local result=""
         local parsed_failed_output="false"
+        local parsed_terminal_output="false"
 
         if [[ -f "$failed_file" && -f "$output_file" ]]; then
             if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
                 parsed_failed_output="true"
+            fi
+        elif [[ ! -f "$done_file" && -f "$output_file" ]]; then
+            if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                parsed_terminal_output="true"
             fi
         fi
 
@@ -5523,7 +5549,7 @@ USAGE
             continue
         fi
 
-        if [[ ! -f "$done_file" && "$parsed_failed_output" != "true" ]]; then
+        if [[ ! -f "$done_file" && "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \
                 '. + [{name:$name, status:"pending"}]')
@@ -5554,7 +5580,7 @@ USAGE
         # (REVIEW_REPAIR_ENABLED=false) so a malformed reviewer output
         # does NOT trigger an external CLI call from inside `status`,
         # preserving the no-blocking budget and the read-only contract.
-        if [[ "$parsed_failed_output" != "true" ]] && \
+        if [[ "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]] && \
            ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) \
               || [[ -z "$result" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \

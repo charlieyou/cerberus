@@ -137,6 +137,62 @@ fi
 
 log_pass "wait ignores stale .failed when reviewer JSON is valid"
 
+SESSION_ID_NO_SENTINEL="test-wait-missing-sentinel-$$"
+TRANSCRIPT_PATH_NO_SENTINEL="$HOME/.claude/projects/-tmp-wait-test/${SESSION_ID_NO_SENTINEL}.jsonl"
+REVIEW_DIR_NO_SENTINEL="$HOME/.claude/projects/-tmp-wait-test/cerberus/${SESSION_ID_NO_SENTINEL}"
+STATE_FILE_NO_SENTINEL="$REVIEW_DIR_NO_SENTINEL/gate-state.json"
+
+mkdir -p "$REVIEW_DIR_NO_SENTINEL/reviews" "$(dirname "$TRANSCRIPT_PATH_NO_SENTINEL")"
+touch "$TRANSCRIPT_PATH_NO_SENTINEL"
+
+cat > "$STATE_FILE_NO_SENTINEL" <<'EOF'
+{
+  "status": "pending",
+  "reviewers": {
+    "claude": {}
+  },
+  "created_at": "2026-05-01T00:00:00Z",
+  "iteration": 0
+}
+EOF
+
+cat > "$REVIEW_DIR_NO_SENTINEL/reviews/claude.json" <<'EOF'
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"verdict\":\"PASS\",\"summary\":\"valid response without sentinel\",\"findings\":[]}"
+}
+EOF
+rm -f "$REVIEW_DIR_NO_SENTINEL/reviews/claude.done" "$REVIEW_DIR_NO_SENTINEL/reviews/claude.failed"
+
+log_test "wait --json treats valid reviewer JSON without sentinels as complete"
+
+set +e
+output=$("$REVIEW_GATE" wait --json --timeout 5 --poll-interval 1 --session-id "$SESSION_ID_NO_SENTINEL" --transcript-path "$TRANSCRIPT_PATH_NO_SENTINEL" 2>&1)
+status=$?
+set -e
+
+if [[ "$status" -ne 0 ]]; then
+    log_fail "expected exit code 0 for valid reviewer output without sentinels, got $status\n$output"
+fi
+
+consensus=$(printf '%s' "$output" | jq -r '.consensus_verdict // empty')
+if [[ "$consensus" != "PASS" ]]; then
+    log_fail "expected consensus PASS from valid no-sentinel reviewer output, got ${consensus:-<empty>}\n$output"
+fi
+
+parse_errors=$(printf '%s' "$output" | jq -r '.parse_errors | length')
+if [[ "$parse_errors" != "0" ]]; then
+    log_fail "expected no parse errors for valid no-sentinel reviewer output, got $parse_errors\n$output"
+fi
+
+if [[ -e "$REVIEW_DIR_NO_SENTINEL/reviews/claude.done" || -e "$REVIEW_DIR_NO_SENTINEL/reviews/claude.failed" ]]; then
+    log_fail "wait must not backfill sentinels for valid reviewer JSON without sentinels"
+fi
+
+log_pass "wait completes from valid reviewer JSON without mutating sentinels"
+
 SESSION_ID_PARTIAL="test-wait-stale-failed-partial-$$"
 TRANSCRIPT_PATH_PARTIAL="$HOME/.claude/projects/-tmp-wait-test/${SESSION_ID_PARTIAL}.jsonl"
 REVIEW_DIR_PARTIAL="$HOME/.claude/projects/-tmp-wait-test/cerberus/${SESSION_ID_PARTIAL}"

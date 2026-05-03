@@ -297,4 +297,39 @@ if [[ -s "$CHECK_STDOUT" ]]; then
     fi
 fi
 
+log_test "status treats reviewer output as complete after sentinel loss"
+
+cp "$REVIEWS_DIR/claude.json" "$PARENT_REVIEW_DIR/reviews/claude.json"
+rm -f "$PARENT_REVIEW_DIR/reviews/claude.done" "$PARENT_REVIEW_DIR/reviews/claude.failed"
+
+status_stdout="$TEST_DIR/status-no-sentinel.out"
+status_stderr="$TEST_DIR/status-no-sentinel.err"
+set +e
+(
+    export HOME
+    export CERBERUS_HOST="generic"
+    export CERBERUS_PROJECT_KEY="$PARENT_PROJECT_KEY"
+    export CERBERUS_RUN_KEY="$PARENT_RUN_KEY"
+    "$REVIEW_GATE" status --json --session-key "$PARENT_RUN_KEY"
+) >"$status_stdout" 2>"$status_stderr"
+status_rc=$?
+set -e
+
+status_reviewer_status=$(jq -r '.reviewers[0].status // empty' "$status_stdout" 2>/dev/null || echo "")
+status_pending_count=$(jq -r '.pending_reviewers | length' "$status_stdout" 2>/dev/null || echo "")
+status_consensus=$(jq -r '.consensus_verdict // empty' "$status_stdout" 2>/dev/null || echo "")
+
+if [[ "$status_rc" -ne 0 \
+      || "$status_reviewer_status" != "complete" \
+      || "$status_pending_count" != "0" \
+      || "$status_consensus" != "pass" ]]; then
+    log_fail "expected status to infer completion from valid JSON without sentinel, rc=$status_rc reviewer_status=$status_reviewer_status pending=$status_pending_count consensus=$status_consensus\nstdout:\n$(cat "$status_stdout")\nstderr:\n$(cat "$status_stderr")"
+fi
+
+if [[ -e "$PARENT_REVIEW_DIR/reviews/claude.done" || -e "$PARENT_REVIEW_DIR/reviews/claude.failed" ]]; then
+    log_fail "status should not recreate sentinels when inferring completion"
+fi
+
+log_pass "status infers reviewer completion from JSON without mutating sentinels"
+
 log_pass "spawn_reviewer marks child reviewers, scrubs parent env, and nested check does not fail the reviewer"

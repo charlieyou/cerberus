@@ -1031,11 +1031,7 @@ review_gate_check() {
         for reviewer in $reviewers; do
             ((total++)) || true
 
-            local sentinel_file="$REVIEWS_DIR/${reviewer}.done"
-            local failed_file="$REVIEWS_DIR/${reviewer}.failed"
-            local output_file="$REVIEWS_DIR/${reviewer}.json"
-
-            if [[ -f "$sentinel_file" ]] || [[ -f "$failed_file" ]]; then
+            if reviewer_has_terminal_marker_or_valid_output "$REVIEWS_DIR" "$reviewer"; then
                 ((completed++)) || true
                 completed_list+=("$reviewer")
             else
