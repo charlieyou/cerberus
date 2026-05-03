@@ -79,6 +79,10 @@ case "${1:-}" in
             printf '{"status":"no_active_gate"}\n'
             exit 4
         fi
+        if [[ -n "${CERBERUS_AMP_STUB_STATUS_JSON:-}" ]]; then
+            printf '%s\n' "${CERBERUS_AMP_STUB_STATUS_JSON}"
+            exit 0
+        fi
         printf 'stub backend: %s\n' "$*"
         ;;
     completion-check)
@@ -138,6 +142,10 @@ const cerberus = mod.default
 const executeCerberusCommand = mod.executeCerberusCommand as Function
 const ensureAmpSession = mod.ensureAmpSession as Function
 const mapAgentEndDecision = mod.mapAgentEndDecision as Function
+const pollCerberusOnce = mod.pollCerberusOnce as Function
+const startCerberusMonitor = mod.startCerberusMonitor as Function
+const stopCerberusMonitor = mod.stopCerberusMonitor as Function
+const markGateNotified = mod.markGateNotified as Function
 
 const tools: string[] = []
 const commands: string[] = []
@@ -272,6 +280,292 @@ assert(mapAgentEndDecision({ thread: { id: breakThread }, status: 'done' }, { th
 delete process.env.CERBERUS_AMP_BREAK_REGISTRY_ON_COMPLETION
 process.env.HOME = originalHome
 process.env.CERBERUS_AMP_WORKSPACE = originalWorkspace
+
+// pollCerberusOnce: when status reports reviewers still pending, do not
+// notify and do not mark the poller as done.
+const monitorThread = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd80'
+const monitorSession = ensureAmpSession({ status: 'done' }, { thread: { id: monitorThread } })
+assert(monitorSession.runKey === monitorThread, 'monitor session run key should match thread id')
+
+const pendingCalls: any[] = []
+const pendingThread = { id: monitorThread, append: (msgs: any[]) => { pendingCalls.push(msgs); return Promise.resolve() } }
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: ['claude', 'codex'],
+  reviewers: [{ name: 'claude', status: 'pending' }, { name: 'codex', status: 'pending' }],
+  aggregated_findings: [],
+  consensus_verdict: null,
+  gate_status: 'pending',
+  run_key: monitorSession.runKey,
+})
+const pendingResult = await pollCerberusOnce(monitorSession, pendingThread)
+assert(pendingResult.done === false, 'pollCerberusOnce should not mark done while reviewers pending')
+assert(pendingResult.notified === false, 'pollCerberusOnce should not notify while reviewers pending')
+assert(pendingCalls.length === 0, 'thread.append must not be called while reviewers pending')
+
+// pollCerberusOnce: when reviewers complete with findings, push a completion
+// message into the captured thread and stop polling.
+const completeCalls: any[] = []
+const completeThread = { id: monitorThread, append: (msgs: any[]) => { completeCalls.push(msgs); return Promise.resolve() } }
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: [],
+  reviewers: [
+    { name: 'claude', status: 'complete', verdict: 'pass' },
+    { name: 'codex', status: 'complete', verdict: 'FAIL' },
+    { name: 'gemini', status: 'complete', verdict: 'pass' },
+  ],
+  aggregated_findings: [{ priority: 'P1', summary: 'X', verdict: 'FAIL', reviewer: 'codex' }],
+  consensus_verdict: 'FAIL',
+  gate_status: 'pending',
+  run_key: monitorSession.runKey,
+})
+const completeResult = await pollCerberusOnce(monitorSession, completeThread)
+assert(completeResult.done === true, 'pollCerberusOnce should mark done when reviewers complete')
+assert(completeResult.notified === true, 'pollCerberusOnce should notify when reviewers complete')
+assert(completeCalls.length === 1, `thread.append should be called once on completion (got ${completeCalls.length})`)
+assert(completeCalls[0][0].type === 'user-message', 'append payload should be a user-message')
+assert(completeCalls[0][0].content.includes('Cerberus reviewers complete'), 'completion message should mention reviewers complete')
+assert(completeCalls[0][0].content.includes(monitorSession.runKey), 'completion message should include the run key')
+assert(completeCalls[0][0].content.includes('verdict: fail'), 'completion message should normalize verdict to lowercase')
+assert(completeCalls[0][0].content.includes('1 finding'), 'completion message should mention finding count')
+assert(completeCalls[0][0].content.includes('Address the findings'), 'completion message should advise addressing findings')
+
+// pollCerberusOnce dedupes notifications per monitor key — a second poll with
+// the same key must not re-notify even if status still reports complete.
+const dedupeCalls: any[] = []
+const dedupeThread = { id: monitorThread, append: (msgs: any[]) => { dedupeCalls.push(msgs); return Promise.resolve() } }
+const dedupeResult = await pollCerberusOnce(monitorSession, dedupeThread)
+assert(dedupeResult.done === true, 'subsequent poll should still mark done')
+assert(dedupeResult.notified === false, 'subsequent poll must not re-notify the same monitor key')
+assert(dedupeCalls.length === 0, 'thread.append must not be called on a deduped poll')
+
+// pollCerberusOnce ignores status responses whose run_key does not match the
+// session's run key (defends against env/resolver bugs returning the wrong
+// gate).
+const wrongRunSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd81' } })
+const wrongRunCalls: any[] = []
+const wrongRunThread = { id: wrongRunSession.threadID, append: (msgs: any[]) => { wrongRunCalls.push(msgs); return Promise.resolve() } }
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: [],
+  reviewers: [{ name: 'claude', status: 'complete', verdict: 'pass' }],
+  aggregated_findings: [],
+  consensus_verdict: 'pass',
+  gate_status: 'pending',
+  run_key: 'someone-elses-run-key',
+})
+const wrongRunResult = await pollCerberusOnce(wrongRunSession, wrongRunThread)
+assert(wrongRunResult.notified === false, 'pollCerberusOnce must not notify on a mismatched run_key')
+assert(wrongRunCalls.length === 0, 'thread.append must not fire on mismatched run_key')
+
+// pollCerberusOnce treats async append rejection as a retry — must not mark
+// the gate notified, so a later successful poll can still deliver.
+const rejectingSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd82' } })
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: [],
+  reviewers: [{ name: 'claude', status: 'complete', verdict: 'pass' }],
+  aggregated_findings: [{ priority: 'P2', summary: 'Y' }],
+  consensus_verdict: 'fail',
+  gate_status: 'pending',
+  run_key: rejectingSession.runKey,
+})
+let rejectAttempts = 0
+const rejectingThread = {
+  id: rejectingSession.threadID,
+  append: () => { rejectAttempts++; return Promise.reject(new Error('stale thread')) },
+}
+const rejectResult = await pollCerberusOnce(rejectingSession, rejectingThread)
+assert(rejectResult.done === false, 'rejected append should not mark done')
+assert(rejectResult.notified === false, 'rejected append should not mark notified')
+assert(rejectResult.retry === true, 'rejected append should request retry')
+assert(rejectAttempts === 1, 'append should have been attempted once')
+
+const recoveryCalls: any[] = []
+const recoveryThread = {
+  id: rejectingSession.threadID,
+  append: (msgs: any[]) => { recoveryCalls.push(msgs); return Promise.resolve() },
+}
+const recoveryResult = await pollCerberusOnce(rejectingSession, recoveryThread)
+assert(recoveryResult.done === true, 'subsequent poll after recovery should mark done')
+assert(recoveryResult.notified === true, 'subsequent poll after recovery should notify')
+assert(recoveryCalls.length === 1, 'recovery append should fire exactly once')
+
+// Resolved gates with no findings stop polling silently (no notification).
+const resolvedSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd83' } })
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: [],
+  reviewers: [{ name: 'claude', status: 'complete', verdict: 'pass' }],
+  aggregated_findings: [],
+  consensus_verdict: 'pass',
+  gate_status: 'resolved',
+  run_key: resolvedSession.runKey,
+})
+const resolvedCalls: any[] = []
+const resolvedThread = { id: resolvedSession.threadID, append: (msgs: any[]) => { resolvedCalls.push(msgs); return Promise.resolve() } }
+const resolvedResult = await pollCerberusOnce(resolvedSession, resolvedThread)
+assert(resolvedResult.done === true, 'resolved gate should mark done')
+assert(resolvedResult.notified === false, 'resolved+pass gate should not notify')
+assert(resolvedCalls.length === 0, 'resolved+pass gate should not append')
+
+// startCerberusMonitor must refuse to start when the thread does not expose
+// append (feature detection) or when the reviewer-subprocess guard is set.
+const noAppendThread = { id: monitorThread } as any
+assert(startCerberusMonitor(monitorSession, noAppendThread) === false, 'monitor must not start without thread.append')
+assert(startCerberusMonitor(monitorSession, undefined) === false, 'monitor must not start without a thread')
+process.env.CERBERUS_REVIEWER_SUBPROCESS = '1'
+const guardedThread = { id: monitorThread, append: () => Promise.resolve() }
+assert(startCerberusMonitor(monitorSession, guardedThread) === false, 'monitor must not start inside reviewer subprocess')
+delete process.env.CERBERUS_REVIEWER_SUBPROCESS
+
+// startCerberusMonitor with restart=true clears any prior dedupe and timer
+// for the same monitor key (so back-to-back reviews get a fresh deadline).
+delete process.env.CERBERUS_AMP_STUB_STATUS_JSON
+const restartSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd84' } })
+const restartThread = { id: restartSession.threadID, append: () => Promise.resolve() }
+assert(startCerberusMonitor(restartSession, restartThread) === true, 'first start should succeed')
+assert(startCerberusMonitor(restartSession, restartThread) === false, 'second start without restart should be deduped')
+assert(startCerberusMonitor(restartSession, restartThread, { restart: true }) === true, 'restart=true should re-arm the monitor')
+stopCerberusMonitor(restartSession)
+
+// In-flight monitor tick must not reschedule itself after stop/restart wins
+// the race. We simulate a long-running poll by pointing the stub at a status
+// JSON that the runner can swap out, then call stopCerberusMonitor while a
+// hypothetical poll is mid-flight (the test calls schedule paths directly via
+// startCerberusMonitor + stop and asserts the map is clean).
+const inflightSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd86' } })
+const inflightThread = { id: inflightSession.threadID, append: () => Promise.resolve() }
+assert(startCerberusMonitor(inflightSession, inflightThread) === true, 'inflight monitor should start')
+stopCerberusMonitor(inflightSession)
+// After stop, restart must succeed and the previous (now-stopped) state must
+// not leak a second timer.
+assert(startCerberusMonitor(inflightSession, inflightThread, { restart: true }) === true, 'restart after stop should succeed')
+// Starting again without restart must dedupe against the new state, proving
+// the new monitor is the one in MONITORS (not a stale stopped state).
+assert(startCerberusMonitor(inflightSession, inflightThread) === false, 'second non-restart start should dedupe against fresh monitor')
+stopCerberusMonitor(inflightSession)
+
+// restart=true with a missing/append-less thread must still cancel the old
+// monitor and clear NOTIFIED_KEYS for that key, even though it returns false.
+const restartCleanupSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd8a' } })
+const restartCleanupThread = { id: restartCleanupSession.threadID, append: () => Promise.resolve() }
+assert(startCerberusMonitor(restartCleanupSession, restartCleanupThread) === true, 'cleanup precondition: monitor active')
+markGateNotified(restartCleanupSession)
+assert(startCerberusMonitor(restartCleanupSession, undefined, { restart: true }) === false, 'restart with no thread returns false')
+// After restart with no thread, NOTIFIED_KEYS for the same key must be clear
+// (so a future review with a real thread can notify) AND the previous
+// timer/state must be cancelled.
+assert(startCerberusMonitor(restartCleanupSession, restartCleanupThread) === true, 'subsequent start should succeed after restart cleanup')
+stopCerberusMonitor(restartCleanupSession)
+
+// pollCerberusOnce must respect the isCurrent guard and not poison
+// NOTIFIED_KEYS when a stale tick's append resolves after a restart.
+const stalePollSession = ensureAmpSession({ status: 'done' }, { thread: { id: 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd8b' } })
+process.env.CERBERUS_AMP_STUB_STATUS_JSON = JSON.stringify({
+  pending_reviewers: [],
+  reviewers: [{ name: 'claude', status: 'complete', verdict: 'pass' }],
+  aggregated_findings: [{ priority: 'P3', summary: 'Z' }],
+  consensus_verdict: 'fail',
+  gate_status: 'pending',
+  run_key: stalePollSession.runKey,
+})
+let staleAppendCalls = 0
+const stalePollThread = {
+  id: stalePollSession.threadID,
+  append: async () => { staleAppendCalls++; return undefined },
+}
+// First call: simulate the monitor having been restarted between the status
+// fetch and the post-append commit by returning false from isCurrent().
+const staleResult = await pollCerberusOnce(stalePollSession, stalePollThread, () => false)
+assert(staleAppendCalls === 0, 'stale tick must short-circuit before append when isCurrent() is already false')
+assert(staleResult.notified === false, 'stale tick must not report notified')
+// Second call: isCurrent flips false ONLY after the append resolves; the
+// post-append guard must prevent NOTIFIED_KEYS from being set.
+let appendInProgress = true
+const lateRotatingThread = {
+  id: stalePollSession.threadID,
+  append: async () => {
+    staleAppendCalls++
+    appendInProgress = false
+    return undefined
+  },
+}
+const lateResult = await pollCerberusOnce(stalePollSession, lateRotatingThread, () => appendInProgress)
+assert(staleAppendCalls === 1, 'late-rotating tick should attempt the append exactly once')
+assert(lateResult.notified === false, 'late-rotating tick must not report notified')
+// And the dedupe key for this monitor key must NOT be set, so a fresh
+// monitor can still deliver later.
+const freshNotifyCalls: any[] = []
+const freshThread = {
+  id: stalePollSession.threadID,
+  append: (msgs: any[]) => { freshNotifyCalls.push(msgs); return Promise.resolve() },
+}
+const freshResult = await pollCerberusOnce(stalePollSession, freshThread)
+assert(freshResult.notified === true, 'fresh poll after stale append must still be able to notify')
+assert(freshNotifyCalls.length === 1, 'fresh poll should append exactly once')
+
+// agent.end sanity check: ignore decisions whose run_key does not match the
+// session run key.
+const wrongKeyThread = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd87'
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({
+  decision: 'continue',
+  userMessage: 'Wrong run key',
+  fingerprint: 'fp-wrong',
+  run_key: 'someone-elses-run',
+})
+const wrongDecision = mapAgentEndDecision({ thread: { id: wrongKeyThread }, status: 'done' }, { thread: { id: wrongKeyThread } })
+assert(wrongDecision === undefined, 'mapAgentEndDecision must drop continuations whose run_key does not match the session')
+
+// New review-* should clear last_blocking_fingerprint so a fresh review can
+// surface its own continuation in agent.end.
+const fingerprintThread = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd88'
+process.env.CERBERUS_AMP_STUB_COMPLETION_JSON = JSON.stringify({
+  decision: 'continue',
+  userMessage: 'First continuation',
+  fingerprint: 'fp-first',
+  run_key: fingerprintThread,
+})
+const fingerprintFirst = mapAgentEndDecision({ thread: { id: fingerprintThread }, status: 'done' }, { thread: { id: fingerprintThread } })
+assert(fingerprintFirst?.action === 'continue', 'first agent.end should surface continuation')
+const fingerprintSession = ensureAmpSession({ thread: { id: fingerprintThread }, status: 'done' }, { thread: { id: fingerprintThread } })
+const registryPath = resolve(process.env.HOME!, '.cerberus', 'runtime', 'amp', expectedProjectKey, 'active-session.json')
+const registryAfterContinue = JSON.parse(read(registryPath))
+assert(typeof registryAfterContinue.last_blocking_fingerprint === 'string' && registryAfterContinue.last_blocking_fingerprint.length > 0, 'agent.end must persist last_blocking_fingerprint')
+// Now run a review-* command — the fingerprint must be cleared so the next
+// agent.end (with the same fingerprint) is treated as a new blocker.
+executeCerberusCommand('review-plan', { plan_path: '/tmp/refresh.md' }, { thread: { id: fingerprintThread }, status: 'done' }, { thread: { id: fingerprintThread } })
+const registryAfterReview = JSON.parse(read(registryPath))
+assert(registryAfterReview.last_blocking_fingerprint === undefined || registryAfterReview.last_blocking_fingerprint === '', 'review-* must clear last_blocking_fingerprint')
+stopCerberusMonitor(fingerprintSession)
+
+// extractThread should prefer an append-capable thread over a metadata-only
+// thread when both are available.
+const cachedThreadIDPrefer = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd89'
+const appendCapable = { id: cachedThreadIDPrefer, append: () => Promise.resolve() }
+await events['agent.start']({ status: 'done', thread: appendCapable }, { thread: { id: cachedThreadIDPrefer } })
+process.env.CERBERUS_RUN_KEY = cachedThreadIDPrefer
+executeCerberusCommand('review-plan', { plan_path: '/tmp/prefer.md' }, { status: 'done', thread: appendCapable }, { thread: { id: cachedThreadIDPrefer } })
+const preferSession = ensureAmpSession({ status: 'done' }, {})
+delete process.env.CERBERUS_RUN_KEY
+assert(startCerberusMonitor(preferSession, appendCapable) === false, 'append-capable thread should have been preferred and the monitor already started')
+stopCerberusMonitor(preferSession)
+
+// Thread cache: executeCerberusCommand must look up a cached thread when the
+// tool execute ctx does not include one (real Amp tool ctx may omit thread).
+const cachedThreadID = 'T-019de015-d2d1-70dc-ac7c-bf5ccc46dd85'
+const cachedThread = { id: cachedThreadID, append: () => Promise.resolve() }
+// Prime the cache via the agent.start lifecycle handler (the same path real
+// Amp uses). This populates THREAD_CACHE keyed by thread.id.
+await events['agent.start']({ status: 'done', thread: cachedThread }, { thread: cachedThread })
+// Invoke a review-* command with NO thread in event/ctx, but force the
+// session's runKey to match the cached thread id via CERBERUS_RUN_KEY so
+// resolveThread's runKey-based cache lookup matches.
+process.env.CERBERUS_RUN_KEY = cachedThreadID
+executeCerberusCommand('review-plan', { plan_path: '/tmp/cached.md' }, { status: 'done' }, {})
+// Reconstruct the same session and assert the monitor for that key is
+// already active — i.e., resolveThread successfully fell back to the cache.
+const cachedSession = ensureAmpSession({ status: 'done' }, {})
+delete process.env.CERBERUS_RUN_KEY
+assert(cachedSession.runKey === cachedThreadID, 'reconstructed session should inherit explicit run key override')
+assert(startCerberusMonitor(cachedSession, cachedThread) === false, 'cached-thread monitor must already be active for this run key')
+stopCerberusMonitor(cachedSession)
 TS
 
 log_test "Amp plugin registers tools/commands, passes backend env, and maps agent.end decisions"

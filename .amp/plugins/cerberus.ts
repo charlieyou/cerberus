@@ -48,6 +48,39 @@ interface CompletionDecision {
 	fingerprint?: string
 }
 
+interface ThreadLike {
+	id?: string
+	append?: (messages: { type: 'user-message'; content: string }[]) => Promise<unknown> | unknown
+}
+
+interface PollResult {
+	done: boolean
+	notified: boolean
+	retry?: boolean
+}
+
+interface MonitorState {
+	handle?: NodeJS.Timeout
+	stopped: boolean
+}
+
+const REVIEW_SPAWNING_COMMANDS = new Set<CerberusCommand>(['review-code', 'review-plan', 'review-spec'])
+const MONITORS = new Map<string, MonitorState>()
+const NOTIFIED_KEYS = new Map<string, number>()
+const THREAD_CACHE = new Map<string, ThreadLike>()
+const MONITOR_INTERVAL_MS = Math.max(500, Number(process.env.CERBERUS_AMP_MONITOR_INTERVAL_MS) || 5000)
+const MONITOR_DEADLINE_MS = Math.max(MONITOR_INTERVAL_MS, Number(process.env.CERBERUS_AMP_MONITOR_DEADLINE_MS) || 30 * 60_000)
+const STATUS_POLL_TIMEOUT_MS = Math.max(500, Number(process.env.CERBERUS_AMP_STATUS_TIMEOUT_MS) || 3000)
+const NOTIFIED_KEYS_TTL_MS = Math.max(MONITOR_DEADLINE_MS, 2 * 60 * 60_000)
+
+function pruneNotifiedKeys(): void {
+	if (NOTIFIED_KEYS.size < 64) return
+	const cutoff = Date.now() - NOTIFIED_KEYS_TTL_MS
+	for (const [key, ts] of NOTIFIED_KEYS) {
+		if (ts < cutoff) NOTIFIED_KEYS.delete(key)
+	}
+}
+
 function workspaceRoot(): string {
 	if (process.env.CERBERUS_AMP_WORKSPACE) return process.env.CERBERUS_AMP_WORKSPACE
 	const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
@@ -183,11 +216,12 @@ function backendEnv(session: AmpSession): NodeJS.ProcessEnv {
 	}
 }
 
-function runBackend(args: string[], session: AmpSession): BackendResult {
+function runBackend(args: string[], session: AmpSession, options: { timeoutMs?: number } = {}): BackendResult {
 	const result = spawnSync(REVIEW_GATE_BIN, args, {
 		cwd: session.workspaceRoot,
 		env: backendEnv(session),
 		encoding: 'utf8',
+		timeout: options.timeoutMs,
 	})
 	return {
 		stdout: result.stdout || '',
@@ -272,6 +306,237 @@ function backendArgsFor(command: CerberusCommand, input: Record<string, unknown>
 	}
 }
 
+function rememberThread(thread: ThreadLike | undefined): void {
+	if (!thread || typeof thread !== 'object') return
+	if (typeof thread.append !== 'function') return
+	const id = typeof thread.id === 'string' ? thread.id : ''
+	if (id) THREAD_CACHE.set(id, thread)
+}
+
+function extractThread(event?: Record<string, unknown>, ctx?: Record<string, unknown>): ThreadLike | undefined {
+	let firstThread: ThreadLike | undefined
+	for (const candidate of [ctx, event]) {
+		const thread = candidate?.thread
+		if (!thread || typeof thread !== 'object') continue
+		const typed = thread as ThreadLike
+		if (!firstThread) firstThread = typed
+		if (typeof typed.append === 'function') {
+			rememberThread(typed)
+			return typed
+		}
+	}
+	return firstThread
+}
+
+function persistedThreadIDFromRegistry(session: AmpSession): string {
+	const registry = readRegistry(session.registryPath)
+	return typeof registry?.amp_thread_id === 'string' ? registry.amp_thread_id : ''
+}
+
+function resolveThread(session: AmpSession, event?: Record<string, unknown>, ctx?: Record<string, unknown>): ThreadLike | undefined {
+	const direct = extractThread(event, ctx)
+	if (direct && typeof direct.append === 'function') return direct
+	const candidates: string[] = []
+	if (session.threadID) candidates.push(session.threadID)
+	const persistedID = persistedThreadIDFromRegistry(session)
+	if (persistedID && persistedID !== session.threadID) candidates.push(persistedID)
+	if (session.runKey && !candidates.includes(session.runKey)) candidates.push(session.runKey)
+	for (const id of candidates) {
+		const cached = THREAD_CACHE.get(id)
+		if (cached && typeof cached.append === 'function') return cached
+	}
+	return direct
+}
+
+async function appendThreadMessage(thread: ThreadLike, content: string): Promise<boolean> {
+	if (typeof thread.append !== 'function') return false
+	try {
+		const result = thread.append([{ type: 'user-message', content }])
+		if (result && typeof (result as Promise<unknown>).then === 'function') {
+			await (result as Promise<unknown>)
+		}
+		return true
+	} catch {
+		return false
+	}
+}
+
+function normalizeVerdict(raw: unknown): string {
+	if (typeof raw !== 'string' || !raw) return ''
+	const v = raw.toLowerCase()
+	if (v === 'needs_work' || v === 'needs-revision') return 'needs_revision'
+	return v
+}
+
+function formatReviewersCompleteMessage(session: AmpSession, body: Record<string, unknown>): string {
+	const verdict = normalizeVerdict(body.consensus_verdict) || 'unknown'
+	const findings = Array.isArray(body.aggregated_findings) ? (body.aggregated_findings as unknown[]).length : 0
+	const gateStatus = typeof body.gate_status === 'string' && body.gate_status ? body.gate_status : 'unknown'
+	const findingsLabel = findings === 1 ? '1 finding' : `${findings} findings`
+	const reviewers = Array.isArray(body.reviewers) ? (body.reviewers as unknown[]) : []
+	const failedReviewers = reviewers.filter(r => r && typeof r === 'object' && (r as Record<string, unknown>).status === 'failed').length
+	const parseErrors = Array.isArray(body.parse_errors) ? (body.parse_errors as unknown[]).length : 0
+	const needsAction = verdict === 'fail' || verdict === 'needs_revision' || verdict === 'unknown' || findings > 0 || failedReviewers > 0 || parseErrors > 0
+	const tail = needsAction
+		? 'Address the findings, or use clear-gate with an explicit reason if a human is overriding the gate.'
+		: 'Reviewers passed; no action required.'
+	const extras: string[] = []
+	if (failedReviewers > 0) extras.push(`${failedReviewers} reviewer${failedReviewers === 1 ? '' : 's'} failed`)
+	if (parseErrors > 0) extras.push(`${parseErrors} parse error${parseErrors === 1 ? '' : 's'}`)
+	const extrasLabel = extras.length ? `; ${extras.join(', ')}` : ''
+	return [
+		`Cerberus reviewers complete for run ${session.runKey}.`,
+		`Gate status: ${gateStatus}; verdict: ${verdict}; ${findingsLabel}${extrasLabel}.`,
+		tail,
+	].join(' ')
+}
+
+function reviewersTerminal(body: Record<string, unknown>): boolean {
+	const reviewers = Array.isArray(body.reviewers) ? (body.reviewers as unknown[]) : []
+	const reviewerStates = reviewers.filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+	const declaredPending = Array.isArray(body.pending_reviewers) ? (body.pending_reviewers as unknown[]).length : -1
+	if (declaredPending > 0) return false
+	const inferredPending = reviewerStates.filter(r => {
+		const status = typeof r.status === 'string' ? r.status : ''
+		return status === 'pending' || status === 'running' || status === ''
+	}).length
+	if (declaredPending === -1 && inferredPending > 0) return false
+	const anyTerminal = reviewerStates.some(r => {
+		const status = typeof r.status === 'string' ? r.status : ''
+		return status === 'complete' || status === 'failed'
+	})
+	const hasConsensus = typeof body.consensus_verdict === 'string' && body.consensus_verdict !== ''
+	return anyTerminal || hasConsensus
+}
+
+export async function pollCerberusOnce(session: AmpSession, thread: ThreadLike, isCurrent: () => boolean = () => true): Promise<PollResult> {
+	let body: Record<string, unknown> | null = null
+	try {
+		const result = runBackend(['status', '--json'], session, { timeoutMs: STATUS_POLL_TIMEOUT_MS })
+		if (result.exitCode === 4) return { done: true, notified: false }
+		if (result.exitCode !== 0) return { done: false, notified: false, retry: true }
+		body = JSON.parse(result.stdout) as Record<string, unknown>
+	} catch {
+		return { done: false, notified: false, retry: true }
+	}
+	if (!body) return { done: false, notified: false, retry: true }
+
+	// Sanity: if status reports a different run key than ours, do not act on it.
+	const reportedRunKey = typeof body.run_key === 'string' ? body.run_key : ''
+	if (reportedRunKey && session.runKey && reportedRunKey !== session.runKey) {
+		return { done: false, notified: false, retry: true }
+	}
+
+	const gateStatus = typeof body.gate_status === 'string' ? body.gate_status : ''
+	const key = monitorKey(session)
+
+	const tryNotify = async (): Promise<PollResult> => {
+		if (NOTIFIED_KEYS.has(key)) return { done: true, notified: false }
+		if (!isCurrent()) return { done: false, notified: false }
+		const ok = await appendThreadMessage(thread, formatReviewersCompleteMessage(session, body!))
+		if (!ok) return { done: false, notified: false, retry: true }
+		// Re-check freshness after the async append: a stale in-flight tick
+		// must not poison NOTIFIED_KEYS for a freshly-restarted monitor.
+		if (!isCurrent()) return { done: true, notified: false }
+		NOTIFIED_KEYS.set(key, Date.now())
+		pruneNotifiedKeys()
+		return { done: true, notified: true }
+	}
+
+	// Resolved gate is always terminal: either consensus passed (no message
+	// needed) or human-handled. We still notify when findings remain or the
+	// verdict is non-pass so the user knows action is required.
+	if (gateStatus === 'resolved') {
+		const verdict = normalizeVerdict(body.consensus_verdict)
+		const findings = Array.isArray(body.aggregated_findings) ? (body.aggregated_findings as unknown[]).length : 0
+		if (findings > 0 || (verdict && verdict !== 'pass')) {
+			return await tryNotify()
+		}
+		return { done: true, notified: false }
+	}
+
+	if (!reviewersTerminal(body)) return { done: false, notified: false }
+	return await tryNotify()
+}
+
+function monitorKey(session: AmpSession): string {
+	return `${session.projectKey}:${session.runKey}`
+}
+
+export function markGateNotified(session: AmpSession): void {
+	NOTIFIED_KEYS.set(monitorKey(session), Date.now())
+	pruneNotifiedKeys()
+}
+
+function cancelMonitor(key: string): void {
+	const state = MONITORS.get(key)
+	if (!state) return
+	state.stopped = true
+	if (state.handle) clearTimeout(state.handle)
+	MONITORS.delete(key)
+}
+
+export function startCerberusMonitor(session: AmpSession, thread: ThreadLike | undefined, options: { restart?: boolean } = {}): boolean {
+	const key = monitorKey(session)
+	// Cancel + dedupe-clear must happen before any early returns so a
+	// review-* dispatch that lacks an append-capable thread still tears down
+	// the previous monitor for this run key (no stale timer or NOTIFIED_KEYS
+	// leakage).
+	if (options.restart) {
+		cancelMonitor(key)
+		NOTIFIED_KEYS.delete(key)
+	}
+	if (truthy(process.env.CERBERUS_REVIEWER_SUBPROCESS)) return false
+	if (truthy(process.env.CERBERUS_AMP_DISABLE_MONITOR)) return false
+	if (!thread || typeof thread.append !== 'function') return false
+	if (!options.restart) {
+		if (NOTIFIED_KEYS.has(key)) return false
+		if (MONITORS.has(key)) return false
+	}
+	rememberThread(thread)
+
+	const state: MonitorState = { stopped: false }
+	MONITORS.set(key, state)
+
+	const deadlineAt = Date.now() + MONITOR_DEADLINE_MS
+	const isCurrent = (): boolean => !state.stopped && MONITORS.get(key) === state
+	const schedule = (delay: number): void => {
+		if (!isCurrent()) return
+		state.handle = setTimeout(tick, Math.max(50, delay))
+		if (typeof state.handle.unref === 'function') state.handle.unref()
+	}
+	const tick = (): void => {
+		state.handle = undefined
+		;(async () => {
+			let result: PollResult = { done: false, notified: false }
+			try {
+				result = await pollCerberusOnce(session, thread, isCurrent)
+			} catch {
+				result = { done: false, notified: false, retry: true }
+			}
+			if (!isCurrent()) return
+			if (result.done && !result.retry) {
+				MONITORS.delete(key)
+				return
+			}
+			if (Date.now() >= deadlineAt) {
+				MONITORS.delete(key)
+				return
+			}
+			schedule(MONITOR_INTERVAL_MS)
+		})().catch(() => {
+			if (MONITORS.get(key) === state) MONITORS.delete(key)
+		})
+	}
+
+	schedule(MONITOR_INTERVAL_MS)
+	return true
+}
+
+export function stopCerberusMonitor(session: AmpSession): void {
+	cancelMonitor(monitorKey(session))
+}
+
 export function executeCerberusCommand(command: CerberusCommand, input: Record<string, unknown> = {}, event?: Record<string, unknown>, ctx?: Record<string, unknown>): string {
 	const session = ensureAmpSession(event, ctx)
 	let output = `Cerberus run key: ${session.runKey}\n`
@@ -283,6 +548,13 @@ export function executeCerberusCommand(command: CerberusCommand, input: Record<s
 			if (command === 'status' && result.exitCode === 4) continue
 			throw new Error(`${output.trim()}\nCerberus backend exited ${result.exitCode}`)
 		}
+	}
+	if (REVIEW_SPAWNING_COMMANDS.has(command)) {
+		// New review on the same run key: drop the persisted loop fingerprint
+		// so agent.end can surface a fresh blocking message for this gate.
+		try { clearBlockingFingerprint(session) } catch { /* fail open */ }
+		const thread = resolveThread(session, event, ctx)
+		startCerberusMonitor(session, thread, { restart: true })
 	}
 	return output.trimEnd()
 }
@@ -364,6 +636,22 @@ function fingerprintFor(decision: CompletionDecision): string {
 	return createHash('sha256').update(JSON.stringify(decision)).digest('hex')
 }
 
+function clearBlockingFingerprint(session: AmpSession): void {
+	const current = readRegistry(session.registryPath)
+	if (!current || current.run_key !== session.runKey) return
+	if (!current.last_blocking_fingerprint) return
+	const persistedThreadID = typeof current.amp_thread_id === 'string' ? current.amp_thread_id : null
+	writeRegistry(session.registryPath, {
+		schema_version: 1,
+		host: 'amp',
+		workspace_root: session.workspaceRoot,
+		project_key: session.projectKey,
+		run_key: session.runKey,
+		amp_thread_id: persistedThreadID,
+		last_seen: new Date().toISOString(),
+	})
+}
+
 function rememberBlockingFingerprint(session: AmpSession, fingerprint: string): void {
 	const current = readRegistry(session.registryPath) || {}
 	// Preserve the persisted run key when the caller is using an explicit
@@ -407,6 +695,10 @@ export function mapAgentEndDecision(event: Record<string, unknown>, ctx: Record<
 	}
 	if (!decision || decision.decision !== 'continue' || !decision.userMessage) return
 
+	// Sanity: if completion-check resolved a different gate than ours, do not
+	// continue this Amp turn for someone else's run.
+	if (decision.run_key && session.runKey && decision.run_key !== session.runKey) return
+
 	const fingerprint = fingerprintFor(decision)
 	const registry = readRegistry(session.registryPath)
 	if (registry?.last_blocking_fingerprint === fingerprint) return
@@ -416,6 +708,11 @@ export function mapAgentEndDecision(event: Record<string, unknown>, ctx: Record<
 	} catch {
 		return
 	}
+	// Coordinate with the background monitor: agent.end has now surfaced a
+	// blocking userMessage for this gate, so the monitor must not push a
+	// second 'reviewers complete' message for the same monitor key.
+	markGateNotified(session)
+	stopCerberusMonitor(session)
 	return { action: 'continue', userMessage: decision.userMessage }
 }
 
@@ -453,15 +750,22 @@ export default function cerberus(amp: PluginAPI): void {
 	registerCerberusCommand(amp, 'ask')
 
 	amp.on('session.start', async (event, ctx) => {
-		try { ensureAmpSession(event as Record<string, unknown>, ctx as Record<string, unknown>) } catch { /* fail open */ }
+		try {
+			extractThread(event as Record<string, unknown>, ctx as Record<string, unknown>)
+			ensureAmpSession(event as Record<string, unknown>, ctx as Record<string, unknown>)
+		} catch { /* fail open */ }
 	})
 
 	amp.on('agent.start', async (event, ctx) => {
-		try { ensureAmpSession(event as Record<string, unknown>, ctx as Record<string, unknown>) } catch { /* fail open */ }
+		try {
+			extractThread(event as Record<string, unknown>, ctx as Record<string, unknown>)
+			ensureAmpSession(event as Record<string, unknown>, ctx as Record<string, unknown>)
+		} catch { /* fail open */ }
 	})
 
 	amp.on('agent.end', async (event, ctx) => {
 		try {
+			extractThread(event as Record<string, unknown>, ctx as Record<string, unknown>)
 			return mapAgentEndDecision(event as Record<string, unknown>, ctx as Record<string, unknown>)
 		} catch {
 			return

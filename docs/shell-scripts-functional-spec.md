@@ -817,6 +817,7 @@ Registered surfaces:
 | Tools | `review-code`, `review-plan`, `review-spec`, `ask`, `ask-panel`, `status`, `clear-gate` | Each tool dispatches one or more `bin/review-gate` subcommands and returns the combined stdout/stderr to the model. |
 | Slash commands | Same names as tools, under the `Cerberus` category | Prompt the user via `ctx.ui.input` for required arguments, then invoke the same backend dispatcher and notify the user with the output. |
 | Lifecycle hooks | `session.start`, `agent.start`, `agent.end` | `session.start` and `agent.start` ensure the Amp session registry exists. `agent.end` runs `review-gate completion-check --host amp --json` and, when the gate requires action, returns `{ action: 'continue', userMessage }` to keep Amp engaged. |
+| Background monitor | Auto-started after each `review-code` / `review-plan` / `review-spec` dispatch | Polls `review-gate status --json` every `CERBERUS_AMP_MONITOR_INTERVAL_MS` (default 5000ms) up to `CERBERUS_AMP_MONITOR_DEADLINE_MS` (default 30 minutes). When `pending_reviewers.length === 0` and at least one reviewer has completed (or a `consensus_verdict` is set), it pushes a `user-message` into the captured `ctx.thread` via `thread.append([...])` describing the gate status, verdict, and finding count. Monitors are deduped per `${projectKey}:${runKey}`, feature-detect `thread.append`, and timers are `unref()`'d so they never block process exit. The monitor is best-effort UX sugar; the `agent.end` completion-check remains the authoritative enforcement backstop. |
 
 Backend dispatch (per command):
 
