@@ -1,7 +1,6 @@
 # TODO
 
-* Generate skills/commands instead of dups
-
+* Add strict mode where only passes if no feedback at all
 
 * add /constitution command (from Spec Kit)
   - Create/update project principles at `/memory/constitution.md`
@@ -41,6 +40,7 @@ Task review should use multi-models
 ## Code Review
 
 * dont pass a diff directly to the code review, agents should explore themselves?
+* x2!
 
 ## Task gen + review
 
@@ -49,6 +49,8 @@ Task review should use multi-models
 ## Run Team
 
 * Cursor-style continuous planning
+
+* Or just next task ahead planning?
 
 * Block dangerous commands in implementers
 * Persist P2/P3 review issues

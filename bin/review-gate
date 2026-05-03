@@ -329,6 +329,10 @@ Commands:
     consumed by Codex Stop and Amp Status surfaces. Exit 0 on success, 4
     when no active gate, 2 on internal error.
 
+  completion-check --json [--host <host>] [--session-key <key>]
+    Non-mutating lifecycle-enforcement check. Outputs a compact allow/continue
+    envelope consumed by Amp agent.end and other host adapters.
+
   resolve [--reason <text>]
     Resolve the active gate and allow the session to stop.
 
@@ -5821,7 +5825,8 @@ USAGE
     # Assemble the final JSON output. Use `--argjson` for pre-built JSON
     # subtrees and `--arg` for strings. Emit consensus_verdict as JSON null
     # when undetermined.
-    local final_json
+    local state_decision_action final_json
+    state_decision_action=$(jq -r '.decision.action // empty' "$state_file" 2>/dev/null || echo "")
     if [[ -z "$consensus_verdict_out" ]]; then
         final_json=$(jq -nc \
             --argjson schema_version 1 \
@@ -5830,6 +5835,7 @@ USAGE
             --arg run_key "$run_key" \
             --arg review_dir "$review_dir" \
             --arg gate_status "$gate_status" \
+            --arg decision_action "$state_decision_action" \
             --argjson reviewers "$reviewers_json" \
             --argjson pending "$pending_json" \
             --argjson findings "$findings_json" \
@@ -5842,6 +5848,7 @@ USAGE
                 review_dir: $review_dir,
                 gate_status: $gate_status,
                 consensus_verdict: null,
+                decision_action: $decision_action,
                 reviewers: $reviewers,
                 pending_reviewers: $pending,
                 aggregated_findings: $findings,
@@ -5856,6 +5863,7 @@ USAGE
             --arg review_dir "$review_dir" \
             --arg gate_status "$gate_status" \
             --arg consensus_verdict "$consensus_verdict_out" \
+            --arg decision_action "$state_decision_action" \
             --argjson reviewers "$reviewers_json" \
             --argjson pending "$pending_json" \
             --argjson findings "$findings_json" \
@@ -5868,6 +5876,7 @@ USAGE
                 review_dir: $review_dir,
                 gate_status: $gate_status,
                 consensus_verdict: $consensus_verdict,
+                decision_action: $decision_action,
                 reviewers: $reviewers,
                 pending_reviewers: $pending,
                 aggregated_findings: $findings,
@@ -5879,13 +5888,178 @@ USAGE
     exit 0
 }
 
+__cerberus_completion_fingerprint() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | awk '{print $1}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    else
+        cksum | awk '{print $1 "-" $2}'
+    fi
+}
+
+review_gate_completion_check() {
+    local json_mode="false"
+    local host="${CERBERUS_HOST:-}"
+    local session_key="$(__cerberus_resolve_run_key)"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                json_mode="true"
+                shift
+                ;;
+            --host=*)
+                host="${1#*=}"
+                shift
+                ;;
+            --host)
+                host="${2:-}"
+                shift 2
+                ;;
+            --session-key=*)
+                session_key="${1#*=}"
+                shift
+                ;;
+            --session-key)
+                session_key="${2:-}"
+                shift 2
+                ;;
+            -h|--help)
+                cat <<USAGE
+Usage: ${CLI_CMD} completion-check --json [--host <host>] [--session-key <key>]
+USAGE
+                return 0
+                ;;
+            *)
+                die "Unknown option '$1'"
+                ;;
+        esac
+    done
+
+    if [[ "$json_mode" != "true" ]]; then
+        die "completion-check requires --json output"
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        printf '{"decision":"allow","reason":"missing_jq"}\n'
+        exit 0
+    fi
+
+    local status_out status_err status_rc=0
+    status_out=$(mktemp -t cerberus-completion-status.XXXXXX) || {
+        printf '{"decision":"allow","reason":"tmpfile_failed"}\n'
+        exit 0
+    }
+    status_err=$(mktemp -t cerberus-completion-status-err.XXXXXX) || {
+        rm -f "$status_out"
+        printf '{"decision":"allow","reason":"tmpfile_failed"}\n'
+        exit 0
+    }
+
+    if [[ -n "$session_key" ]]; then
+        CERBERUS_HOST="$host" "$SCRIPT_DIR/review-gate" status --json --session-key "$session_key" \
+            >"$status_out" 2>"$status_err" || status_rc=$?
+    else
+        CERBERUS_HOST="$host" "$SCRIPT_DIR/review-gate" status --json \
+            >"$status_out" 2>"$status_err" || status_rc=$?
+    fi
+
+    local body=""
+    body=$(cat "$status_out" 2>/dev/null || echo "")
+    rm -f "$status_out" "$status_err"
+
+    if [[ "$status_rc" -eq 4 ]]; then
+        printf '{"decision":"allow","reason":"no_active_gate"}\n'
+        exit 0
+    fi
+    if [[ "$status_rc" -ne 0 ]]; then
+        jq -nc --arg reason "status_error" '{decision:"allow",reason:$reason}'
+        exit 0
+    fi
+    if ! printf '%s' "$body" | jq -e . >/dev/null 2>&1; then
+        jq -nc --arg reason "malformed_status" '{decision:"allow",reason:$reason}'
+        exit 0
+    fi
+
+    local special_status special_error gate_status consensus decision_action
+    special_status=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || echo "")
+    special_error=$(printf '%s' "$body" | jq -r '.error // empty' 2>/dev/null || echo "")
+    if [[ "$special_status" == "unknown" && "$special_error" == "malformed_state" ]]; then
+        jq -nc --arg reason "malformed_state" '{decision:"allow",reason:$reason}'
+        exit 0
+    fi
+
+    gate_status=$(printf '%s' "$body" | jq -r '.gate_status // empty' 2>/dev/null || echo "")
+    consensus=$(printf '%s' "$body" | jq -r '.consensus_verdict // empty' 2>/dev/null || echo "")
+    decision_action=$(printf '%s' "$body" | jq -r '.decision_action // .decision.action // empty' 2>/dev/null || echo "")
+
+    if [[ "$gate_status" == "resolved" && "$decision_action" == "manual_resolve" ]]; then
+        jq -nc --arg reason "manual_resolve" '{decision:"allow",reason:$reason}'
+        exit 0
+    fi
+
+    local should_continue="false" reason=""
+    case "$gate_status" in
+        pending)
+            should_continue="true"
+            reason="pending"
+            ;;
+        awaiting_decision)
+            should_continue="true"
+            reason="awaiting_decision"
+            ;;
+        resolved)
+            case "$consensus" in
+                fail|needs_revision)
+                    should_continue="true"
+                    reason="resolved_${consensus}"
+                    ;;
+                *)
+                    should_continue="false"
+                    reason="resolved_${consensus:-unknown}"
+                    ;;
+            esac
+            ;;
+        *)
+            should_continue="false"
+            reason="unknown_gate_status"
+            ;;
+    esac
+
+    if [[ "$should_continue" != "true" ]]; then
+        jq -nc --arg reason "$reason" '{decision:"allow",reason:$reason}'
+        exit 0
+    fi
+
+    local fingerprint run_key pending_count finding_count message
+    fingerprint=$(printf '%s' "$body" | __cerberus_completion_fingerprint)
+    run_key=$(printf '%s' "$body" | jq -r '.run_key // empty' 2>/dev/null || echo "")
+    pending_count=$(printf '%s' "$body" | jq -r '(.pending_reviewers // []) | length' 2>/dev/null || echo 0)
+    finding_count=$(printf '%s' "$body" | jq -r '(.aggregated_findings // []) | length' 2>/dev/null || echo 0)
+    message=$(printf '%s' "$body" | jq -r --arg reason "$reason" --arg pending_count "$pending_count" --arg finding_count "$finding_count" '
+        "Cerberus review gate is not clear (" + $reason + "). " +
+        "Run key: " + (.run_key // "unknown") + ". " +
+        "Pending reviewers: " + $pending_count + "; findings: " + $finding_count + ".\n" +
+        "Inspect with Cerberus status, address the review findings, or use clear-gate with an explicit reason if a human is overriding the gate."
+    ' 2>/dev/null || echo "Cerberus review gate is not clear. Inspect status, address findings, or use clear-gate with an explicit reason.")
+
+    jq -nc \
+        --arg reason "$reason" \
+        --arg message "$message" \
+        --arg run_key "$run_key" \
+        --arg fingerprint "$fingerprint" \
+        '{decision:"continue",reason:$reason,userMessage:$message,run_key:$run_key,fingerprint:$fingerprint}'
+    exit 0
+}
+
 main() {
     local cmd="${1:-}"
     case "$cmd" in
         spawn|spawn-code-review|spawn-plan-review|spawn-spec-review|spawn-epic-verify|spawn-ask)
             __cerberus_bootstrap_codex_env_for_cli "$cmd"
             ;;
-        resolve|wait|status|artifact-path|artifact_path|author-context|author_context)
+        resolve|wait|status|completion-check|artifact-path|artifact_path|author-context|author_context)
             __cerberus_bootstrap_codex_env_for_cli "$cmd"
             ;;
     esac
@@ -5930,6 +6104,10 @@ main() {
         status)
             shift
             review_gate_status "$@"
+            ;;
+        completion-check)
+            shift
+            review_gate_completion_check "$@"
             ;;
         artifact-path|artifact_path)
             shift
