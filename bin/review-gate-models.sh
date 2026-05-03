@@ -409,6 +409,10 @@ repair_review_output() {
             if codex exec --help 2>&1 | grep -q -- '--ephemeral'; then
                 codex_extra_args=(--ephemeral)
             fi
+            codex_extra_args+=(
+                -c features.plugin_hooks=false
+                -c features.codex_hooks=false
+            )
             if codex exec ${codex_extra_args[@]+"${codex_extra_args[@]}"} -m "$model" -s read-only --skip-git-repo-check \
                 --output-schema "$schema_path" --json -o "$out_file" \
                 - < "$prompt_file" > "$jsonl_file" 2>&1; then
@@ -981,6 +985,10 @@ unset CERBERUS_TRANSCRIPT_PATH CLAUDE_TRANSCRIPT_PATH REVIEW_GATE_TRANSCRIPT_PAT
                 if codex exec --help 2>&1 | grep -q -- "--ephemeral"; then
                     codex_extra_args=(--ephemeral)
                 fi
+                codex_extra_args+=(
+                    -c features.plugin_hooks=false
+                    -c features.codex_hooks=false
+                )
                 if "${timeout_prefix[@]}" codex exec "${codex_extra_args[@]}" -m "$REVIEW_MODEL" -c "model_reasoning_effort=$REVIEW_REASONING" -s read-only --skip-git-repo-check --output-schema "$REVIEW_SCHEMA" --json -o "$REVIEW_OUT" - < "$REVIEW_PROMPT" > "$REVIEW_JSONL" 2>&1; then
                     touch "$REVIEW_DONE"
                 else

@@ -49,6 +49,9 @@ if [[ "\${1:-}" == "exec" && "\${2:-}" == "--help" ]]; then
     printf '%s\n' '--ephemeral'
     exit 0
 fi
+if [[ -n "\${CODEX_ARGS_LOG:-}" ]]; then
+    printf '%s\n' "\$*" >> "\$CODEX_ARGS_LOG"
+fi
 out_file=""
 prev=""
 for arg in "\$@"; do
@@ -99,6 +102,17 @@ wait_for_file() {
     return 1
 }
 
+assert_codex_plugins_disabled() {
+    local args_log="$1"
+    local label="$2"
+    local args
+    args="$(cat "$args_log" 2>/dev/null || true)"
+    if [[ "$args" != *"features.plugin_hooks=false"* \
+          || "$args" != *"features.codex_hooks=false"* ]]; then
+        log_fail "$label: spawned codex args did not disable plugin hooks; args:\n$args"
+    fi
+}
+
 PROJECT_KEY="$(expected_project_key "$WORKSPACE")"
 PLAN_PATH="$TEST_DIR/plan.md"
 cat > "$PLAN_PATH" <<'EOF'
@@ -134,6 +148,7 @@ log_test "direct spawn-plan-review works in Codex without sourcing cerberus-skil
 SPAWN_HOME="$TEST_DIR/spawn-home"
 SPAWN_OUT="$TEST_DIR/spawn.out"
 SPAWN_ERR="$TEST_DIR/spawn.err"
+SPAWN_CODEX_ARGS="$TEST_DIR/spawn-codex.args"
 mkdir -p "$SPAWN_HOME"
 (
     cd "$WORKSPACE"
@@ -144,6 +159,7 @@ mkdir -p "$SPAWN_HOME"
         PATH="$FAKE_BIN:$PATH" \
         CERBERUS_ROOT="$PLUGIN_ROOT" \
         CODEX_THREAD_ID="codex-direct-spawn-001" \
+        CODEX_ARGS_LOG="$SPAWN_CODEX_ARGS" \
         REVIEW_GATE_REVIEWER_TIMEOUT=5 \
         "$REVIEW_GATE" spawn-plan-review \
             --mode fast \
@@ -162,12 +178,14 @@ assert_json_field "$SPAWN_REGISTRY" '.run_key' 'codex-direct-spawn-001' "spawn r
 assert_json_field "$SPAWN_STATE" '.owner.host' 'codex' "spawn owner.host"
 assert_json_field "$SPAWN_STATE" '.owner.run_key' 'codex-direct-spawn-001' "spawn owner.run_key"
 wait_for_file "$SPAWN_DIR/reviews/codex.done" 10 || true
+assert_codex_plugins_disabled "$SPAWN_CODEX_ARGS" "spawn reviewer codex args"
 log_pass "direct spawn-plan-review bootstraps Codex state"
 
 log_test "explicit CERBERUS_RUN_KEY on Codex spawn refreshes registry for stop hook"
 CUSTOM_HOME="$TEST_DIR/custom-home"
 CUSTOM_OUT="$TEST_DIR/custom.out"
 CUSTOM_ERR="$TEST_DIR/custom.err"
+CUSTOM_CODEX_ARGS="$TEST_DIR/custom-codex.args"
 mkdir -p "$CUSTOM_HOME"
 (
     cd "$WORKSPACE"
@@ -179,6 +197,7 @@ mkdir -p "$CUSTOM_HOME"
         CERBERUS_ROOT="$PLUGIN_ROOT" \
         CODEX_THREAD_ID="codex-direct-custom-001" \
         CERBERUS_RUN_KEY="codex-custom-run-001" \
+        CODEX_ARGS_LOG="$CUSTOM_CODEX_ARGS" \
         REVIEW_GATE_REVIEWER_TIMEOUT=5 \
         "$REVIEW_GATE" spawn-plan-review \
             --mode fast \
@@ -197,4 +216,5 @@ assert_json_field "$CUSTOM_REGISTRY" '.run_key' 'codex-custom-run-001' "custom r
 assert_json_field "$CUSTOM_STATE" '.owner.host' 'codex' "custom owner.host"
 assert_json_field "$CUSTOM_STATE" '.owner.run_key' 'codex-custom-run-001' "custom owner.run_key"
 wait_for_file "$CUSTOM_DIR/reviews/codex.done" 10 || true
+assert_codex_plugins_disabled "$CUSTOM_CODEX_ARGS" "custom run-key codex args"
 log_pass "explicit Codex spawn run key is visible to stop hook registry"
