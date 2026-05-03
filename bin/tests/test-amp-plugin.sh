@@ -195,9 +195,12 @@ for (const expected of [
   assert(env.includes(expected), `missing backend env ${expected}`)
 }
 
+executeCerberusCommand('review-code', { diff_mode: 'commit', commit: 'HEAD', focus: 'Amp adapter', exclude: [':(exclude,glob)dist/**'] }, event, ctx)
+assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.2')).trim() === 'spawn-code-review\n--focus\nAmp adapter\n--exclude\n:(exclude,glob)dist/**\n--commit\nHEAD', 'review-code commit argv mismatch')
+
 executeCerberusCommand('ask', { question: 'Ship it?' }, event, ctx)
-assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.2')).trim() === 'spawn-ask\nShip it?', 'ask spawn argv mismatch')
-assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.3')).trim() === 'wait\n--json\n--finalize', 'ask wait argv mismatch')
+assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.3')).trim() === 'spawn-ask\nShip it?', 'ask spawn argv mismatch')
+assert(read(resolve(process.env.TEST_CAPTURE_DIR!, 'argv.4')).trim() === 'wait\n--json\n--finalize', 'ask wait argv mismatch')
 
 process.env.CERBERUS_AMP_STUB_STATUS_NO_GATE = '1'
 const statusOutput = executeCerberusCommand('status', {}, event, ctx)

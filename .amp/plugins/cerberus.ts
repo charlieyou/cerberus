@@ -190,10 +190,57 @@ function runBackend(args: string[], session: AmpSession): BackendResult {
 	}
 }
 
+function stringList(value: unknown): string[] {
+	if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+	if (typeof value === 'string' && value) return value.split(',').map(part => part.trim()).filter(Boolean)
+	return []
+}
+
+function reviewCodeArgs(input: Record<string, unknown>): string[] {
+	const args = ['spawn-code-review']
+	const agents = typeof input.agents === 'string' ? input.agents : ''
+	const maxRounds = typeof input.max_rounds === 'number' ? input.max_rounds : undefined
+	const mode = typeof input.mode === 'string' ? input.mode : ''
+	const consensus = typeof input.consensus === 'string' ? input.consensus : ''
+	const contextFile = typeof input.context_file === 'string' ? input.context_file : ''
+	const focus = typeof input.focus === 'string' ? input.focus : ''
+	const excludes = stringList(input.exclude)
+
+	if (agents) args.push('--agents', agents)
+	if (maxRounds !== undefined) args.push('--max-rounds', String(maxRounds))
+	if (mode) args.push('--mode', mode)
+	if (consensus) args.push('--consensus', consensus)
+	if (contextFile) args.push('--context-file', contextFile)
+	if (focus) args.push('--focus', focus)
+	for (const exclude of excludes) args.push('--exclude', exclude)
+	if (input.debate === true) args.push('--debate')
+
+	const diffMode = typeof input.diff_mode === 'string' ? input.diff_mode : ''
+	if (diffMode === 'uncommitted') {
+		args.push('--uncommitted')
+	} else if (diffMode === 'base') {
+		const base = typeof input.base === 'string' ? input.base : ''
+		if (!base) throw new Error('review-code diff_mode=base requires base')
+		args.push('--base', base)
+	} else if (diffMode === 'commit') {
+		const commits = stringList(input.commits || input.commit)
+		if (commits.length === 0) throw new Error('review-code diff_mode=commit requires commit or commits')
+		args.push('--commit', ...commits)
+	} else if (diffMode === 'range') {
+		const range = typeof input.range === 'string' ? input.range : ''
+		if (!range) throw new Error('review-code diff_mode=range requires range')
+		args.push(range)
+	} else if (diffMode) {
+		throw new Error(`review-code unsupported diff_mode: ${diffMode}`)
+	}
+
+	return args
+}
+
 function backendArgsFor(command: CerberusCommand, input: Record<string, unknown>): string[][] {
 	switch (command) {
 		case 'review-code':
-			return [['spawn-code-review']]
+			return [reviewCodeArgs(input)]
 		case 'review-plan': {
 			const planPath = typeof input.plan_path === 'string' ? input.plan_path : ''
 			if (!planPath) throw new Error('review-plan requires plan_path')
@@ -235,6 +282,26 @@ export function executeCerberusCommand(command: CerberusCommand, input: Record<s
 }
 
 function inputSchemaFor(command: CerberusCommand): Record<string, unknown> {
+	if (command === 'review-code') {
+		return {
+			type: 'object',
+			properties: {
+				diff_mode: { type: 'string', enum: ['uncommitted', 'base', 'commit', 'range'], description: 'Diff scope to review. Omit to use the backend default (--uncommitted).' },
+				base: { type: 'string', description: 'Branch/ref for diff_mode=base, e.g. main.' },
+				commit: { type: 'string', description: 'Single commit/ref for diff_mode=commit, e.g. HEAD.' },
+				commits: { type: 'array', items: { type: 'string' }, description: 'One or more commits/refs for diff_mode=commit.' },
+				range: { type: 'string', description: 'Git revision range for diff_mode=range, e.g. main..feature.' },
+				agents: { type: 'string', description: 'Optional comma-separated reviewer list, e.g. codex,gemini.' },
+				max_rounds: { type: 'number', description: 'Optional maximum review rounds.' },
+				mode: { type: 'string', enum: ['fast', 'smart', 'max'], description: 'Optional reviewer model mode.' },
+				consensus: { type: 'string', enum: ['majority', 'all', 'any'], description: 'Optional consensus policy.' },
+				context_file: { type: 'string', description: 'Optional path to extra author context.' },
+				focus: { type: 'string', description: 'Optional review focus instruction.' },
+				exclude: { type: 'array', items: { type: 'string' }, description: 'Optional git pathspec exclusions.' },
+				debate: { type: 'boolean', description: 'Enable debate mode.' },
+			},
+		}
+	}
 	if (command === 'review-plan') {
 		return { type: 'object', properties: { plan_path: { type: 'string', description: 'Absolute path to the plan markdown file.' } }, required: ['plan_path'] }
 	}

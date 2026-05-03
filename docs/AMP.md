@@ -77,7 +77,7 @@ for the Tier-1 workflows:
 
 | Amp handle | Backend invocation | Required input |
 |---|---|---|
-| `review-code` | `bin/review-gate spawn-code-review` | none |
+| `review-code` | `bin/review-gate spawn-code-review` | optional diff scope/options |
 | `review-plan` | `bin/review-gate spawn-plan-review <plan_path>` | `plan_path` |
 | `review-spec` | `bin/review-gate spawn-spec-review <spec_path>` | `spec_path` |
 | `ask-panel` | `bin/review-gate spawn-ask <question>` then `wait --json --finalize` | `question` |
@@ -97,6 +97,18 @@ Use that run key from a shell if you need to address the same gate directly:
 CERBERUS_HOST=amp CERBERUS_RUN_KEY=<run-key> \
   ~/code/cerberus/bin/review-gate wait --json --session-key <run-key>
 ```
+
+`review-code` accepts optional typed inputs so the agent can choose the right
+diff scope instead of always using the backend default `--uncommitted`:
+
+```json
+{ "diff_mode": "commit", "commit": "HEAD" }
+{ "diff_mode": "base", "base": "main" }
+{ "diff_mode": "range", "range": "main..feature" }
+```
+
+It also passes through backend options including `agents`, `max_rounds`,
+`mode`, `consensus`, `context_file`, `focus`, `exclude`, and `debate`.
 
 `review-plan` and `review-spec` require explicit absolute paths on Amp.
 There is no Claude-style "latest plan" fallback.
