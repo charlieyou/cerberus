@@ -349,6 +349,98 @@ die() {
     exit 2
 }
 
+__cerberus_is_spawn_command() {
+    case "${1:-}" in
+        spawn|spawn-code-review|spawn-plan-review|spawn-spec-review|spawn-epic-verify|spawn-ask)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+__cerberus_bootstrap_codex_env_for_cli() {
+    local cmd="${1:-}"
+    local explicit_run_key="${CERBERUS_RUN_KEY:-${REVIEW_GATE_SESSION_KEY:-}}"
+    local codex_thread_id="${CODEX_THREAD_ID:-}"
+    local codex_indicator="${CODEX_THREAD_ID:-${CODEX_API_KEY:-${CODEX_HOME:-${CODEX_SANDBOX:-}}}}"
+    local host="${CERBERUS_HOST:-}"
+
+    # Claude/Amp wrappers own their own session bootstrap. This helper only
+    # fills the gap for direct Codex CLI invocations of bin/review-gate.
+    if [[ -n "${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}" ]]; then
+        return 0
+    fi
+    if [[ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]]; then
+        return 0
+    fi
+    if [[ -n "$host" && "$host" != "codex" ]]; then
+        return 0
+    fi
+    if [[ -z "$codex_indicator" && "$host" != "codex" ]]; then
+        return 0
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local workspace_root project_key registry_file registry_session_id lifecycle_session_id
+    workspace_root="$(pwd)"
+    project_key="$(CERBERUS_PROJECT_KEY= CLAUDE_PROJECT_DIR="$workspace_root" get_project_hash "" 2>/dev/null || true)"
+    case "$project_key" in
+        ""|.|..|*/*)
+            return 0
+            ;;
+    esac
+
+    registry_file="$HOME/.cerberus/runtime/codex/$project_key/active-session.json"
+    registry_session_id=""
+    if [[ -r "$registry_file" ]] && jq -e . "$registry_file" >/dev/null 2>&1; then
+        registry_session_id="$(jq -r '.session_id // .codex_session_id // empty' "$registry_file" 2>/dev/null || true)"
+    fi
+    lifecycle_session_id="${codex_thread_id:-$registry_session_id}"
+
+    if [[ -n "$lifecycle_session_id" && -x "$SCRIPT_DIR/codex-session-init" ]]; then
+        local should_refresh="false"
+        if [[ -z "$explicit_run_key" && -n "$codex_thread_id" ]]; then
+            should_refresh="true"
+        elif [[ -n "$explicit_run_key" ]] && __cerberus_is_spawn_command "$cmd"; then
+            should_refresh="true"
+        fi
+
+        if [[ "$should_refresh" == "true" ]]; then
+            local payload=""
+            payload="$(jq -n \
+                --arg session_id "$lifecycle_session_id" \
+                --arg workspace_root "$workspace_root" \
+                '{
+                    session_id: $session_id,
+                    workspace_root: $workspace_root,
+                    cwd: $workspace_root,
+                    transcript_path: ""
+                }' 2>/dev/null || true)"
+            if [[ -n "$payload" ]]; then
+                printf '%s' "$payload" | "$SCRIPT_DIR/codex-session-init" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
+    local registry_run_key=""
+    if [[ -r "$registry_file" ]] && jq -e . "$registry_file" >/dev/null 2>&1; then
+        registry_run_key="$(jq -r '.run_key // empty' "$registry_file" 2>/dev/null || true)"
+    fi
+
+    local run_key="${explicit_run_key:-$registry_run_key}"
+    if [[ -z "$run_key" ]]; then
+        return 0
+    fi
+
+    export CERBERUS_HOST="codex"
+    export CERBERUS_PROJECT_KEY="$project_key"
+    export CERBERUS_RUN_KEY="$run_key"
+}
+
 validate_max_rounds() {
     local value="${1:-}"
     if [[ -z "$value" ]]; then
@@ -4632,7 +4724,8 @@ find_state_by_session_key() {
 #
 # Reviewer wrapper sentinels are an optimization, not the only durable source
 # of terminal state: host shutdown can kill the wrapper after the model CLI has
-# written canonical JSON but before it touches .done/.failed. Keep this helper
+# written canonical JSON, or Codex can hang after writing the final structured
+# agent_message to JSONL but before `-o`/sentinel finalization. Keep this helper
 # read-only so status/progress paths never backfill sentinels.
 reviewer_has_terminal_marker_or_valid_output() {
     local reviews_dir="$1"
@@ -4643,9 +4736,6 @@ reviewer_has_terminal_marker_or_valid_output() {
 
     if [[ -f "$done_file" || -f "$failed_file" ]]; then
         return 0
-    fi
-    if [[ ! -f "$output_file" ]]; then
-        return 1
     fi
     extract_valid_review_json_no_repair "$output_file" "$reviewer" >/dev/null 2>&1
 }
@@ -5043,6 +5133,7 @@ USAGE
         local output_file="$reviews_dir/${reviewer}.json"
         local result=""
         local parsed_failed_output="false"
+        local parsed_terminal_output="false"
 
         if [[ "$timed_out" == "true" ]] && \
            ! reviewer_has_terminal_marker_or_valid_output "$reviews_dir" "$reviewer"; then
@@ -5054,9 +5145,13 @@ USAGE
             continue
         fi
 
-        if [[ -f "$failed_file" && -f "$output_file" ]]; then
+        if [[ -f "$failed_file" ]]; then
             if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
                 parsed_failed_output="true"
+            fi
+        elif [[ ! -f "$done_file" ]]; then
+            if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
+                parsed_terminal_output="true"
             fi
         fi
 
@@ -5107,7 +5202,7 @@ USAGE
             continue
         fi
 
-        if [[ ! -f "$output_file" ]]; then
+        if [[ ! -f "$output_file" && "$parsed_terminal_output" != "true" && "$parsed_failed_output" != "true" ]]; then
             local reviewer_entry
             reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Reviewer output missing" \
                 '{verdict:$verdict, summary:$summary, findings: []}')
@@ -5118,7 +5213,7 @@ USAGE
             continue
         fi
 
-        if [[ "$parsed_failed_output" != "true" ]] && \
+        if [[ "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]] && \
            ! result=$(extract_json "$output_file" "$reviewer" 2>/dev/null); then
             local reviewer_entry
             reviewer_entry=$(jq -n --arg verdict "ERROR" --arg summary "Invalid reviewer output" \
@@ -5529,11 +5624,11 @@ USAGE
         local parsed_failed_output="false"
         local parsed_terminal_output="false"
 
-        if [[ -f "$failed_file" && -f "$output_file" ]]; then
+        if [[ -f "$failed_file" ]]; then
             if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
                 parsed_failed_output="true"
             fi
-        elif [[ ! -f "$done_file" && -f "$output_file" ]]; then
+        elif [[ ! -f "$done_file" ]]; then
             if result=$(extract_valid_review_json_no_repair "$output_file" "$reviewer" 2>/dev/null); then
                 parsed_terminal_output="true"
             fi
@@ -5559,7 +5654,7 @@ USAGE
             continue
         fi
 
-        if [[ ! -f "$output_file" ]]; then
+        if [[ ! -f "$output_file" && "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]]; then
             reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
                 --arg name "$reviewer" \
                 '. + [{name:$name, status:"complete", verdict:"error"}]')
@@ -5580,16 +5675,17 @@ USAGE
         # (REVIEW_REPAIR_ENABLED=false) so a malformed reviewer output
         # does NOT trigger an external CLI call from inside `status`,
         # preserving the no-blocking budget and the read-only contract.
-        if [[ "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]] && \
-           ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) \
-              || [[ -z "$result" ]]; then
-            reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
-                --arg name "$reviewer" \
-                '. + [{name:$name, status:"complete", verdict:"error"}]')
-            parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
-                --arg name "$reviewer" \
-                '. + [$name]')
-            continue
+        if [[ "$parsed_failed_output" != "true" && "$parsed_terminal_output" != "true" ]]; then
+            if ! result=$(REVIEW_REPAIR_ENABLED=false extract_json "$output_file" "$reviewer" 2>/dev/null) || \
+               [[ -z "$result" ]]; then
+                reviewers_json=$(printf '%s' "$reviewers_json" | jq -c \
+                    --arg name "$reviewer" \
+                    '. + [{name:$name, status:"complete", verdict:"error"}]')
+                parse_errors_json=$(printf '%s' "$parse_errors_json" | jq -c \
+                    --arg name "$reviewer" \
+                    '. + [$name]')
+                continue
+            fi
         fi
 
         local rverdict
@@ -5785,6 +5881,15 @@ USAGE
 
 main() {
     local cmd="${1:-}"
+    case "$cmd" in
+        spawn|spawn-code-review|spawn-plan-review|spawn-spec-review|spawn-epic-verify|spawn-ask)
+            __cerberus_bootstrap_codex_env_for_cli "$cmd"
+            ;;
+        resolve|wait|status|artifact-path|artifact_path|author-context|author_context)
+            __cerberus_bootstrap_codex_env_for_cli "$cmd"
+            ;;
+    esac
+
     case "$cmd" in
         check)
             shift

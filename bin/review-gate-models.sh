@@ -508,6 +508,38 @@ extract_codex_agent_message() {
     printf '%s' "$parsed"
 }
 
+# Extract a Codex JSONL verdict only when the stream's last event is the
+# structured agent_message itself. This covers Codex hangs after emitting the
+# final review but before writing `-o`, without treating earlier/intermediate
+# agent messages as terminal.
+extract_codex_terminal_agent_message() {
+    local file="$1"
+    [[ -s "$file" ]] || return 1
+
+    local text
+    text=$(jq -R -s -r '
+        split("\n")
+        | map(select(length > 0))
+        | if length == 0 then empty
+          else .[-1] as $line
+          | (try ($line | fromjson) catch null) as $last
+          | if ($last != null
+                and (($last.type // "") == "item.completed")
+                and (($last.item.type // "") == "agent_message"))
+            then ($last.item.text // empty)
+            else empty
+            end
+          end
+    ' "$file" 2>/dev/null || true)
+
+    [[ -z "$text" ]] && return 1
+
+    local parsed
+    parsed=$(printf '%s' "$text" | jq -c '.' 2>/dev/null || true)
+    [[ -z "$parsed" ]] && return 1
+    printf '%s' "$parsed"
+}
+
 # Extract the last JSON object from a file.
 extract_last_json_object() {
     local file="$1"
@@ -772,9 +804,27 @@ extract_valid_review_json_no_repair() {
     local reviewer="$2"
     local json
 
-    [[ -f "$file" ]] || return 1
+    json=""
+    if [[ "$reviewer" == "codex" ]]; then
+        if [[ -s "$file" ]]; then
+            json=$(jq -c '.' "$file" 2>/dev/null || true)
+            if [[ -z "$json" ]]; then
+                json=$(extract_last_json_object "$file" "false" 2>/dev/null || true)
+            fi
+            if [[ -n "$json" ]]; then
+                json=$(unwrap_review_json "$json" 2>/dev/null || true)
+            fi
+        fi
+        if [[ -z "$json" && -f "${file%.json}.jsonl" ]]; then
+            json=$(extract_codex_terminal_agent_message "${file%.json}.jsonl" 2>/dev/null || true)
+        fi
+    else
+        if [[ -f "$file" ]]; then
+            json=$(REVIEW_REPAIR_ENABLED=false extract_json "$file" "$reviewer" 2>/dev/null || true)
+        fi
+    fi
 
-    if ! json=$(REVIEW_REPAIR_ENABLED=false extract_json "$file" "$reviewer" 2>/dev/null); then
+    if [[ -z "$json" ]]; then
         return 1
     fi
 

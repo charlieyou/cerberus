@@ -193,6 +193,161 @@ fi
 
 log_pass "wait completes from valid reviewer JSON without mutating sentinels"
 
+SESSION_ID_CODEX_JSONL="test-wait-codex-jsonl-terminal-$$"
+TRANSCRIPT_PATH_CODEX_JSONL="$HOME/.claude/projects/-tmp-wait-test/${SESSION_ID_CODEX_JSONL}.jsonl"
+REVIEW_DIR_CODEX_JSONL="$HOME/.claude/projects/-tmp-wait-test/cerberus/${SESSION_ID_CODEX_JSONL}"
+STATE_FILE_CODEX_JSONL="$REVIEW_DIR_CODEX_JSONL/gate-state.json"
+
+mkdir -p "$REVIEW_DIR_CODEX_JSONL/reviews" "$(dirname "$TRANSCRIPT_PATH_CODEX_JSONL")"
+touch "$TRANSCRIPT_PATH_CODEX_JSONL"
+
+cat > "$STATE_FILE_CODEX_JSONL" <<'EOF'
+{
+  "status": "pending",
+  "reviewers": {
+    "codex": {}
+  },
+  "created_at": "2026-05-01T00:00:00Z",
+  "iteration": 0
+}
+EOF
+
+cat > "$REVIEW_DIR_CODEX_JSONL/reviews/codex.jsonl" <<'EOF'
+{"type":"thread.started","thread_id":"test-thread"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"reasoning","text":"checking"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"PASS\",\"summary\":\"valid terminal codex jsonl without output file\",\"findings\":[]}"}}
+
+
+EOF
+rm -f "$REVIEW_DIR_CODEX_JSONL/reviews/codex.json" \
+      "$REVIEW_DIR_CODEX_JSONL/reviews/codex.done" \
+      "$REVIEW_DIR_CODEX_JSONL/reviews/codex.failed"
+
+log_test "wait --json treats terminal Codex JSONL review as complete without output file"
+
+set +e
+output=$("$REVIEW_GATE" wait --json --timeout 5 --poll-interval 1 --session-id "$SESSION_ID_CODEX_JSONL" --transcript-path "$TRANSCRIPT_PATH_CODEX_JSONL" 2>&1)
+status=$?
+set -e
+
+if [[ "$status" -ne 0 ]]; then
+    log_fail "expected exit code 0 for terminal Codex JSONL without output file, got $status\n$output"
+fi
+
+consensus=$(printf '%s' "$output" | jq -r '.consensus_verdict // empty')
+if [[ "$consensus" != "PASS" ]]; then
+    log_fail "expected consensus PASS from terminal Codex JSONL, got ${consensus:-<empty>}\n$output"
+fi
+
+reviewer_verdict=$(printf '%s' "$output" | jq -r '.reviewers.codex.verdict // empty')
+if [[ "$reviewer_verdict" != "PASS" ]]; then
+    log_fail "expected codex reviewer verdict PASS from terminal JSONL, got ${reviewer_verdict:-<empty>}\n$output"
+fi
+
+parse_errors=$(printf '%s' "$output" | jq -r '.parse_errors | length')
+if [[ "$parse_errors" != "0" ]]; then
+    log_fail "expected no parse errors for terminal Codex JSONL, got $parse_errors\n$output"
+fi
+
+if [[ -e "$REVIEW_DIR_CODEX_JSONL/reviews/codex.json" \
+      || -e "$REVIEW_DIR_CODEX_JSONL/reviews/codex.done" \
+      || -e "$REVIEW_DIR_CODEX_JSONL/reviews/codex.failed" ]]; then
+    log_fail "wait must not backfill Codex output/sentinels for terminal JSONL"
+fi
+
+set +e
+status_output=$("$REVIEW_GATE" status --json --session-id "$SESSION_ID_CODEX_JSONL" --transcript-path "$TRANSCRIPT_PATH_CODEX_JSONL" 2>&1)
+status_rc=$?
+set -e
+
+if [[ "$status_rc" -ne 0 ]]; then
+    log_fail "expected status exit code 0 for terminal Codex JSONL, got $status_rc\n$status_output"
+fi
+
+status_codex=$(printf '%s' "$status_output" | jq -r '.reviewers[] | select(.name == "codex") | [.status, .verdict] | @tsv')
+if [[ "$status_codex" != $'complete\tpass' ]]; then
+    log_fail "expected status to report codex complete/pass from terminal JSONL, got ${status_codex:-<empty>}\n$status_output"
+fi
+
+status_pending=$(printf '%s' "$status_output" | jq -r '.pending_reviewers | length')
+if [[ "$status_pending" != "0" ]]; then
+    log_fail "expected status pending_reviewers empty for terminal Codex JSONL, got $status_pending\n$status_output"
+fi
+
+log_pass "wait/status complete from terminal Codex JSONL without mutating artifacts"
+
+log_test "wait --json does not complete from non-terminal Codex JSONL messages"
+
+for codex_jsonl_case in reasoning-tail partial-tail prose-tail; do
+    SESSION_ID_CODEX_JSONL_NEG="test-wait-codex-jsonl-${codex_jsonl_case}-$$"
+    TRANSCRIPT_PATH_CODEX_JSONL_NEG="$HOME/.claude/projects/-tmp-wait-test/${SESSION_ID_CODEX_JSONL_NEG}.jsonl"
+    REVIEW_DIR_CODEX_JSONL_NEG="$HOME/.claude/projects/-tmp-wait-test/cerberus/${SESSION_ID_CODEX_JSONL_NEG}"
+    STATE_FILE_CODEX_JSONL_NEG="$REVIEW_DIR_CODEX_JSONL_NEG/gate-state.json"
+
+    mkdir -p "$REVIEW_DIR_CODEX_JSONL_NEG/reviews" "$(dirname "$TRANSCRIPT_PATH_CODEX_JSONL_NEG")"
+    touch "$TRANSCRIPT_PATH_CODEX_JSONL_NEG"
+
+    cat > "$STATE_FILE_CODEX_JSONL_NEG" <<'EOF'
+{
+  "status": "pending",
+  "reviewers": {
+    "codex": {}
+  },
+  "created_at": "2026-05-01T00:00:00Z",
+  "iteration": 0
+}
+EOF
+
+    case "$codex_jsonl_case" in
+        reasoning-tail)
+            : > "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.json"
+            cat > "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.jsonl" <<'EOF'
+{"type":"thread.started","thread_id":"test-thread"}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"PASS\",\"summary\":\"earlier agent message is not terminal\",\"findings\":[]}"}}
+{"type":"item.completed","item":{"type":"reasoning","text":"still working"}}
+EOF
+            ;;
+        partial-tail)
+            : > "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.json"
+            printf '%s\n%s' \
+                '{"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"PASS\",\"summary\":\"partial tail must not be ignored\",\"findings\":[]}"}}' \
+                '{"type":"turn.completed"' \
+                > "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.jsonl"
+            ;;
+        prose-tail)
+            cat > "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.jsonl" <<'EOF'
+{"type":"thread.started","thread_id":"test-thread"}
+{"type":"item.completed","item":{"type":"agent_message","text":"Here is an example object, not the structured response: {\"verdict\":\"PASS\",\"summary\":\"embedded object should not complete\",\"findings\":[]}"}}
+EOF
+            ;;
+    esac
+
+    rm -f "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.done" \
+          "$REVIEW_DIR_CODEX_JSONL_NEG/reviews/codex.failed"
+
+    set +e
+    output=$("$REVIEW_GATE" wait --json --timeout 0 --poll-interval 1 --session-id "$SESSION_ID_CODEX_JSONL_NEG" --transcript-path "$TRANSCRIPT_PATH_CODEX_JSONL_NEG" 2>&1)
+    status=$?
+    set -e
+
+    if [[ "$status" -ne 3 ]]; then
+        log_fail "case $codex_jsonl_case: expected timeout exit code 3 for non-terminal Codex JSONL, got $status\n$output"
+    fi
+
+    json_status=$(printf '%s' "$output" | jq -r '.status // empty')
+    if [[ "$json_status" != "timeout" ]]; then
+        log_fail "case $codex_jsonl_case: expected JSON status timeout, got ${json_status:-<empty>}\n$output"
+    fi
+
+    reviewer_verdict=$(printf '%s' "$output" | jq -r '.reviewers.codex.verdict // empty')
+    if [[ "$reviewer_verdict" != "PENDING" ]]; then
+        log_fail "case $codex_jsonl_case: expected codex reviewer to remain PENDING, got ${reviewer_verdict:-<empty>}\n$output"
+    fi
+done
+
+log_pass "wait rejects non-terminal Codex JSONL completion candidates"
+
 SESSION_ID_PARTIAL="test-wait-stale-failed-partial-$$"
 TRANSCRIPT_PATH_PARTIAL="$HOME/.claude/projects/-tmp-wait-test/${SESSION_ID_PARTIAL}.jsonl"
 REVIEW_DIR_PARTIAL="$HOME/.claude/projects/-tmp-wait-test/cerberus/${SESSION_ID_PARTIAL}"
