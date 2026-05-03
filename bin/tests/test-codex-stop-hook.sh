@@ -12,10 +12,10 @@
 #   Case 1  — Row 1:  registry + run dir present, but no gate-state.json
 #                     → status exits 4 → {"continue":true}.
 #   Case 2  — Row 2:  no registry → {"continue":true}.
-#   Case 3  — Row 4:  pending + WAIT=0 → allow with "still running" note.
-#   Case 4  — Row 5a: pending + WAIT=N, reviewers DON'T finish during the
+#   Case 3  — Row 4:  pending + MAX_WAIT=0 → allow with "still running" note.
+#   Case 4  — Row 5a: pending + MAX_WAIT=N, reviewers DON'T finish during the
 #                     wait window → fall through to row 4 message.
-#   Case 5  — Row 5b: pending + WAIT=N, reviewers finish during the wait
+#   Case 5  — Row 5b: pending + MAX_WAIT=N, reviewers finish during the wait
 #                     window → re-evaluation produces row 8 (allow).
 #   Case 6  — Row 6:  awaiting_decision + blocking findings (FAIL/P0) →
 #                     {"decision":"block", "reason":...}.
@@ -63,6 +63,7 @@ NC='\033[0m'
 TESTS_PASSED=0
 TESTS_FAILED=0
 TEST_DIR=""
+REMOVED_CODEX_WAIT_ENV="CERBERUS_CODEX_STOP_WAIT""_SECONDS"
 
 cleanup() {
     if [[ -n "$TEST_DIR" && -d "$TEST_DIR" ]]; then
@@ -175,7 +176,7 @@ run_hook() {
               CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
               CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
               REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
-              CERBERUS_CODEX_STOP_WAIT_SECONDS \
+              REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
               CERBERUS_REVIEW_GATE_BIN \
               CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
               __CERBERUS_ALIAS_WARNED || true
@@ -213,7 +214,7 @@ spawn_hook_bg() {
               CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
               CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
               REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
-              CERBERUS_CODEX_STOP_WAIT_SECONDS \
+              REVIEW_GATE_MAX_WAIT_SECONDS "$REMOVED_CODEX_WAIT_ENV" \
               CERBERUS_REVIEW_GATE_BIN \
               CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
               __CERBERUS_ALIAS_WARNED || true
@@ -329,9 +330,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 3 — Row 4: pending + WAIT=0 → allow + "still running" note.
+# Case 3 — Row 4: pending + MAX_WAIT=0 → allow + "still running" note.
 # ---------------------------------------------------------------------------
-log_test "Case 3 — Row 4: pending + WAIT=0 → allow with 'still running' note"
+log_test "Case 3 — Row 4: pending + MAX_WAIT=0 → allow with 'still running' note"
 c3_home="$TEST_DIR/case3"
 mkdir -p "$c3_home"
 c3_workspace="/tmp/cerberus-c3"
@@ -343,7 +344,7 @@ c3_out="$TEST_DIR/c3.out"
 c3_err="$TEST_DIR/c3.err"
 c3_rc=0
 run_hook "$c3_home" "$c3_workspace" "sess-c3-001" "$c3_out" "$c3_err" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=0" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=0" \
     || c3_rc=$?
 c3_action="$(stop_action "$c3_out")"
 c3_note="$(stop_system_message "$c3_out")"
@@ -354,10 +355,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 4 — Row 5a: pending + WAIT=2, reviewers don't finish → fall
+# Case 4 — Row 5a: pending + MAX_WAIT=2, reviewers don't finish → fall
 # through to row-4 message.
 # ---------------------------------------------------------------------------
-log_test "Case 4 — Row 5a: pending + WAIT=2 timeout → row-4 fallthrough"
+log_test "Case 4 — Row 5a: pending + MAX_WAIT=2 timeout → row-4 fallthrough"
 c4_home="$TEST_DIR/case4"
 mkdir -p "$c4_home"
 c4_workspace="/tmp/cerberus-c4"
@@ -370,7 +371,7 @@ c4_err="$TEST_DIR/c4.err"
 c4_t0=$(date +%s)
 c4_rc=0
 run_hook "$c4_home" "$c4_workspace" "sess-c4-001" "$c4_out" "$c4_err" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=2" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=2" \
     "REVIEW_GATE_POLL_INTERVAL_SECONDS=1" \
     || c4_rc=$?
 c4_t1=$(date +%s)
@@ -388,12 +389,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 5 — Row 5b: pending + WAIT=8, reviewers finish during wait →
+# Case 5 — Row 5b: pending + MAX_WAIT=8, reviewers finish during wait →
 # re-evaluate via rows 6/7/8/9. We mark all reviewers complete with PASS
 # and update gate-state.json to status=resolved + consensus=pass mid-wait;
 # expected emit is row 8 (plain allow).
 # ---------------------------------------------------------------------------
-log_test "Case 5 — Row 5b: pending + WAIT=8, completion mid-wait → row 8 allow"
+log_test "Case 5 — Row 5b: pending + MAX_WAIT=8, completion mid-wait → row 8 allow"
 c5_home="$TEST_DIR/case5"
 mkdir -p "$c5_home"
 c5_workspace="/tmp/cerberus-c5"
@@ -407,7 +408,7 @@ c5_payload="$TEST_DIR/c5.payload"
 c5_pid_file="$TEST_DIR/c5.pid"
 spawn_hook_bg "$c5_home" "$c5_workspace" "sess-c5-001" \
     "$c5_out" "$c5_err" "$c5_payload" "$c5_pid_file" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=8" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=8" \
     "REVIEW_GATE_POLL_INTERVAL_SECONDS=1"
 c5_pid="$(cat "$c5_pid_file")"
 # Give the hook a moment to enter `wait`. Then complete reviewers.
@@ -441,6 +442,72 @@ if [[ "$c5_rc" -eq 0 && "$c5_action" == "allow" \
     log_pass "Case 5 — Row 5b: completion mid-wait → row 8 allow"
 else
     log_fail "Case 5: rc=$c5_rc action=$c5_action note='$c5_note' done=$c5_done body=$(cat "$c5_out") stderr=$(cat "$c5_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — removed Codex-specific wait knob is ignored, and the
+# shared default wait budget is 1800 when REVIEW_GATE_MAX_WAIT_SECONDS
+# is unset. Use a stub backend so the test captures the wait argv
+# without sleeping.
+# ---------------------------------------------------------------------------
+log_test "Regression — Codex-specific wait env ignored; default shared wait is 1800"
+cW_home="$TEST_DIR/regress-wait-env"
+mkdir -p "$cW_home"
+cW_workspace="/tmp/cerberus-regress-wait-env"
+cW_run="regress-wait-env-run-001"
+make_registry "$cW_home" "$cW_workspace" "$cW_run" "sess-regress-wait-env-001"
+make_review_dir "$cW_home" "$cW_workspace" "$cW_run" >/dev/null
+cW_stub="$TEST_DIR/regress-wait-env-review-gate"
+cat > "$cW_stub" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    status)
+        printf '{"gate_status":"pending","consensus_verdict":null,"aggregated_findings":[]}\n'
+        exit 0
+        ;;
+    wait)
+        printf '%s\n' "$*" > "$STUB_WAIT_ARGS"
+        exit 3
+        ;;
+    *)
+        printf 'unexpected command: %s\n' "$*" >&2
+        exit 2
+        ;;
+esac
+EOF
+chmod +x "$cW_stub"
+
+cW_out1="$TEST_DIR/cW1.out"
+cW_err1="$TEST_DIR/cW1.err"
+cW_args1="$TEST_DIR/cW1.args"
+cW_rc1=0
+run_hook "$cW_home" "$cW_workspace" "sess-regress-wait-env-001" \
+    "$cW_out1" "$cW_err1" \
+    "CERBERUS_REVIEW_GATE_BIN=$cW_stub" \
+    "$REMOVED_CODEX_WAIT_ENV=0" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=7" \
+    "STUB_WAIT_ARGS=$cW_args1" \
+    || cW_rc1=$?
+cW_args1_body="$(cat "$cW_args1" 2>/dev/null || echo "")"
+
+cW_out2="$TEST_DIR/cW2.out"
+cW_err2="$TEST_DIR/cW2.err"
+cW_args2="$TEST_DIR/cW2.args"
+cW_rc2=0
+run_hook "$cW_home" "$cW_workspace" "sess-regress-wait-env-001" \
+    "$cW_out2" "$cW_err2" \
+    "CERBERUS_REVIEW_GATE_BIN=$cW_stub" \
+    "$REMOVED_CODEX_WAIT_ENV=0" \
+    "STUB_WAIT_ARGS=$cW_args2" \
+    || cW_rc2=$?
+cW_args2_body="$(cat "$cW_args2" 2>/dev/null || echo "")"
+
+if [[ "$cW_rc1" -eq 0 && "$cW_rc2" -eq 0 \
+      && "$cW_args1_body" == *"--timeout 7"* \
+      && "$cW_args2_body" == *"--timeout 1800"* ]]; then
+    log_pass "Regression — removed Codex wait env ignored; default shared wait is 1800"
+else
+    log_fail "Regression wait env: rc1=$cW_rc1 args1='$cW_args1_body' body1=$(cat "$cW_out1") err1=$(cat "$cW_err1") rc2=$cW_rc2 args2='$cW_args2_body' body2=$(cat "$cW_out2") err2=$(cat "$cW_err2")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -628,7 +695,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Case 12 — Row 13a: SIGTERM mid-execution → allow, exit 0.
-# Use WAIT=10 + pending gate to keep the hook in `wait`. Then SIGTERM.
+# Use MAX_WAIT=10 + pending gate to keep the hook in `wait`. Then SIGTERM.
 # ---------------------------------------------------------------------------
 log_test "Case 12 — Row 13a: SIGTERM mid-execution → allow, exit 0"
 c12_home="$TEST_DIR/case12"
@@ -644,7 +711,7 @@ c12_payload="$TEST_DIR/c12.payload"
 c12_pid_file="$TEST_DIR/c12.pid"
 spawn_hook_bg "$c12_home" "$c12_workspace" "sess-c12-001" \
     "$c12_out" "$c12_err" "$c12_payload" "$c12_pid_file" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=10" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=10" \
     "REVIEW_GATE_POLL_INTERVAL_SECONDS=1"
 c12_pid="$(cat "$c12_pid_file")"
 sleep 2
@@ -688,7 +755,7 @@ c13_payload="$TEST_DIR/c13.payload"
 c13_pid_file="$TEST_DIR/c13.pid"
 spawn_hook_bg "$c13_home" "$c13_workspace" "sess-c13-001" \
     "$c13_out" "$c13_err" "$c13_payload" "$c13_pid_file" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=10" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=10" \
     "REVIEW_GATE_POLL_INTERVAL_SECONDS=1"
 c13_pid="$(cat "$c13_pid_file")"
 sleep 2
@@ -731,7 +798,7 @@ c14_payload="$TEST_DIR/c14.payload"
 c14_pid_file="$TEST_DIR/c14.pid"
 spawn_hook_bg "$c14_home" "$c14_workspace" "sess-c14-001" \
     "$c14_out" "$c14_err" "$c14_payload" "$c14_pid_file" \
-    "CERBERUS_CODEX_STOP_WAIT_SECONDS=10" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=10" \
     "REVIEW_GATE_POLL_INTERVAL_SECONDS=1"
 c14_pid="$(cat "$c14_pid_file")"
 sleep 2
@@ -766,7 +833,7 @@ c15_rc=0
           CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
           CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
           REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
-          CERBERUS_CODEX_STOP_WAIT_SECONDS \
+          REVIEW_GATE_MAX_WAIT_SECONDS \
           CERBERUS_REVIEW_GATE_BIN \
           CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
           __CERBERUS_ALIAS_WARNED || true
@@ -834,7 +901,7 @@ cR2_rc=0
           CERBERUS_STATE_ROOT CERBERUS_SESSION_ID \
           CERBERUS_TRANSCRIPT_PATH CERBERUS_ROOT \
           REVIEW_GATE_SESSION_KEY REVIEW_GATE_POLL_INTERVAL_SECONDS \
-          CERBERUS_CODEX_STOP_WAIT_SECONDS \
+          REVIEW_GATE_MAX_WAIT_SECONDS \
           CERBERUS_REVIEW_GATE_BIN \
           CLAUDE_PROJECT_DIR CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH \
           __CERBERUS_ALIAS_WARNED || true

@@ -118,6 +118,26 @@ __cerberus_restore_signal_trap() {
     trap '__cerberus_stop_safe_exit' INT TERM HUP
 }
 
+__cerberus_untrack_child() {
+    local pid="$1"
+    local next=()
+    local n i cur
+    n=${#__CERBERUS_STOP_CHILD_PIDS[@]}
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        cur="${__CERBERUS_STOP_CHILD_PIDS[$i]}"
+        if [ "$cur" != "$pid" ]; then
+            next+=("$cur")
+        fi
+        i=$((i + 1))
+    done
+    if [ "${#next[@]}" -eq 0 ]; then
+        __CERBERUS_STOP_CHILD_PIDS=()
+    else
+        __CERBERUS_STOP_CHILD_PIDS=("${next[@]}")
+    fi
+}
+
 __cerberus_emit_body() {
     local body="$1"
     trap '' INT TERM HUP
@@ -175,6 +195,7 @@ if [ ! -t 0 ]; then
         _stdin_drain_pid=$!
         __CERBERUS_STOP_CHILD_PIDS+=("$_stdin_drain_pid")
         wait "$_stdin_drain_pid" 2>/dev/null || true
+        __cerberus_untrack_child "$_stdin_drain_pid"
         INPUT="$(cat "$_stdin_drain_out" 2>/dev/null || echo "")"
         rm -f "$_stdin_drain_out" 2>/dev/null || true
         unset _stdin_drain_out _stdin_drain_pid
@@ -315,13 +336,6 @@ if [ -z "$RUN_DIR" ] || [ ! -d "$RUN_DIR" ]; then
     exit 0
 fi
 
-# ---- Wait knob ------------------------------------------------------------
-WAIT_SECONDS_RAW="${CERBERUS_CODEX_STOP_WAIT_SECONDS:-0}"
-case "$WAIT_SECONDS_RAW" in
-    ''|*[!0-9]*) WAIT_SECONDS=0 ;;
-    *)           WAIT_SECONDS="$WAIT_SECONDS_RAW" ;;
-esac
-
 # Helper: invoke `review-gate status --json --session-key <run>` and
 # capture body+rc.
 #
@@ -340,6 +354,7 @@ __cerberus_call_status() {
     __CERBERUS_STOP_CHILD_PIDS+=("$status_pid")
     wait "$status_pid" 2>/dev/null
     rc=$?
+    __cerberus_untrack_child "$status_pid"
     return $rc
 }
 
@@ -401,9 +416,16 @@ __cerberus_format_resolved_fail_message() {
     ' 2>/dev/null || echo "Cerberus gate resolved with consensus: fail."
 }
 
-# Decision-matrix evaluator. Mode `initial` may spawn a wait child if
-# pending + WAIT_SECONDS>0; mode `post-wait` skips that and falls through
-# to the row-4 message instead (avoiding infinite recursion).
+# Shared wait timeout. Match the Claude hook default; this is not a
+# Codex-specific user-facing knob.
+MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
+case "$MAX_WAIT_SECONDS" in
+    ''|*[!0-9]*) MAX_WAIT_SECONDS=1800 ;;
+esac
+
+# Decision-matrix evaluator. Mode `initial` waits for pending reviewers;
+# mode `post-wait` skips that and falls through to the row-4 message
+# instead (avoiding infinite recursion on timeout).
 __cerberus_decide() {
     local body="$1"
     local mode="$2"   # initial | post-wait
@@ -414,11 +436,11 @@ __cerberus_decide() {
 
     case "$gs" in
         pending)
-            if [ "$mode" = "initial" ] && [ "$WAIT_SECONDS" -gt 0 ]; then
+            if [ "$mode" = "initial" ] && [ "$MAX_WAIT_SECONDS" -gt 0 ]; then
                 __cerberus_run_wait_then_reeval
                 return 0
             fi
-            # Row 4 (and Row 5a fallthrough).
+            # Pending reviewers did not complete within the wait budget.
             __cerberus_emit_allow "reviewers still running; run Cerberus: Status to check"
             ;;
         awaiting_decision)
@@ -463,11 +485,11 @@ __cerberus_decide() {
     esac
 }
 
-# Row 5: wait then re-evaluate. Spawns `review-gate wait --json
-# --timeout N --session-key <run>` as a backgrounded child whose PID is
-# stored in __CERBERUS_STOP_CHILD_PIDS so the trap can SIGTERM it on
-# signal. After the child exits we re-call `status` to obtain the
-# canonical post-wait state and re-apply the matrix in `post-wait` mode.
+# Wait then re-evaluate. Spawns `review-gate wait --json --timeout N
+# --session-key <run>` as a backgrounded child whose PID is stored in
+# __CERBERUS_STOP_CHILD_PIDS so the trap can SIGTERM it on signal. After
+# the child exits we re-call `status` to obtain the canonical post-wait
+# state and re-apply the matrix in `post-wait` mode.
 __cerberus_run_wait_then_reeval() {
     local wait_out wait_err
     wait_out="$(mktemp -t codex-stop-wait.XXXXXX 2>/dev/null || echo "")"
@@ -478,9 +500,6 @@ __cerberus_run_wait_then_reeval() {
     fi
     __CERBERUS_STOP_TMPFILES+=("$wait_out" "$wait_err")
 
-    # Use a tight poll interval inside the child so completion mid-wait
-    # is detected promptly. Honor an externally-set value if the user
-    # tuned it; otherwise default to 1s for the bounded-stop budget.
     local poll
     poll="${REVIEW_GATE_POLL_INTERVAL_SECONDS:-1}"
     case "$poll" in
@@ -490,25 +509,16 @@ __cerberus_run_wait_then_reeval() {
         poll=1
     fi
 
-    # Spawn as direct background command so $! is the actual review-gate
-    # PID. That makes the trap's `kill -TERM <PID>` terminate the
-    # review-gate process (not just a wrapping subshell that would leave
-    # review-gate orphaned). CERBERUS_HOST / CERBERUS_PROJECT_KEY are
-    # already exported above; they propagate into the child.
     REVIEW_GATE_POLL_INTERVAL_SECONDS="$poll" \
         "$REVIEW_GATE_BIN" wait --json \
-            --timeout "$WAIT_SECONDS" \
+            --timeout "$MAX_WAIT_SECONDS" \
             --session-key "$RUN_KEY" \
             >"$wait_out" 2>"$wait_err" &
     local wait_pid=$!
     __CERBERUS_STOP_CHILD_PIDS+=("$wait_pid")
     wait "$wait_pid" 2>/dev/null || true
+    __cerberus_untrack_child "$wait_pid"
 
-    # Re-call status to get a fresh canonical view. (We deliberately do
-    # NOT consume `wait`'s body here even though it carries verdicts —
-    # the matrix is defined over `status --json`'s schema, and going
-    # through status keeps the row 6/7/8/9 evaluator code paths
-    # identical between mode=initial and mode=post-wait.)
     local rs_out rs_err rs_rc=0
     rs_out="$(mktemp -t codex-stop-status2.XXXXXX 2>/dev/null || echo "")"
     rs_err="$(mktemp -t codex-stop-status2-err.XXXXXX 2>/dev/null || echo "")"
@@ -529,7 +539,6 @@ __cerberus_run_wait_then_reeval() {
     rm -f "$wait_out" "$wait_err" "$rs_out" "$rs_err"
 
     if [ "$rs_rc" -eq 4 ]; then
-        # Run vanished mid-wait — failure-open.
         __cerberus_emit_allow ""
         return 0
     fi
@@ -543,7 +552,6 @@ __cerberus_run_wait_then_reeval() {
         return 0
     fi
 
-    # Detect malformed-state sentinel from status body.
     local rs_status rs_error
     rs_status="$(__jq_get "$rs_body" '.status // empty')"
     rs_error="$(__jq_get "$rs_body" '.error // empty')"

@@ -5,10 +5,11 @@
 > back-compat alias indefinitely. State layout is
 > `~/.cerberus/projects/<project-key>/<run-key>/` for non-Claude hosts,
 > with `"host"` recorded in `gate-state.json`. New `status --json`
-> command (non-mutating, non-blocking). Codex `Stop` never waits by
-> default; opt-in via `CERBERUS_CODEX_STOP_WAIT_SECONDS=N`. Codex install
-> is two-step (`.codex-plugin/plugin.json` for skills + user-installed
-> `templates/codex-hooks.json` for hooks). Amp run-key fallback: UUID
+> command (non-mutating, non-blocking). Codex `Stop` waits for pending
+> reviewers using `REVIEW_GATE_MAX_WAIT_SECONDS` (default `1800`). Codex install
+> uses `.codex-plugin/plugin.json` plus plugin-bundled
+> `hooks/codex-hooks.json`; `templates/codex-hooks.json` is a legacy
+> fallback. Amp run-key fallback: UUID
 > persisted at `~/.cerberus/runtime/amp/<workspace-key>/active-session.json`.
 > Amp lifecycle handlers OUT of v1. Resolver lives inline in
 > `bin/review-gate-lib.sh`. `CERBERUS_HOST=generic` is first-class.
@@ -119,8 +120,8 @@
 - **No central feature flag.** Neutral behavior is opt-in through
   `CERBERUS_*` env vars. Codex lifecycle behavior is opt-in through
   hook template installation.
-- **`CERBERUS_CODEX_STOP_WAIT_SECONDS=N`** is the only v1 wait knob for
-  Codex `Stop`. Default is `0` (never wait).
+- Codex `Stop` uses the shared `REVIEW_GATE_MAX_WAIT_SECONDS` review
+  wait budget. Default is `1800`, matching the Claude hook.
 
 ### Testing Constraints
 
@@ -144,12 +145,10 @@
 
 - **Codex:** Has lifecycle hook JSON (`SessionStart`, `Stop`) but **no
   `CLAUDE_ENV_FILE` equivalent** for persisting env across invocations.
-  Plugin packaging via `.codex-plugin/plugin.json` (skills only).
-  Lifecycle hooks are installed via a separate `templates/codex-hooks.json`
-  template that the user installs into their Codex config (two-step
-  install). Plugin install root path is **not assumed stable** — hook
-  templates document the expected substitution and Phase 1 includes a
-  small spike to confirm or refute (OQ-2).
+  Plugin packaging via `.codex-plugin/plugin.json`; lifecycle hooks are
+  loaded from plugin-bundled `hooks/codex-hooks.json` when `plugin_hooks`
+  is enabled. The legacy `templates/codex-hooks.json` manual template is
+  retained only as a fallback for older Codex versions.
 - **Amp:** TypeScript plugin under `.amp/plugins/`. Requires
   `PLUGINS=all amp`. Plugin code runs in Bun. Exposes
   `amp.registerCommand`, lifecycle events `session.start`,
@@ -555,7 +554,7 @@ authoritative state.
 | `CERBERUS_SESSION_ID` | Host session/thread id | `CLAUDE_SESSION_ID` |
 | `CERBERUS_RUN_KEY` | Cerberus review identity (canonical) | `REVIEW_GATE_SESSION_KEY` (back-compat alias, indefinite) |
 | `CERBERUS_TRANSCRIPT_PATH` | Optional host transcript path | `CLAUDE_TRANSCRIPT_PATH`, `REVIEW_GATE_TRANSCRIPT_PATH` |
-| `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Bounded Codex `Stop` wait knob | default `0` (never wait) |
+| `REVIEW_GATE_MAX_WAIT_SECONDS` | Shared reviewer wait budget for Stop hooks | default `1800` |
 
 **Alias precedence rule:** `CERBERUS_*` wins over the legacy alias when
 both are non-empty. Empty strings treated as unset. Differing values
@@ -740,12 +739,12 @@ response. The hook **always exits 0** and emits a single JSON blob to
 stdout. Long operations (waits) sit between the initial `status` read
 and a re-evaluation.
 
-| # | Gate state (initial `status --json`) | `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Action |
+| # | Gate state (initial `status --json`) | `REVIEW_GATE_MAX_WAIT_SECONDS` | Action |
 |---|---|---|---|
 | 1 | `status --json` exits 4 (no active gate) | any | `{"continue":true}` |
 | 2 | Registry file missing | any | `{"continue":true}` (no run to look up) |
 | 3 | Registry present but `<run-key>/` missing | any | `{"continue":true,"systemMessage":"no review dir"}` |
-| 4 | `gate_status == "pending"` | `0` (default) | `{"continue":true,"systemMessage":"reviewers still running; run Cerberus: Status to check"}` |
+| 4 | `gate_status == "pending"` | `0` | `{"continue":true,"systemMessage":"reviewers still running; run Cerberus: Status to check"}` |
 | 5 | `gate_status == "pending"` | `N > 0` | Run `wait --json --timeout N --session-key <run>`; on completion re-evaluate via row 6/7/8/9. On wait timeout: emit row 4 message. |
 | 6 | `gate_status == "awaiting_decision"` AND blocking findings present (per blocking-finding predicate above: any finding with `verdict=="FAIL"` OR `priority` in `{"P0","P1"}`) | any | `{"decision":"block","reason":"<formatted findings summary>"}` |
 | 7 | `gate_status == "awaiting_decision"` AND no blocking findings (empty `aggregated_findings`, or only P2/P3 non-FAIL findings, or only `parse_errors`) | any | `{"continue":true}` (rare; finalize via existing `wait` path before reaching here) |
@@ -829,7 +828,8 @@ CLAUDE_PLUGIN_ROOT=<plugin root>               # transient compat alias
 | `skills/ask/SKILL.md` | **New** | Codex skill: Ask Panel. |
 | `skills/status/SKILL.md` | **New** | Codex skill: Status. |
 | `skills/clear-gate/SKILL.md` | **New** | Codex skill: Clear Gate. |
-| `templates/codex-hooks.json` | **New** | User-installed lifecycle hook template (two-step install). |
+| `hooks/codex-hooks.json` | **New** | Plugin-bundled lifecycle hook config. |
+| `templates/codex-hooks.json` | **New** | Legacy manual lifecycle hook template fallback. |
 | `.amp/plugins/cerberus.ts` | **New** | Amp plugin (commands + shell helper). Experimental directive comment required. |
 | `.amp/in/` | Exists | Amp plugin input directory (already present; no changes). |
 | `bin/tests/test-host-neutral-state.sh` | **New** | Phase 0: state-resolution decision matrix, alias precedence, validation. |
@@ -905,7 +905,8 @@ recovering session/run identity without Claude's env-file persistence.
 - Add `.codex-plugin/plugin.json` declaring six skills.
 - Author Tier 1 skill markdown under `skills/` (six files:
   review-code, review-plan, review-spec, ask, status, clear-gate).
-- Add `templates/codex-hooks.json` (user installs into Codex config).
+- Add `hooks/codex-hooks.json` for plugin-bundled lifecycle hooks and
+  keep `templates/codex-hooks.json` as the legacy manual fallback.
 - Implement `bin/codex-session-init`:
   - Read Codex `SessionStart` JSON from stdin.
   - Compute `project_key` from cwd or workspace root via existing
@@ -1026,14 +1027,14 @@ orchestrator / port if Codex or Amp exposes equivalent task primitives.
 | Registry file present but `gate-state.json` missing under `<run-key>/` | `status --json` returns `{"status":"no_active_gate"}` (exit 4); Codex Stop allows. |
 | `gate-state.json` write contention from same-run multiple writers | Existing single-writer assumption preserved (one `bin/review-gate` per run); not a new risk. |
 | Atomic-write contention on `gate-state.json` updates | Continue using existing `*.tmp.$$` + `mv` idiom. New writers (registry, etc.) follow the same pattern. POSIX `rename(2)` atomicity holds within a single filesystem. |
-| Codex `Stop` triggered while reviewer subprocess writing `reviews/<reviewer>.json` | `status --json` reads files atomically per-file; a reviewer mid-write may be missed and counted as still-pending — same race characteristics as existing `wait --json --timeout 0`. Codex Stop emits "still running" message rather than blocking. |
-| `CERBERUS_CODEX_STOP_WAIT_SECONDS=N` exceeded mid-review | `wait` exits with current state; matrix re-evaluates with possibly-still-pending state → emits "still running" message; user can re-invoke `Cerberus: Status`. |
+| Codex `Stop` triggered while reviewer subprocess writing `reviews/<reviewer>.json` | `status --json` reads files atomically per-file; a reviewer mid-write may be missed and counted as still-pending — same race characteristics as existing `wait --json`. Codex Stop waits up to the shared review budget before emitting a still-running message. |
+| `REVIEW_GATE_MAX_WAIT_SECONDS=N` exceeded mid-review | `wait` exits with current state; matrix re-evaluates with possibly-still-pending state → emits "still running" message; user can re-invoke `Cerberus: Status`. |
 | Telemetry directory creation fails (disk full) | Existing `init_iteration_dir` already tolerates this with warning; same on neutral path because path is `$REVIEW_DIR`-relative. |
 | Telemetry under new layout | `run-telemetry.json` already records iterations/tokens/cost; works automatically on neutral path because it's `$REVIEW_DIR`-relative. No `bin/telemetry-lib.sh` changes. |
 | SIGTERM / SIGINT / SIGHUP to `bin/codex-stop-hook` mid-execution | `trap` emits `{"continue":true}` JSON to stdout, kills child wait/status, exits 0. No partial JSON to Codex. |
 | User runs `Cerberus: Clear Gate` while reviewers still spawning | Existing `resolve` writes `gate-state.json` with status=resolved; in-flight reviewers' results are archived to `reviews-iter-<n>/` (existing behavior at `bin/review-gate-lib.sh:113-124`). |
 | Amp `ctx.thread.id` flips mid-session (unstable) | Shell helper detects via comparison with persisted `amp_thread_id`; logs warning; uses persisted UUID for continuity. |
-| Codex install root path env var unstable across versions | Hook template uses placeholder substitution; `docs/CODEX.md` documents manual edit. OQ-2 spike confirms. |
+| Codex install root path env var unstable across versions | Current bundled hooks use `${PLUGIN_ROOT}`; legacy hook template uses placeholder substitution and `docs/CODEX.md` documents it as a fallback. |
 | User has both `CLAUDE_PLUGIN_ROOT` and `CERBERUS_ROOT` set to different paths | `CERBERUS_ROOT` wins; `bin/generate` and skills load from `CERBERUS_ROOT`. Documented in `docs/CODEX.md`. |
 | `~/.cerberus/` doesn't exist on first non-Claude run | Created lazily via `mkdir -p` in `init_iteration_dir` (existing pattern); same on neutral path. |
 | Project key collision: two repos hash identically | Vanishingly unlikely (path-based hash); not a v1 concern. Override via `CERBERUS_PROJECT_KEY` available. |
@@ -1156,7 +1157,7 @@ Matrix + signal handling):
 
 1. **Row 1:** no registry → `{"continue":true}`.
 2. **Row 2:** registry → no run dir → `{"continue":true}`.
-3. **Row 4:** pending, `CERBERUS_CODEX_STOP_WAIT_SECONDS=0` →
+3. **Row 4:** pending, `REVIEW_GATE_MAX_WAIT_SECONDS=0` →
    `{"continue":true,"systemMessage":"..."}`.
 4. **Row 5a:** pending, wait knob N=2, reviewers don't finish → fall
    through to allow with "still running" note.
@@ -1231,7 +1232,7 @@ Matrix + signal handling):
 - `Cerberus: Clear Gate` from Codex; verify
   `gate-state.json.status == "resolved"`.
 - Trigger Codex `Stop` with pending reviewers and
-  `CERBERUS_CODEX_STOP_WAIT_SECONDS=0` and `=10`; observe both
+  `REVIEW_GATE_MAX_WAIT_SECONDS=0` and `=10`; observe both
   behaviors.
 - Reload Amp plugin mid-review; reissue `Cerberus: Status` and verify
   reattach.
@@ -1261,7 +1262,7 @@ Matrix + signal handling):
 | `CERBERUS_RUN_KEY` canonical; `REVIEW_GATE_SESSION_KEY` supported | `test-host-neutral-state.sh` rows 8–9. |
 | `bin/review-gate status --json` never modifies any file under `$REVIEW_DIR` | `test-status-command.sh` no-mutation invariant. |
 | Codex `SessionStart` persists run identity for skills and Stop | Codex registry schema; `test-codex-session-registry.sh`; Phase 1 E2E. |
-| Codex `Stop` never waits by default; bounded wait only on opt-in | `test-codex-stop-hook.sh` rows 3–5. |
+| Codex `Stop` waits by default using the shared reviewer wait budget | `test-codex-stop-hook.sh` rows 3–5. |
 | Codex `Stop` continues on blocking findings; allows otherwise | `test-codex-stop-hook.sh` rows 1, 2, 6, 7, 8. |
 | Amp explicit commands work via shared backend | `test-amp-shell-helper.sh`; Phase 2 E2E. |
 | Amp reattaches after plugin reload | Manual smoke; `test-amp-shell-helper.sh` row 3. |
@@ -1282,7 +1283,7 @@ Claude). Substantive resolved decisions:
 | Skeleton `wait --json --timeout 0` decision marked `[TBD]` | Resolved as: add new `status --json` command (non-mutating, non-blocking, exit-4-on-empty). | Cleaner contract for Codex `Stop` and Amp `Status`; avoids `wait`'s polling/finalize semantics. | Yes |
 | Skeleton named adapter binaries `[TBD]` | Resolved as `bin/codex-session-init` and `bin/codex-stop-hook`. | Matches existing `bin/claude-session-init` naming convention. | Yes |
 | Skeleton "Pass criterion for no regression" `[TBD]` | Resolved as: full `bin/tests/*.sh` pass + manual smoke that an existing Claude review still spawns/waits/resolves/clears. | User-confirmed. | Yes |
-| Skeleton hint that Stop hook might wait | Codified as **never wait by default**; bounded opt-in via `CERBERUS_CODEX_STOP_WAIT_SECONDS=N`, default `0`. | Avoids trapped-user UX. | Yes |
+| Skeleton hint that Stop hook might wait | Codified as waiting by default via the shared `REVIEW_GATE_MAX_WAIT_SECONDS` budget, default `1800`. | Matches Claude Stop behavior while preserving failure-open timeout handling. | Yes |
 | Skeleton omitted explicit failure-open principle for Codex Stop | Added: any Cerberus-side failure → `{"continue":true}`. | Defensive default; users must never be unable to stop Codex due to a Cerberus bug. | New — design decision |
 | Skeleton omitted explicit alias-precedence rule | Added: `CERBERUS_*` wins over legacy alias when both set non-empty; empty treated as unset; warning emitted on mismatch. | Disambiguation needed for testing and back-compat documentation. | New — design decision |
 | Skeleton omitted signal-handling spec for Codex Stop | Added: `trap INT TERM HUP` emitting safe-allow JSON; child wait/status killed via stored PID. | Avoids partial JSON to Codex stdin under cancel. | New — design decision |
@@ -1313,20 +1314,15 @@ during phase spikes:
     T007 marks the manifest **best-effort** with `version: "1.0.0"`
     and a sibling note; revisit when an authoritative schema lands.
 - **OQ-2 (Phase 1 spike):** Whether Codex exposes a stable plugin-install
-  path env var. If not, document the manual hook-template edit step in
-  `docs/CODEX.md`.
-  - **OQ-2 resolved (2026-04-30, T006):** **No** stable Codex-provided
-    env var equivalent to `CLAUDE_PLUGIN_ROOT` is documented as of
-    2026-04-30. Adopted fallback: `templates/codex-hooks.json` ships
-    with the documented placeholder `<CERBERUS_INSTALL_ROOT>`, which
-    the user replaces with their absolute install-root path during the
-    second install step. The shared backend continues to read
-    `CERBERUS_ROOT` (with `CLAUDE_PLUGIN_ROOT` fallback) via
-    `__cerberus_resolve_root`, so users who prefer to set
-    `CERBERUS_ROOT` in their shell profile work without editing the
-    template. If a future Codex release publishes a stable env var,
-    the template defaults are updated and the manual-edit path becomes
-    a documented fallback. Detail in
+  path env var. If plugin-bundled hooks are unavailable, document the
+  manual hook-template edit step in `docs/CODEX.md`.
+  - **OQ-2 resolved (2026-04-30, T006):** Current Codex plugin hooks
+    provide `${PLUGIN_ROOT}` for bundled `hooks/codex-hooks.json`; the
+    manual `templates/codex-hooks.json` placeholder remains as a legacy
+    fallback. The shared backend continues to read `CERBERUS_ROOT` (with
+    `CLAUDE_PLUGIN_ROOT` fallback) via `__cerberus_resolve_root`, so
+    users can keep pointing the backend at their checkout root whether
+    Codex loads bundled hooks or the legacy template. Detail in
     [`docs/CODEX.md` §Phase 1 Spike Findings](CODEX.md#phase-1-spike-findings).
 - **OQ-3 (Phase 2 spike):** Whether Amp `ctx.thread.id` is durable in
   both command handlers and lifecycle events. The plan already designs

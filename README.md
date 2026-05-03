@@ -60,14 +60,14 @@ Missing reviewers are skipped with a warning. You can run with just one or two.
 ```
 
 > **Codex CLI users:** the `/plugin` flow above is Claude-specific. To
-> install Cerberus under Codex, follow the two-step install in
-> [`docs/CODEX.md`](docs/CODEX.md) (clone the repo, then substitute
-> `<CERBERUS_INSTALL_ROOT>` in `templates/codex-hooks.json` and copy
-> the result into Codex's hooks file). Codex ships the six Tier-1
-> review skills (`review-code`, `review-plan`, `review-spec`, `ask`,
-> `status`, `clear-gate`) plus the `SessionStart` and `Stop` lifecycle
-> hooks. Generator workflows and Cerberus team automation are
-> Claude-only in v1.
+> install Cerberus under Codex, follow [`docs/CODEX.md`](docs/CODEX.md).
+> Current Codex installs load the plugin-bundled lifecycle hooks from
+> `hooks/codex-hooks.json`; `templates/codex-hooks.json` is only a
+> legacy fallback for Codex versions without plugin hook loading. Codex
+> ships the six Tier-1 review skills (`review-code`, `review-plan`,
+> `review-spec`, `ask`, `status`, `clear-gate`) plus the `SessionStart`
+> and `Stop` lifecycle hooks. Generator workflows and Cerberus team
+> automation are Claude-only in v1.
 
 ## Usage
 
@@ -486,7 +486,6 @@ The shared backend reads a host-neutral env contract. Every entry has a legacy a
 | `CERBERUS_SESSION_ID` | Host session/thread id | `CLAUDE_SESSION_ID` |
 | `CERBERUS_RUN_KEY` | Cerberus review identity (canonical) | `REVIEW_GATE_SESSION_KEY` (back-compat alias, indefinite) |
 | `CERBERUS_TRANSCRIPT_PATH` | Optional host transcript path | `CLAUDE_TRANSCRIPT_PATH`, `REVIEW_GATE_TRANSCRIPT_PATH` |
-| `CERBERUS_CODEX_STOP_WAIT_SECONDS` | Bounded Codex `Stop` wait knob | default `0` (never wait) |
 
 **Compatibility for existing Claude users:** zero changes required for the `/cerberus:*` invocation surface. Existing env vars, paths, hooks, and tests continue to work; the prompt bodies now live under `skills/<skill>/SKILL.md` instead of flat `commands/*.md`. Existing CLI scripts/integrations using `REVIEW_GATE_SESSION_KEY`, `REVIEW_GATE_TRANSCRIPT_PATH`, and `CLAUDE_PLUGIN_ROOT` keep working as aliases.
 

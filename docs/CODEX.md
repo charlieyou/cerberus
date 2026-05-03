@@ -108,7 +108,7 @@ same time, or Codex will run duplicate Cerberus hooks.
 
 ### Verifying the install
 
-After both steps, start a Codex session and run the `status` skill
+After install, start a Codex session and run the `status` skill
 (invocation form is host-dependent; e.g. `cerberus:status` from the
 skill picker). You should see a JSON document on stdout with `status`
 set to `no_active_gate` or similar, never an error like "command not
@@ -256,34 +256,23 @@ precedence). The resolution reason is recorded as `manual clear from
 Codex` so audit trails make the source of the
 clear unambiguous.
 
-## Stop-Hook Wait Knob (`CERBERUS_CODEX_STOP_WAIT_SECONDS`)
+## Stop-Hook Wait Behavior
 
 Codex `Stop` is a synchronous lifecycle boundary: the hook either
 allows the stop or asks Codex to continue with a user message. The
-default Cerberus behavior is to **never block the user from stopping**
-when reviewers are still running — instead, the hook emits an
-`{"continue":true, "systemMessage":"reviewers still running; run
-Cerberus: Status to check"}` and returns immediately.
+Cerberus behavior is to wait for pending reviewers before deciding,
+matching the Claude Stop hook. When a gate is `pending`, the hook
+spawns `bin/review-gate wait --json --timeout N --session-key <run>` as
+a backgrounded child, waits up to the shared review wait budget
+(`REVIEW_GATE_MAX_WAIT_SECONDS`, default `1800`), then re-evaluates
+state via the Stop Decision Matrix.
 
-If you want a bounded wait (so reviewers that are about to finish
-have a chance to land a verdict before the user stops), set
-`CERBERUS_CODEX_STOP_WAIT_SECONDS=N` (positive integer, seconds).
-With `N>0` and a `pending` gate, the hook spawns
-`bin/review-gate wait --json --timeout N --session-key <run>` as a
-backgrounded child, waits up to `N` seconds, then re-evaluates state
-via the Stop Decision Matrix:
-
-| `WAIT_SECONDS` | `pending` gate behavior |
-|---|---|
-| `0` (default) | Emit allow immediately; user stops without waiting. |
-| `N > 0` | Wait up to `N` seconds for `wait --json --timeout N`; re-run the matrix on completion. On wait timeout, emit the same "still running" allow as `0`. |
-
-The wait knob applies **only** to `gate_status == "pending"`. Other
-states (`awaiting_decision`, `resolved`) are evaluated immediately and
-do not respect the wait knob — there's nothing to wait for.
-
-Set the variable in your shell profile or your Codex hooks config's
-environment block. Empty / non-numeric values are treated as `0`.
+Other states (`awaiting_decision`, `resolved`) are evaluated
+immediately because there is nothing still running to wait for. If the
+wait budget is exhausted while reviewers are still pending, the hook
+emits `{"continue":true,"systemMessage":"reviewers still running; run
+Cerberus: Status to check"}` so the user can stop and inspect status
+later.
 
 ## Failure-Open Behavior
 
@@ -325,17 +314,18 @@ registry intact.
 
 ## Troubleshooting
 
-### `<CERBERUS_INSTALL_ROOT>` placeholder not substituted
+### Legacy Manual Template Placeholder Not Substituted
 
 **Symptom:** SessionStart or Stop fails with `command not found:
 <CERBERUS_INSTALL_ROOT>/bin/...`.
 
-**Fix:** Re-run the `sed` substitution in
-[Step 2](#step-2--runtime-root--lifecycle-hooks) with the absolute
-backend checkout root, or set `CERBERUS_ROOT` and switch the template
-to `${CERBERUS_ROOT}`. Confirm the resulting `~/.codex/hooks.json`
-contains an absolute path (or the literal `${CERBERUS_ROOT}`) in every
-`command:` field.
+**Fix:** This only applies to the legacy manual hook template. Re-run
+the `sed` substitution with the absolute backend checkout root, or set
+`CERBERUS_ROOT` and switch the template to `${CERBERUS_ROOT}`. Confirm
+the resulting `~/.codex/hooks.json` contains an absolute path (or the
+literal `${CERBERUS_ROOT}`) in every `command:` field. If you are using
+plugin-bundled hooks, ensure `plugin_hooks = true` and restart Codex
+instead.
 
 ### Skill cannot find `bin/review-gate`
 
@@ -432,14 +422,14 @@ CERBERUS_RUN_KEY=<K> \
 
 **Symptom:** Codex reports the Stop hook took longer than its
 timeout budget (default `2100` seconds in
-`templates/codex-hooks.json`, set high to accommodate
-`CERBERUS_CODEX_STOP_WAIT_SECONDS=N` use cases).
+`templates/codex-hooks.json`, set high to accommodate the shared
+reviewer wait budget).
 
 **Fix:** The Stop hook is failure-open and should not block longer
-than `CERBERUS_CODEX_STOP_WAIT_SECONDS` (default `0`). If you observe
-a hang, send SIGTERM to the hook process — the trap will emit a
-single allow envelope and exit 0. File a bug report including the
-stderr log lines (search for `codex-stop-hook:`).
+than `REVIEW_GATE_MAX_WAIT_SECONDS` (default `1800`). If you observe a
+hang, send SIGTERM to the hook process — the trap will emit a single
+allow envelope and exit 0. File a bug report including the stderr log
+lines (search for `codex-stop-hook:`).
 
 ## Manual Smoke Test (Phase 1 Release Gate)
 
@@ -455,9 +445,9 @@ CI gate.
 
 1. **Install.** Clone the repo, configure the package from
    the repository root per [Install](#install), set `CERBERUS_ROOT` to
-   the backend checkout root, and substitute the hook placeholder with
-   that same backend root. Confirm the resulting hooks file points at
-   absolute paths inside the backend checkout root.
+   the backend checkout root, and confirm the installed plugin manifest
+   points at `hooks/codex-hooks.json`. Confirm `codex_hooks` and
+   `plugin_hooks` are enabled before starting a new Codex session.
 2. **Codex session registry.** Trigger Codex `SessionStart` (start a
    new Codex session), then submit a prompt to exercise
    `UserPromptSubmit`. Confirm
@@ -470,28 +460,23 @@ CI gate.
    - `gate-state.json` appears under
      `~/.cerberus/projects/<workspace-key>/<run-key>/`.
    - `gate-state.json.host == "codex"`.
-4. **`Stop` matrix — wait disabled.** With reviewers still running
-   (`gate_status == "pending"`) and `CERBERUS_CODEX_STOP_WAIT_SECONDS`
-   unset (or `0`), trigger Codex `Stop`. Confirm the hook emits
+4. **`Stop` matrix — pending wait.** With reviewers still running
+   (`gate_status == "pending"`), trigger Codex `Stop`. Confirm the hook
+   waits for reviewers up to the shared wait budget and then either
+   applies the completed gate decision or emits
    `{"continue":true,"systemMessage":"reviewers still running; run
-   Cerberus: Status to check"}` and Codex stops immediately.
-5. **`Stop` matrix — wait enabled.** Set
-   `CERBERUS_CODEX_STOP_WAIT_SECONDS=10`, repeat the previous step.
-   Confirm the hook waits up to ~10 seconds and either:
-   - Emits an updated allow (if reviewers landed mid-wait), or
-   - Re-emits the "still running" allow with the same wait timeout
-     fallback message.
-6. **`Cerberus: Status` after completion.** When the panel finishes,
+   Cerberus: Status to check"}` if the budget is exhausted.
+5. **`Cerberus: Status` after completion.** When the panel finishes,
    invoke `status`. The body is the canonical active-gate shape:
    confirm `gate_status` is one of `pending`, `awaiting_decision`, or
    `resolved`; that `consensus_verdict` is one of `pass`, `fail`,
    `needs_revision`, or JSON `null`; and that `aggregated_findings`
    is the expected array. (The smaller special-body shape keyed off
    `status` only appears for `no_active_gate` / `malformed_state`.)
-7. **`Cerberus: Clear Gate`.** Invoke `clear-gate`. Confirm
+6. **`Cerberus: Clear Gate`.** Invoke `clear-gate`. Confirm
    `gate-state.json.status` flips to `resolved` with reason
    `manual clear`.
-8. **Host-recorded metadata.** For every Codex-originated run created
+7. **Host-recorded metadata.** For every Codex-originated run created
    above, confirm `gate-state.json.host == "codex"`. Re-run a Claude
    review in the same workspace and confirm the Claude run is
    recorded with `host: "claude"` (cross-host filtering smoke).
@@ -591,7 +576,7 @@ This is the manifest shape:
 ```json
 {
   "name": "cerberus",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Three-headed guardian of code quality. Multi-model consensus review with Codex, Gemini, and Claude.",
   "author": {
     "name": "charlieyou"
@@ -634,38 +619,39 @@ This is the manifest shape:
 **Resolution:** **No** stable, documented Codex-provided env var
 equivalent to Claude's `CLAUDE_PLUGIN_ROOT` is known as of 2026-04-30.
 
-**Fallback approach (adopted, shipping in v1):** `templates/codex-hooks.json`
-ships with a documented placeholder string that the user manually edits
-during install. The placeholder is:
+**Legacy fallback approach:** `templates/codex-hooks.json` ships with a
+documented placeholder string for older Codex versions that do not load
+plugin-bundled lifecycle hooks. The placeholder is:
 
 ```text
 <CERBERUS_INSTALL_ROOT>
 ```
 
 It appears in every `command:` field in the hook template that needs
-to invoke a Cerberus binary. The user replaces it with the absolute
-path to their Cerberus backend checkout root (the directory containing
-`bin/` and `templates/`) when installing the hook template into Codex's
-hooks config. Do not use the discovery-only `` package
-root for this substitution.
+to invoke a Cerberus binary. In current Codex installs the bundled
+`hooks/codex-hooks.json` uses `${PLUGIN_ROOT}`, so no manual placeholder
+substitution is required. The legacy `templates/codex-hooks.json`
+fallback still contains `<CERBERUS_INSTALL_ROOT>` for older Codex
+versions that do not load plugin-bundled lifecycle hooks; if you use
+that fallback, replace the placeholder with the absolute Cerberus
+backend checkout root (the directory containing `bin/` and
+`templates/`). Do not use Codex's plugin cache path for this
+substitution.
 
 **Rationale.**
 
-- Plan §Risks (L1033) already calls this case out: *"Codex install root
-  path env var unstable across versions | Hook template uses
-  placeholder substitution; `docs/CODEX.md` documents manual edit."*
-  This spike confirms the assumed risk is real and selects the
-  fallback the plan pre-described.
+- Plan §Risks (L1033) called out the original placeholder-template
+  fallback. Current Codex plugin hooks provide `${PLUGIN_ROOT}`, so the
+  bundled hook config is now the primary path and the template remains
+  only as a legacy fallback.
 - The shared backend already accepts `CERBERUS_ROOT` as an explicit
   override (plan §API/Interface Design L549). Codex skills also require
   this env var because installed skill markdown is cached and is not
   patched with a local checkout path during install.
-- If a future Codex release ships a stable env var (e.g.
-  `CODEX_PLUGIN_ROOT`), `templates/codex-hooks.json` is updated to
-  default to `${CODEX_PLUGIN_ROOT}` with the manual-edit step
-  documented as a fallback. The shared backend already routes through
-  `__cerberus_resolve_root` which picks `CERBERUS_ROOT` first, so
-  callers who set `CERBERUS_ROOT` in env continue to work either way.
+- The shared backend already routes through `__cerberus_resolve_root`,
+  which picks `CERBERUS_ROOT` first, so callers who set `CERBERUS_ROOT`
+  in env continue to work with either bundled hooks or the legacy
+  manual template.
 
 **Install-time UX (shipping form).**
 
@@ -677,16 +663,14 @@ The Codex install is:
    `cerberus@cerberus-local`, which points at the repository root.
 3. Set `CERBERUS_ROOT` in Codex's shell environment to the backend
    checkout root.
-4. Open `templates/codex-hooks.json`, replace every
-   `<CERBERUS_INSTALL_ROOT>` token with the backend checkout root path
-   (or `${CERBERUS_ROOT}` if you prefer shell expansion), and copy the
-   resulting JSON into Codex's hooks configuration (typically
-   `~/.codex/hooks.json` or the platform equivalent).
+4. Ensure `codex_hooks = true` and `plugin_hooks = true` in Codex's
+   feature config, then start a new Codex session so Codex loads the
+   plugin-bundled `hooks/codex-hooks.json`.
 
-The Cerberus backend itself is unaffected by the placeholder choice; it
-continues to read `CERBERUS_ROOT` (with `CLAUDE_PLUGIN_ROOT` fallback)
-via `__cerberus_resolve_root`. The placeholder lives **only** in the
-hook template, not in any backend code path or current Codex skill body.
+The Cerberus backend itself continues to read `CERBERUS_ROOT` (with
+`CLAUDE_PLUGIN_ROOT` fallback) via `__cerberus_resolve_root`. The
+placeholder lives **only** in the legacy hook template, not in any
+backend code path or current Codex skill body.
 
 ### Implications for downstream tasks (historical)
 
