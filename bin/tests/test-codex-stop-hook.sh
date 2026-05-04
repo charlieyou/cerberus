@@ -521,9 +521,9 @@ fi
 
 # ---------------------------------------------------------------------------
 # Case 5 — Row 5b: pending + MAX_WAIT=8, reviewers finish during wait →
-# re-evaluate via rows 6/7/8/9. We mark all reviewers complete with PASS
-# and update gate-state.json to status=resolved + consensus=pass mid-wait;
-# expected emit is row 8 (plain allow).
+# re-evaluate via rows 6/7/8/9. The hook must call wait --finalize so
+# reviewer sentinels/JSON are reconciled into gate-state.json before the
+# post-wait status probe; expected emit is row 8 (plain allow).
 # ---------------------------------------------------------------------------
 log_test "Case 5 — Row 5b: pending + MAX_WAIT=8, completion mid-wait → row 8 allow"
 c5_home="$TEST_DIR/case5"
@@ -548,7 +548,6 @@ cat > "$c5_rd/reviews/codex.json" <<'EOF'
 {"verdict":"PASS","summary":"all good","findings":[]}
 EOF
 touch "$c5_rd/reviews/codex.done"
-write_gate_state "$c5_rd" "resolved" '{"codex":{}}' '{"verdict":"PASS"}' "$c5_run"
 # Wait for hook to finish (max ~15s budget).
 c5_done=0
 for _ in $(seq 1 30); do
@@ -565,14 +564,20 @@ wait "$c5_pid" 2>/dev/null
 c5_rc=$?
 c5_action="$(stop_action "$c5_out")"
 c5_note="$(stop_system_message "$c5_out")"
+c5_state_status="$(jq -r '.status // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
+c5_state_consensus="$(jq -r '.consensus.verdict // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
+c5_state_reason="$(jq -r '.decision.reason // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
 # Successful re-evaluation under row 8: action=allow + no row-4 note +
 # no row-3 'no review dir' note. (We accept either no `note` field at
 # all, or a note that does NOT contain "still running".)
 if [[ "$c5_rc" -eq 0 && "$c5_action" == "allow" \
-      && "$c5_note" != *"still running"* ]]; then
+      && "$c5_note" != *"still running"* \
+      && "$c5_state_status" == "resolved" \
+      && "$c5_state_consensus" == "PASS" \
+      && "$c5_state_reason" == "wait_finalize_pass" ]]; then
     log_pass "Case 5 — Row 5b: completion mid-wait → row 8 allow"
 else
-    log_fail "Case 5: rc=$c5_rc action=$c5_action note='$c5_note' done=$c5_done body=$(cat "$c5_out") stderr=$(cat "$c5_err")"
+    log_fail "Case 5: rc=$c5_rc action=$c5_action note='$c5_note' done=$c5_done state=$c5_state_status consensus=$c5_state_consensus reason=$c5_state_reason body=$(cat "$c5_out") stderr=$(cat "$c5_err")"
 fi
 
 # ---------------------------------------------------------------------------

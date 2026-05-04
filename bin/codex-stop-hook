@@ -522,7 +522,7 @@ __cerberus_decide() {
     esac
 }
 
-# Wait then re-evaluate. Spawns `review-gate wait --json --timeout N
+# Wait then re-evaluate. Spawns `review-gate wait --json --finalize --timeout N
 # --session-key <run>` as a backgrounded child whose PID is stored in
 # __CERBERUS_STOP_CHILD_PIDS so the trap can SIGTERM it on signal. After
 # the child exits we re-call `status` to obtain the canonical post-wait
@@ -548,6 +548,7 @@ __cerberus_run_wait_then_reeval() {
 
     REVIEW_GATE_POLL_INTERVAL_SECONDS="$poll" \
         "$REVIEW_GATE_BIN" wait --json \
+            --finalize \
             --timeout "$MAX_WAIT_SECONDS" \
             --session-key "$RUN_KEY" \
             >"$wait_out" 2>"$wait_err" &
