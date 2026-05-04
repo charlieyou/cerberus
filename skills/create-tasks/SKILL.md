@@ -59,6 +59,36 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 > **Upstream**: This command accepts output from `/create-plan`.
 > **Downstream**: Output is validated by `/review-tasks` for local/Beads artifacts, or by applying the same validation checks before creating Linear issues.
 
+## Prompt Contract (GPT-5.5)
+
+### Outcome
+
+Generate a validated execution task graph from a stable plan and write it to the requested target (`TODO.md`, Beads, Linear, or agent-team tasks).
+
+### What good means
+
+- Completing every generated task fully implements the plan with no remaining plan work.
+- Every plan objective, acceptance criterion, and MUST/SHALL/REQUIRED-style obligation has an owning task and verification.
+- Each task is a compact engineering ticket: source links, outcome, scope/constraints, concrete changes, observable acceptance criteria, verification, dependencies, and any task-specific notes.
+- Dependencies make parallel execution safe: tasks sharing files or logical prerequisites are ordered; unrelated tasks can run independently.
+- Output-mode side effects are complete and verified: the file is written, Beads graph is ready, Linear project/issues are synced, or team-task file follows the parser contract.
+
+### Constraints
+
+- Treat repo guidance files and skills as constraints and shortcuts, not as reasons to expand the task graph beyond the plan.
+- Use the sections below as the product contract and validation gates; do not narrate or mechanically follow a process when the outcome is already clear.
+- Ask one narrow clarifying question only when ambiguity would change requirements, output destination, or a risky project/team/tooling decision.
+- Keep generated task prompts outcome-focused. Do not repeat generic agent, repo, or tool rules in every task unless they materially affect that task.
+- Preserve requirement wording from the plan/spec. Any task-level rewrite of enumerations, constants, thresholds, states, or acceptance criteria must be logged as an approved deviation.
+
+### Verification
+
+Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, project/issue/dependency re-listing for Linear, and parser-contract checks for agent-team tasks.
+
+### Final response
+
+Return the Phase 7 summary: output location or tracker target, task count, phase/dependency highlights, coverage status, and the next execution command or review step. Do not include hidden reasoning or intermediate drafts.
+
 ## The No-Stragglers Invariant
 
 > **Completing ALL generated tasks MUST fully implement the plan.**
@@ -97,23 +127,7 @@ The user provides either:
 
 ## Workflow
 
-## Prompting Best Practices (Compliance)
-
-Use clear, explicit instructions and structured outputs to reduce ambiguity and improve task quality. Follow these guidelines:
-- Put critical constraints and gates near the top of relevant sections.
-- Use consistent, labeled sections and compact tables for mappings and validation.
-- Ask clarifying questions rather than guessing when plan details are ambiguous or missing.
-- Separate **context** from **requirements** from **output format**.
-- Be explicit about required output formats and include short, representative examples.
-- Prefer explicit, minimal examples for any non-trivial output schema (tables, logs, coverage maps).
-- Use clear headings and bullet lists; avoid unstructured paragraphs for requirements.
-- Avoid contradicting instructions; if conflicts exist, call them out and resolve before generating tasks.
-- Prefer precise, concrete language; avoid vague qualifiers like "maybe" or "as needed".
-- Put instructions before context, and use clear delimiters (e.g., `###` or `"""`) to separate them.
-- Be specific about desired outcome, length, format, and style; provide a minimal example output where possible.
-- If you forbid something, say what to do instead (positive instruction over negative-only).
-- Use checklists/tables for multi-step validation; avoid burying gates in prose.
-- Treat `CLAUDE.md` (if present) as authoritative for repo-specific conventions and constraints.
+Use the phases below to gather enough evidence, generate the graph, and validate it. They are generation constraints, not a transcript format: keep detailed reasoning internal and emit only the required artifacts, validation tables, and final summary.
 
 ### Phase 1: Load Plan Context
 
@@ -123,7 +137,7 @@ Use clear, explicit instructions and structured outputs to reduce ambiguity and 
    - If no plan found, abort: "No plan found. Run /create-plan first."
 
 2. **Load repo guidance (if present)**:
-   - If `CLAUDE.md` exists, read it for repo conventions (tests, commands, style, ownership)
+   - If repo guidance files such as `CLAUDE.md` or `AGENTS.md` exist, read only the parts needed for conventions that affect generated tasks (tests, commands, style, ownership)
 
 3. **Extract from plan**:
    - Context & Goals (feature summary)
@@ -389,6 +403,8 @@ These describe the structure of the *generated tasks*, not the workflow phases a
 
 For each task, create a rich specification.
 
+Each task should read like a compact engineering ticket for an implementation agent. Preserve the standard section names below for parser/review compatibility, but keep content task-specific and outcome-focused instead of restating generic agent process.
+
 **Source Document Links (Hard Gate)**:
 
 Every task MUST include a `**Source Documents**:` section. This is validated in Phase 5.
@@ -429,15 +445,15 @@ Every task MUST include a `**Source Documents**:` section. This is validated in 
 <!-- Use "Spec: N/A" if no spec exists per the Spec Exists Rule above -->
 
 **Goal**:
-What this task accomplishes (1-2 sentences)
+The concrete outcome this task accomplishes (1-2 sentences)
 
 **Context**:
-- Why this matters
-- Relevant background from plan/spec
+- Why this matters for the plan
+- Only the task-specific plan/spec background needed to execute safely
 
 **Scope**:
 - In: what will be changed
-- Out: explicit non-goals
+- Out: explicit non-goals and constraints
 
 **Changes**:
 - `path/to/file.ts` — [Exists|New] — what to do
@@ -448,12 +464,12 @@ What this task accomplishes (1-2 sentences)
 - Example: `idle_timeout config → OrchestratorConfig → AgentSessionConfig.idle_timeout → SessionRunner`
 
 **Acceptance Criteria**:
-- Observable outcome 1
-- Observable outcome 2
+- What good means for this task, expressed as observable outcomes
+- Keep to the task's owned behavior; reference supporting ACs without claiming primary ownership
 
 **Verification**:
-- How to verify this task is complete
-- Test commands to run
+- The narrowest commands/checks that prove this task is complete
+- Test commands to run and the expected passing signal
 - **Config override test** (required for new configurable values): At least one test proving a non-default override reaches runtime via the normal load/construction path (not by constructing config objects directly in the test)
 - **Merge/precedence semantics** (if applicable): Explicit tests for merge/override/precedence/default behavior
 - **Negative cases** (if applicable): At least one test covering rejection/error/invalid input behavior
@@ -466,6 +482,7 @@ What this task accomplishes (1-2 sentences)
 
 **Notes for Agent**:
 - Edge cases, gotchas, constraints
+- Completion response should summarize the outcome, files changed, verification commands/results, and any remaining risk or blocker
 ```
 
 ### Phase 4b: Sizing Verification
@@ -774,9 +791,10 @@ Key sections to include:
 - **Header**: Feature name, generated date, links to plan/spec
 - **Task Summary table**: Phase, task count, parallel count, dependencies
 - **Phase sections**: Setup → Foundation → US1/US2/USn → Polish
-- **Per-task format**: `- [ ] **T00X** [P] [USn] Description` with Files/Depends/Verify
+- **Per-task format**: `- [ ] **T00X** [P] [USn] Description` with Source Documents, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Completion Response guidance
 - **Dependencies Graph**: ASCII visualization of task ordering
 - **AC Coverage table**: Map spec acceptance criteria to tasks
+- **Validation Artifacts**: Sizing Summary, Requirements Snapshot, Consistency Audit, Deviation Log, Obligation Coverage, plus System Wiring Coverage and Propagation Map when applicable
 
 ### Phase 7: Report
 

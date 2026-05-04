@@ -51,28 +51,45 @@ plan_link: <plan>.md#L45-L67
 ### Source Documents
 
 - Plan: [<plan>.md#L45-L67](<plan>.md#L45-L67) — Section: <section title>
-- Spec: [<spec>.md#L12-L34](<spec>.md#L12-L34) — <story or AC label>, or N/A
+- Spec: [<spec>.md#L12-L34](<spec>.md#L12-L34) — <story or AC label> (or `Spec: N/A` if no spec exists)
 
-### Files
-
-- `path/a.py` (New|Exists)
-- `path/b.py` (New|Exists)
-
-### Depends
+### Dependencies
 
 - None
 
 ### Goal
 
-<What this task accomplishes.>
+<The concrete outcome this task accomplishes.>
 
-### Implementation Notes
+### Context
 
-<Full task spec body from Phase 4, including sizing, source links, dependency rationale, TDD steps, and any file-overlap constraints.>
+<Why this task matters and only the task-specific plan/spec background needed to execute safely.>
+
+### Scope
+
+- In: <task-specific changes>
+- Out: <non-goals and constraints>
+
+### Changes
+
+- `path/a.py` — [New|Exists] — <what to do>
+- `path/b.py` — [New|Exists] — <what to do>
+
+### Acceptance Criteria
+
+- <Observable outcome that defines good for this task.>
 
 ### Verification
 
-- <Command or behavioral check>
+- <Narrowest command/check and expected passing signal>
+
+### Notes for Agent
+
+- <Task-specific edge cases, gotchas, and constraints only.>
+
+### Completion Response
+
+- Summarize outcome, files changed, verification results, and any remaining risks/blockers.
 
 ---
 
@@ -88,26 +105,44 @@ plan_link: <plan>.md#L68-L90
 ### Source Documents
 
 - Plan: [<plan>.md#L68-L90](<plan>.md#L68-L90) — Section: <section title>
+- Spec: N/A (or link to spec if this task traces to a spec requirement)
 
-### Files
-
-- `path/c.py` (New|Exists)
-
-### Depends
+### Dependencies
 
 - T001
 
 ### Goal
 
-<What this task accomplishes.>
+<The concrete outcome this task accomplishes.>
 
-### Implementation Notes
+### Context
 
-<Full task spec body from Phase 4.>
+<Why this task matters and only the task-specific plan/spec background needed to execute safely.>
+
+### Scope
+
+- In: <task-specific changes>
+- Out: <non-goals and constraints>
+
+### Changes
+
+- `path/c.py` — [New|Exists] — <what to do>
+
+### Acceptance Criteria
+
+- <Observable outcome that defines good for this task.>
 
 ### Verification
 
-- <Command or behavioral check>
+- <Narrowest command/check and expected passing signal>
+
+### Notes for Agent
+
+- <Task-specific edge cases, gotchas, and constraints only.>
+
+### Completion Response
+
+- Summarize outcome, files changed, verification results, and any remaining risks/blockers.
 
 ---
 
@@ -132,6 +167,55 @@ T001 -> T002
 | `path/a.py` | New | T001 |
 | `path/b.py` | Exists | T001 |
 | `path/c.py` | New | T002 |
+
+## Sizing Summary
+
+| Task | Files | Subsystems | ACs | Mechanical? | Status | Action |
+|------|-------|------------|-----|-------------|--------|--------|
+| T001 | N | N | N | No | OK | — |
+| T002 | N | N | N | No | OK | — |
+
+## Requirements Snapshot
+
+| Requirement Type | Source | Text (verbatim) |
+|------------------|--------|-----------------|
+| Objective | Plan | ... |
+| AC | Plan | ... |
+| MUST/SHALL | Plan | ... |
+
+## Consistency Audit
+
+| Item | Spec/Legacy | Plan | Status | Notes |
+|------|-------------|------|--------|-------|
+| ... | ... | ... | Match/Deviation | ... |
+
+## Deviation Log
+
+| Source | Deviation | Rationale | Approved? |
+|--------|-----------|-----------|-----------|
+| None | None | N/A | N/A |
+
+## Obligation Coverage
+
+| Plan Clause | Task(s) | Verification |
+|-------------|---------|--------------|
+| "MUST ..." | T001 | ... |
+
+## System Wiring Coverage
+
+Required when applicable; otherwise `N/A`.
+
+| Flow | Wiring Task(s) | Verification |
+|------|----------------|--------------|
+| ... | ... | ... |
+
+## Propagation Map
+
+Required for new or repurposed inputs, fields, signals, config, or templates; otherwise `N/A`.
+
+| Input/Field/Signal | Origin | Transport | Consumption | Verification |
+|--------------------|--------|-----------|-------------|--------------|
+| ... | ... | ... | ... | ... |
 
 ## Notes
 

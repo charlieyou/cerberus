@@ -58,181 +58,49 @@ Validate that generated tasks form a coherent, complete, and executable work gra
 
 > **Upstream**: This command validates output from `/create-tasks`.
 
-> ⚠️ **ITERATION REQUIRED**: This command does NOT stop after identifying issues. You MUST fix all blocking issues and re-run validation until verdict is PASS. See [Iteration Loop](#iteration-loop-mandatory) section.
+> ⚠️ **ITERATION REQUIRED**: This command does NOT stop after identifying issues. You MUST attempt safe fixes and re-run validation until verdict is PASS, max iterations are reached, or an unfixable plan-level blocker requires user input. See [Iteration Loop](#iteration-loop-mandatory) section.
 
-## Execution Contract
+## Prompt Contract (GPT-5.5)
 
-1. Complete Phases 1–6 in order. For each phase, update internal state, list any issues, then proceed.
-2. Maintain explicit state objects: `plan_items`, `tasks`, `file_task_map`, `dependency_graph`, `issues`.
-3. Use step-by-step reasoning internally to build and analyze the task graph. Only include final conclusions and structured reports in output.
-4. Only produce the final report once all blocking gates are evaluated.
-5. **For task graphs with >10 tasks, you MUST use the subagent strategy below.**
-6. **Single-call self-healing**: Within this single `/review-tasks` invocation, simulate the full iteration loop: detect blocking issues → apply fixes to your internal state → re-run Phases 1–6 on the updated state → repeat until PASS or max iterations. Only emit the final report for the **last** iteration.
-7. **A FAIL verdict without attempted fixes is incorrect behavior.** The command is not complete after the first FAIL verdict. You must fix issues and re-validate before stopping.
+### Outcome
 
----
+Validate the generated task graph against its plan and, when the artifact is editable, apply the smallest safe fixes so the final graph is executable.
 
-## Subagent Strategy (Mandatory for Large Reviews)
+### What good means
 
-You MUST use subagents to review task graphs with more than 10 tasks. Claude's reliable context zone is ~100k tokens; reviewing many detailed tasks in a single context risks degraded quality.
+- Closing every task fully implements the plan: every objective, acceptance criterion, phase, and MUST/SHALL/REQUIRED-style obligation is owned by at least one reachable task.
+- The dependency graph is safe for parallel work: no cycles, no unreachable tasks, and no unordered file overlaps or missing logical prerequisites.
+- Each task is completable by an implementation agent without extra clarification: source links, outcome, scope/constraints, concrete changes, acceptance criteria, verification, and dependencies are present and objective.
+- Required create-tasks artifacts (coverage tables, sizing summary, propagation/wiring maps when applicable) are present and consistent with recomputed review state.
+- The final report gives the last validated state only, including iterations used and any remaining blockers if PASS is impossible.
 
-**Why this matters**: Large task graphs exceed reliable single-context reasoning. Partitioning work and aggregating results preserves thoroughness and prevents missed blockers due to context compression.
+### Constraints
 
-Treat subagents as separate focused reasoning passes within your single response (you do not need external APIs or real parallel processes). Do NOT attempt to review all tasks and checks in a single monolithic context when task count exceeds 10.
+- Treat the validation dimensions below as the product contract, not a fixed script. Choose the smallest reads and recomputations that establish the verdict.
+- Keep detailed reasoning internal. Do not print step-by-step analysis, fake subagent transcripts, or intermediate full reports.
+- Do not expand scope beyond the plan. Preserve plan/spec wording unless an approved deviation is already documented.
+- Ask one narrow question only when the task source, plan source, or a required fix would materially change requirements or create tracker-side risk.
+- Do not stop at the first FAIL when blocking issues are safely fixable in the active task artifact. Fix, re-check the affected gates plus global coverage/dependencies, and report only the final iteration.
 
-**Using more tokens via subagents IMPROVES quality. Do NOT sacrifice review thoroughness to save tokens.**
+### Verification
 
-**Input hygiene**: When handing inputs to subagents, wrap them in XML tags (e.g., `<plan_items>`, `<task_summaries>`, `<dependencies>`) to reduce ambiguity and parsing errors.
+Recompute the state needed for the gates: plan coverage, file-to-task mapping, dependency graph, task format/completability, sizing, TDD/wiring checks when applicable, and the No-Stragglers rollup. For Beads mode, run `br ready` after fixes when tooling is available.
+
+### Final response
+
+Return the Task Review Summary shape below with a PASS / FAIL / FAIL (MAX_ITERATIONS_REACHED) verdict, blocking issues, warnings, iterations used, and machine-readable JSON. Do not include hidden reasoning or earlier failed drafts.
+
+### Large Graph Handling
+
+For task graphs with more than 10 tasks, partition local checks by epic, parent, or phase so each pass stays focused. Global checks must still see summaries of **all** plan items, tasks, file mappings, dependencies, and parent relationships. The No-Stragglers gate is global and cannot be approximated from a sample.
 
 ### The Cardinal Rule: NO STRAGGLERS
 
 > **Completing ALL tasks MUST result in completing the FULL and COMPLETE plan.**
-> 
+>
 > This is the single most important property of a valid task graph. If this property fails, the entire review fails. A user who completes every task must have a fully implemented feature—not 90%, not "mostly done", but COMPLETELY DONE.
 >
 > You MUST NOT pass a review where any plan objective, acceptance criterion, or MUST/SHALL obligation would remain unimplemented after all tasks complete.
-
-### Global vs Local Checks
-
-| Check Type | Scope | Subagent Strategy |
-|------------|-------|-------------------|
-| Plan Coverage & No Stragglers | **GLOBAL** | MUST see ALL plan items + ALL tasks |
-| Dependency Correctness | **GLOBAL** | MUST see full dependency graph |
-| Graph Integrity | **GLOBAL** | MUST see full task graph |
-| Agent Completability | Local | Can batch by epic/phase |
-| Task Format Compliance | Local | Can batch by epic/phase |
-| Sizing Compliance | Local | Can batch by epic/phase |
-| TDD Compliance | Local | Can batch by epic/phase |
-| Wiring & Config | Local | Can batch by epic/phase |
-
-### Subagent Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    COORDINATOR AGENT                         │
-│  - Loads plan + all tasks (Phase 1)                         │
-│  - Builds state: plan_items, tasks, file_task_map, deps     │
-│  - Partitions tasks into batches (5-10 per batch)           │
-│  - Spawns subagents, merges findings                        │
-│  - Runs final No Stragglers Gate                            │
-│  - Produces final PASS/FAIL verdict                         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│ Batch Review    │ │ Batch Review    │ │ Batch Review    │
-│ Subagent #1     │ │ Subagent #2     │ │ Subagent #N     │
-│ (Epic A tasks)  │ │ (Epic B tasks)  │ │ (Epic N tasks)  │
-│                 │ │                 │ │                 │
-│ - Completability│ │ - Completability│ │ - Completability│
-│ - Format        │ │ - Format        │ │ - Format        │
-│ - Sizing        │ │ - Sizing        │ │ - Sizing        │
-│ - TDD           │ │ - TDD           │ │ - TDD           │
-│ - Wiring        │ │ - Wiring        │ │ - Wiring        │
-│ - Local deps    │ │ - Local deps    │ │ - Local deps    │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
-          │                   │                   │
-          └───────────────────┼───────────────────┘
-                              ▼
-          ┌───────────────────┴───────────────────┐
-          ▼                                       ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│ GLOBAL: Plan Coverage   │     │ GLOBAL: Dependency &    │
-│ & No Stragglers Agent   │     │ Graph Integrity Agent   │
-│                         │     │                         │
-│ Input: ALL plan_items + │     │ Input: file_task_map +  │
-│ ALL task summaries      │     │ dependency_graph +      │
-│                         │     │ parent relationships    │
-│ MUST verify:            │     │                         │
-│ - Every objective owned │     │ MUST verify:            │
-│ - Every AC owned        │     │ - No unsafe file overlaps│
-│ - Every MUST/SHALL owned│     │ - No cycles             │
-│ - No orphan tasks       │     │ - All tasks reachable   │
-│ - Rollup simulation     │     │ - All tasks reachable   │
-└─────────────────────────┘     └─────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│              FINAL NO STRAGGLERS GATE                        │
-│                    (Non-Negotiable)                          │
-│                                                              │
-│  Before producing final report, MUST explicitly answer:      │
-│                                                              │
-│  "If ALL tasks complete successfully, is the plan FULLY      │
-│   and COMPLETELY implemented with NO remaining work?"        │
-│                                                              │
-│  If answer is NO or UNCERTAIN → FAIL the entire review       │
-│  If answer is YES with confidence → May PASS (if no other    │
-│                                     blocking issues)         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Mandatory Subagent Rules
-
-**You MUST:**
-
-1. **Partition tasks into batches** by epic/parent or plan phase (5-10 tasks per batch)
-
-2. **Spawn Batch Review Subagents** for each batch that perform:
-   - Agent Completability checks
-   - Task Format Compliance checks  
-   - Sizing Compliance checks
-   - TDD Compliance checks (if applicable)
-   - Wiring & Config checks (if applicable)
-   - Local dependency sanity (overlaps within the batch)
-
-3. **Spawn Global Coverage Subagent** that:
-   - Receives ALL `plan_items` and a summary of ALL tasks
-   - Maps every objective, AC, phase, and MUST/SHALL obligation to owning task(s)
-   - Detects missing owners, duplicate primary AC owners, orphan tasks
-   - Performs rollup simulation: "If all tasks complete, is plan fully done?"
-   - Returns explicit PASS/FAIL for plan coverage
-
-4. **Spawn Global Graph Subagent** that:
-   - Receives `file_task_map`, `dependency_graph`, parent/epic relationships
-   - Checks file overlap deps, cycles, reachability
-   - Returns explicit PASS/FAIL for graph integrity
-
-5. **Run Final No Stragglers Gate** with full visibility before producing verdict:
-   - Have access to ALL plan items and ALL tasks
-   - Explicitly confirm: "Closing all tasks = plan fully complete"
-   - If any doubt exists, identify the gap and fix it in the iteration loop
-
-**Required behaviors:**
-- Always run full global coverage and graph checks with complete information
-- Always explicitly evaluate the No Stragglers Gate before emitting PASS
-- Prefer thorough analysis over token-saving
-- If aggregated issues are blocking, apply fixes and re-run from step 1 (up to 5 iterations)
-
-**Avoid:**
-- Declaring PASS when the No Stragglers Gate is uncertain
-- Skipping Plan Coverage or approximating global checks from partial batches
-- Outputting PASS when any objective/AC/MUST/SHALL lacks an owning, reachable task
-
-### When to Use Single-Context Review
-
-For small task graphs (≤10 tasks), you MAY run all checks in a single context. However:
-- You MUST still perform ALL checks with equal rigor
-- You MUST still explicitly run the No Stragglers reasoning
-- If context pressure causes any check to be skipped or approximated, switch to subagent strategy
-
-### Coordinator Call Sequence (Reference)
-
-```xml
-<review-coordinator>
-  <step id="1">load_plan_and_tasks</step>
-  <step id="2">build_state: plan_items, tasks, file_task_map, dependency_graph</step>
-  <step id="3">partition_tasks batch_size="5-10" strategy="epic_or_phase"</step>
-  <step id="4">spawn_batch_subagents for="each_batch" checks="completability,format,sizing,tdd,wiring,local-deps"</step>
-  <step id="5">spawn_global_coverage_subagent input="ALL plan_items + ALL task_summaries"</step>
-  <step id="6">spawn_global_graph_subagent input="file_task_map + dependency_graph + parent_relationships"</step>
-  <step id="7">aggregate_issues from="all_subagents"</step>
-  <step id="8">run_no_stragglers_gate scope="ALL plan_items + ALL tasks"</step>
-  <step id="9">if blocking_issues AND iterations_lt_5: apply_fixes_to_state, goto step 3</step>
-  <step id="10">emit_final_report verdict="PASS | FAIL | FAIL_MAX_ITERATIONS"</step>
-</review-coordinator>
-```
 
 ## Success Criteria
 
@@ -241,14 +109,14 @@ For small task graphs (≤10 tasks), you MAY run all checks in a single context.
 1. **Plan Coverage**: Every plan objective, AC, and MUST/SHALL obligation has at least one owning task, AND every task maps to at least one plan item (or is justified as infra/support)
 2. **Dependency Correctness**: Dependency graph is acyclic and tasks sharing files have explicit dependencies
 3. **Agent Completability**: Every task passes the completability checklist (clear goal, concrete verification, objective ACs)
-4. **Task Format Compliance**: Every task includes required sections (Source Documents, Goal, Context, Scope, Changes, AC, Verification)
+4. **Task Format Compliance**: Every task includes required sections (Source Documents, Goal/outcome, Context, Scope/constraints, Changes, AC, Verification)
 5. **Source Document Links**: Every task has plan links (+ spec links if spec exists) with line numbers pointing to relevant sections
 6. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
 7. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
 8. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
 9. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
 
-**Verdict is FAIL if ANY blocking gate has issues. You MUST fix blocking issues and re-run validation. Do NOT stop until verdict is PASS.**
+**Verdict is FAIL if ANY blocking gate has issues. Attempt safe fixes and re-run validation; stop only under the PASS, max-iterations, or unfixable-plan conditions in the Iteration Loop.**
 
 ---
 
@@ -305,9 +173,9 @@ Tasks must have correct dependency relationships:
 Each task must be completable by an agent with no external clarification:
 
 **Context Sufficiency:**
-- Goal is clear and specific (describes single outcome)
+- Goal is clear and specific (describes the concrete outcome)
 - All referenced files are listed in Changes section
-- Relevant background from plan/spec is included
+- Relevant task-specific background from plan/spec is included without generic process filler
 - Edge cases and constraints are documented
 
 **Done Criteria:**
@@ -328,16 +196,17 @@ Each task must be completable by an agent with no external clarification:
 Each task must include required sections:
 
 - [ ] **Source Documents**: Links to plan and spec with line numbers (e.g., `plan.md#L45-L67`). Multiple links when task spans multiple sections. "N/A" for spec if none exists.
-- [ ] **Goal**: What this task accomplishes (1-2 sentences)
-- [ ] **Context**: Why this matters, relevant background
-- [ ] **Scope**: In/Out boundaries
+- [ ] **Goal**: The concrete outcome this task accomplishes (1-2 sentences)
+- [ ] **Context**: Why this matters and only the task-specific background needed to execute safely
+- [ ] **Scope**: In/Out boundaries and constraints
 - [ ] **Changes**: File paths with [Exists|New] and what to do
 - [ ] **Acceptance Criteria**: Observable outcomes
-- [ ] **Verification**: Concrete commands/checks
+- [ ] **Verification**: Narrowest concrete commands/checks and expected passing signal
 
 Conditional sections (required when applicable):
 - [ ] **Wiring Map**: Required when introducing new data/config/templates
 - [ ] **Notes for Agent**: Required when there are edge cases or gotchas
+- [ ] **Completion Response** guidance (or equivalent note): Required for newly generated task prompts so implementers know to report outcome, files changed, verification results, and risks/blockers
 
 **Source Document Links Validation**:
 - Every task MUST have `**Source Documents**:` section
@@ -844,7 +713,7 @@ None
 | **AC ownership** | BLOCKING | Each AC has exactly one primary owner task | Reassign ownership |
 | **File overlap deps** | BLOCKING | Tasks sharing files have explicit dependency | Add dependency |
 | **Circular deps** | BLOCKING | Dependency graph is acyclic | Restructure dependencies |
-| **Context sufficiency** | BLOCKING | Every task has clear goal + files listed | Expand task description |
+| **Context sufficiency** | BLOCKING | Every task has clear goal + concrete `Changes` entries | Expand task description |
 | **Done criteria** | BLOCKING | Every task has concrete verification commands | Add verification |
 | **Objective ACs** | BLOCKING | All ACs are measurable and testable | Rewrite subjective ACs |
 | **Task format** | BLOCKING | All required sections present | Add missing sections |
@@ -852,11 +721,14 @@ None
 | **Sizing: standard** | BLOCKING | Tasks ≤ 12 files, ≤ 3 subsystems, ≤ 3 ACs | Split task |
 | **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able | Split or reclassify |
 | **Reachability** | BLOCKING | Every task reachable from `br ready` | Fix blocking dependencies |
-| **Integration tests** | WARNING | Each feature has `[integration-path-test]` task | Add integration test task |
-
+| **Integration path tests** | BLOCKING when applicable | Each feature in a create-tasks/TDD graph has one `[integration-path-test]` task | Add integration path test task |
+| **Config override tests** | BLOCKING when applicable | New configurable values have override tests reaching runtime via the normal load/construction path | Add override test |
+| **Wiring maps** | BLOCKING when applicable | New data/config/templates or cross-layer propagation have wiring maps and tasks covering each hop | Add wiring map, missing task, or dependency |
+| **Adapter/bridge coverage** | BLOCKING when applicable | Field/DTO/config changes are mapped across all adapters, mappers, constructors, and DI builders | Add adapter/bridge task coverage |
+| **Template lifecycle** | BLOCKING when applicable | New templates/resources are loaded, passed through, and used by runtime behavior | Add missing lifecycle coverage |
+| **Merge/precedence semantics** | BLOCKING when applicable | Merge, override, precedence, and default behavior have explicit verification | Add merge/precedence tests |
+| **Negative cases** | BLOCKING when applicable | Rejection, error, and invalid-input behavior has explicit verification | Add negative-case tests |
 | **Duplicates** | WARNING | Each piece of work in exactly one task | Merge tasks |
-| **Config tests** | WARNING | New config values have override tests | Add override test |
-| **Wiring maps** | WARNING | New data/config/templates have wiring maps | Add wiring map |
 
 ---
 
@@ -867,9 +739,9 @@ None
 - Run `br ready` to see which tasks can start immediately
 
 **After review FAILS:**
-- You MUST fix all BLOCKING issues immediately (do not stop)
+- Attempt safe fixes for all BLOCKING issues immediately when they are within the active task artifact or tracker
 - Re-run validation to verify fixes
-- Continue iterating until PASS
+- Continue iterating until PASS, max iterations, or an unfixable plan-level issue
 - See **Iteration Loop** section below for fix actions
 
 **Common fix commands (if using beads):**
@@ -891,38 +763,16 @@ br show <task-id>
 
 ## Iteration Loop (Mandatory)
 
-**Why this matters**: The user wants a task graph that is immediately executable after this command. Merely reporting problems still leaves them with an unusable plan. Iterating until PASS ensures `/review-tasks` delivers a ready-to-run task set, not a problem list.
+The user needs a ready task graph, not a problem list. When a blocking issue is safely fixable in the active task artifact or tracker, apply the smallest safe fix, update review state, and re-check the affected gate plus global No-Stragglers/dependency checks. Do not ask the user to re-run `/review-tasks`.
 
-This loop runs **inside a single command execution**. Do not ask the user to re-run `/review-tasks`. Instead, internally:
-- Apply fixes to your `plan_items`, `tasks`, `file_task_map`, and `dependency_graph` state
-- Recompute findings after each batch of fixes
-- Continue until you reach a PASS verdict or hit the max-iteration limit
-- Only output the final iteration's report
-
-### Loop Behavior
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ITERATION LOOP                           │
-│                                                              │
-│  1. Run validation (Phases 1-6)                             │
-│  2. Produce verdict                                         │
-│  3. IF FAIL with blocking issues:                           │
-│     a. Apply fixes to internal state (tasks, deps, ACs)     │
-│     b. Re-run validation from Phase 1 on updated state      │
-│     c. GOTO step 2                                          │
-│  4. IF PASS: Emit final report and stop                     │
-│  5. IF FAIL after 5 iterations:                             │
-│     a. Set verdict to FAIL (MAX_ITERATIONS_REACHED)         │
-│     b. List top 3-5 remaining blocking issues               │
-│     c. Stop and report                                      │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+Stop only when one of these is true:
+1. **PASS** — all blocking gates are satisfied.
+2. **FAIL (MAX_ITERATIONS_REACHED)** — five fix/recheck iterations were attempted and blockers remain.
+3. **Unfixable plan-level issue** — fixing would change requirements, scope, or an external tracker decision that needs user approval.
 
 ### Fix Actions by Issue Type
 
-When you encounter blocking issues, apply fixes to your internal state immediately, then re-validate:
+When you encounter blocking issues, apply fixes to the artifact/tracker when safe, mirror them in review state, then re-validate the relevant gates:
 
 | Issue Type | Fix Action |
 |------------|------------|
@@ -939,107 +789,29 @@ When you encounter blocking issues, apply fixes to your internal state immediate
 | **Missing required section** | Update task in `tasks` with the missing section |
 | **Missing/invalid source document links** | Add `**Source Documents**:` section; each link must have `#L<n>` line numbers and a label matching content at those lines; include spec links if spec exists per Spec Exists Rule, else "Spec: N/A" |
 
-### Fix Semantics
+### Applying Fixes
 
-When you "fix" an issue inside this command:
-
-**If `--beads` is enabled**:
-- Record the `br ...` commands you would execute under `### Applied Fixes`
-- For re-validation, assume those commands have been applied
-- Update your internal `tasks` and `dependency_graph` state to match
-
-**If not using beads** (TODO.md or plan-only):
-- Update your internal `tasks` list with the corrected task definitions
-- Show the key changes in `### Iteration Notes` at the end
-- Use the updated state for subsequent validation iterations
-
-The goal is: after all iterations complete, the final report reflects a valid, executable task graph.
-
-### Fix Execution (Beads Mode)
-
-When `--beads` flag is set, execute fixes using br commands:
+**Beads mode**: execute `br` fixes when tooling is available, then refresh task/dependency state. Include applied commands in `### Iteration Notes`.
 
 ```bash
-# Split oversized task (example: T009 with 6 subsystems)
-br update T009 --description "[narrowed scope: subsystems A, B only]..."
-br create "T009b: [remaining scope: subsystems C, D]" -p 2 --parent <epic> --description "..."
-br create "T009c: [remaining scope: subsystems E, F]" -p 2 --parent <epic> --description "..."
-br dep add T009b T009   # If sequential
-br dep add T009c T009   # If sequential
-
-# Consolidate ACs (example: T012 with 5 ACs → 3)
-br update T012 --description "[consolidated ACs: 1. Combined AC, 2. Combined AC, 3. Combined AC]..."
-
-# Add missing dependency
 br dep add <blocked> <blocker>
-
-# Create missing coverage task
+br update <task-id> --description "..."
 br create "Task for uncovered AC" -p 1 --parent <epic> --description "..."
 ```
 
-### Fix Execution (TODO.md Mode)
+**TODO.md/team-task mode**: edit the file directly by splitting/narrowing tasks, updating dependencies, consolidating or rewriting ACs, adding missing sections, or inserting missing tasks. For team-task files, update both the parser-owned `meta` block's `depends: [...]` field and the human-readable `### Dependencies` section.
 
-When using TODO.md, edit the file directly:
-
-1. Split tasks by duplicating the task block and narrowing scope
-2. Add dependencies by updating the `Depends:` field
-3. Consolidate ACs by editing the Acceptance Criteria section
-4. Add missing tasks by inserting new task blocks
-
-### Iteration Tracking
-
-Track iterations in your output:
-
-```markdown
-## Review Iteration 1
-[... findings ...]
-**Verdict**: FAIL (3 blocking issues)
-
-### Fixes Applied
-1. Split T009 into T009a, T009b, T009c (subsystem boundaries)
-2. Consolidated T012 ACs from 5 → 3
-3. Added dependency: T005 → T003
-
-## Review Iteration 2
-[... re-run validation ...]
-**Verdict**: FAIL (1 blocking issue)
-
-### Fixes Applied
-1. Split T010 into T010a, T010b
-
-## Review Iteration 3
-[... re-run validation ...]
-**Verdict**: PASS
-
-All blocking issues resolved. Tasks ready for execution.
-```
-
-### Stopping Conditions
-
-You may ONLY stop when:
-1. **Verdict is PASS** — all blocking gates satisfied, emit final report
-2. **Maximum iterations reached** (5) — emit `FAIL (MAX_ITERATIONS_REACHED)` with remaining issues
-3. **Unfixable structural issue** — document as "ACCEPTED DEVIATION" with justification
-
-A response that reports FAIL without attempting fixes and re-validation is **incorrect behavior**. Do not:
-- Stop after the first FAIL verdict
-- Recommend fixes without applying them to internal state
-- Ask the user to re-run the command
+**Plan-only or unfixable cases**: do not invent new requirements. Report the blocker as requiring plan/user input.
 
 ### Reporting Style
 
-- Only emit the **final** full `Task Review Summary` for the last iteration
-- Include a brief `### Iteration Notes` section summarizing iterations used and main fix categories
-- Do **not** print full summaries for intermediate iterations; keep them in reasoning only
+- Emit only the final full `Task Review Summary` for the last iteration.
+- Include `### Iteration Notes` with iterations used and the main fix categories or commands applied.
+- Do not print intermediate full summaries; keep them internal.
 
 ### Structural Deviation Exception
 
-Some blocking issues may be inherent to the plan structure and unfixable without changing the plan itself. In these cases:
-
-1. **Document the deviation** with explicit justification
-2. **Verify the deviation is unavoidable** given the plan's requirements
-3. **Accept with documentation** — mark as "ACCEPTED DEVIATION" in report
-4. **Continue to PASS** if no other blocking issues remain
+Some blockers may be inherent to the plan structure and unfixable without changing the plan. In these cases, document an `ACCEPTED DEVIATION` with justification and continue only if all remaining gates pass.
 
 Example:
 ```markdown
@@ -1052,9 +824,9 @@ Example:
 ## Handling Edge Cases
 
 ### No Plan Available
-- Skip Phase 2 (Plan Coverage Analysis)
-- Note in report: "Coverage analysis skipped—no plan found"
-- Other checks still run; verdict based on remaining gates
+- Verdict is FAIL unless the user explicitly requested a limited format-only review.
+- Report that No-Stragglers / plan coverage could not be evaluated without the plan.
+- If format-only review was explicitly requested, skip Phase 2, label the result `FORMAT_ONLY`, and do not report PASS for full task-graph validity.
 
 ### Mixed TODO.md and Beads
 - Default to `--beads` if beads database exists and has open tasks
@@ -1062,11 +834,11 @@ Example:
 - Flag if both exist with different content
 
 ### Very Large Task Graphs (>50 tasks)
-You MUST still follow the Subagent Strategy above. Additionally:
-- Run batch subagents by epic/parent (may use smaller batches of 5-10)
+Use the large-graph handling from the prompt contract. Additionally:
+- Run focused batch passes by epic/parent (may use smaller batches of 5-10)
 - Summarize findings by category rather than listing all in detail
 - Focus detailed output on blocking issues only
-- Global coverage and graph subagents MUST still see ALL tasks (via summaries)
+- Global coverage and graph checks MUST still see ALL tasks (via summaries)
 - The No Stragglers Gate is NON-NEGOTIABLE regardless of task count
 
 ### Tasks Already In Progress
