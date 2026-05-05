@@ -476,7 +476,9 @@ c3b_action="$(stop_action "$c3b_out")"
 c3b_msg="$(stop_reason "$c3b_out")"
 c3b_note="$(stop_system_message "$c3b_out")"
 if [[ "$c3b_rc" -eq 0 && "$c3b_action" == "continue" \
-      && "$c3b_msg" == *"blocking finding"* \
+      && "$c3b_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$c3b_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* \
+      && "$c3b_msg" == *"must block"* \
       && "$c3b_note" != *"still running"* \
       && ! -e "$c3b_rd/reviews/claude.done" \
       && ! -e "$c3b_rd/reviews/claude.failed" ]]; then
@@ -678,14 +680,11 @@ run_hook "$c6_home" "$c6_workspace" "sess-c6-001" "$c6_out" "$c6_err" || c6_rc=$
 c6_action="$(stop_action "$c6_out")"
 c6_msg="$(stop_reason "$c6_out")"
 if [[ "$c6_rc" -eq 0 && "$c6_action" == "continue" \
-      && "$c6_msg" == *"Continue working"* \
-      && "$c6_msg" == *"must be fixed before stopping"* \
-      && "$c6_msg" == *"make the required changes"* \
-      && "$c6_msg" == *"run targeted verification"* \
-      && "$c6_msg" == *"re-run the appropriate Cerberus review"* \
-      && "$c6_msg" == *"continue iterating"* \
-      && "$c6_msg" == *"do not stop yet"* \
-      && "$c6_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* \
+      && "$c6_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$c6_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* \
+      && "$c6_msg" == *"Run sub-agents **sequentially**"* \
+      && "$c6_msg" == *"After all sub-agents complete their fixes"* \
+      && "$c6_msg" == *"After fixing and self-reviewing, STOP immediately"* \
       && "$c6_msg" == *"src/main.c"* ]]; then
     log_pass "Case 6 — Row 6: continue + actionable reason"
 else
@@ -742,13 +741,10 @@ c8_action="$(stop_action "$c8_out")"
 c8_msg="$(stop_reason "$c8_out")"
 if [[ "$c8_rc" -eq 0 && "$c8_action" == "continue" \
       && "$c8_msg" == *"resolved this gate as FAIL"* \
-      && "$c8_msg" == *"Continue working"* \
       && "$c8_msg" == *"Do not stop yet"* \
-      && "$c8_msg" == *"make the required changes"* \
-      && "$c8_msg" == *"run targeted verification"* \
-      && "$c8_msg" == *"re-run the appropriate Cerberus review"* \
-      && "$c8_msg" == *"continue iterating"* \
-      && "$c8_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* ]]; then
+      && "$c8_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$c8_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* \
+      && "$c8_msg" == *"After fixing and self-reviewing, STOP immediately"* ]]; then
     log_pass "Case 8 — Row 9: continue + actionable reason"
 else
     log_fail "Case 8: rc=$c8_rc action=$c8_action msg='$c8_msg' body=$(cat "$c8_out") stderr=$(cat "$c8_err")"
@@ -779,13 +775,10 @@ c8b_action="$(stop_action "$c8b_out")"
 c8b_msg="$(stop_reason "$c8b_out")"
 if [[ "$c8b_rc" -eq 0 && "$c8b_action" == "continue" \
       && "$c8b_msg" == *"resolved this gate as FAIL"* \
-      && "$c8b_msg" == *"Do not stop yet"* \
       && "$c8b_msg" == *"Inspect Cerberus: Status"* \
-      && "$c8b_msg" == *"make the required changes"* \
-      && "$c8b_msg" == *"run targeted verification"* \
-      && "$c8b_msg" == *"re-run the appropriate Cerberus review"* \
-      && "$c8b_msg" == *"continue iterating"* \
-      && "$c8b_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* ]]; then
+      && "$c8b_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$c8b_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* \
+      && "$c8b_msg" == *"After fixing and self-reviewing, STOP immediately"* ]]; then
     log_pass "Regression — resolved FAIL fallback is actionable"
 else
     log_fail "Regression resolved FAIL fallback: rc=$c8b_rc action=$c8b_action msg='$c8b_msg' body=$(cat "$c8b_out") stderr=$(cat "$c8b_err")"
@@ -1198,7 +1191,8 @@ if [[ "$cR1b_init_rc" -eq 0 \
       && "$cR1b_registry_run" == "$cR1b_run" \
       && "$cR1b_rc" -eq 0 \
       && "$cR1b_action" == "continue" \
-      && "$cR1b_msg" == *"blocking"* ]]; then
+      && "$cR1b_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$cR1b_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* ]]; then
     log_pass "Regression — refreshed lifecycle session validates Stop while preserving active run_key"
 else
     log_fail "Regression #1b: init_rc=$cR1b_init_rc registry_sid='$cR1b_registry_sid' registry_run='$cR1b_registry_run' rc=$cR1b_rc action=$cR1b_action msg='$cR1b_msg' init_err=$(cat "$cR1b_init_err" 2>/dev/null || true) body=$(cat "$cR1b_out" 2>/dev/null || true) stderr=$(cat "$cR1b_err" 2>/dev/null || true)"
@@ -1374,7 +1368,10 @@ run_hook "$cR5b_home" "$cR5b_workspace" "sess-regress5b-001" \
     || cR5b_rc=$?
 cR5b_action="$(stop_action "$cR5b_out")"
 cR5b_msg="$(stop_reason "$cR5b_out")"
-if [[ "$cR5b_rc" -eq 0 && "$cR5b_action" == "continue" && "$cR5b_msg" == *"blocking"* && "$cR5b_msg" != *"resolved this gate as FAIL"* ]]; then
+if [[ "$cR5b_rc" -eq 0 && "$cR5b_action" == "continue" \
+      && "$cR5b_msg" == *"Please revise the **code** to address the following issues"* \
+      && "$cR5b_msg" == *"YOU MUST use the Task tool to spawn sub-agents"* \
+      && "$cR5b_msg" != *"resolved this gate as FAIL"* ]]; then
     log_pass "Regression #5b — resolved needs_revision with blocking findings blocks Stop"
 else
     log_fail "Regression #5b: rc=$cR5b_rc action=$cR5b_action msg='$cR5b_msg' body=$(cat "$cR5b_out") stderr=$(cat "$cR5b_err")"

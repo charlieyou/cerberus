@@ -409,12 +409,95 @@ __cerberus_count_blocking() {
     esac
 }
 
-# Helper: format row-6 user message from a status body. Multi-line
-# bullet list. jq emits canonical JSON so newlines survive as `\n` in
-# stdout, which Codex renders.
-__cerberus_format_blocking_message() {
+__cerberus_generate_commit_instructions() {
+    local diff_args="$1"
+
+    case "$diff_args" in
+        --uncommitted|"")
+            echo "Keep your fixes **uncommitted** (do NOT create a commit). The review is tracking uncommitted changes."
+            ;;
+        --base*)
+            echo "You **MUST create a NEW commit** with your fixes. The review is tracking changes from the base branch to HEAD, so uncommitted changes will NOT be visible to reviewers. Do NOT use \`git commit --amend\`."
+            ;;
+        --commit*)
+            echo "You **MUST create a NEW commit** with your fixes. Do NOT use \`git commit --amend\` (amending changes the commit SHA and breaks review tracking)."
+            ;;
+        *)
+            echo "You **MUST create a NEW commit** with your fixes. The review is tracking a commit range, so uncommitted changes will NOT be visible. Do NOT use \`git commit --amend\`."
+            ;;
+    esac
+}
+
+__cerberus_template_substitute() {
+    local template="$1"
+    local placeholder="$2"
+    local replacement="$3"
+
+    SUBST_PLACEHOLDER="$placeholder" \
+    SUBST_REPLACEMENT="$replacement" \
+    awk '
+    BEGIN {
+        placeholder = ENVIRON["SUBST_PLACEHOLDER"]
+        replacement = ENVIRON["SUBST_REPLACEMENT"]
+    }
+    {
+        line = $0
+        idx = index(line, placeholder)
+        while (idx > 0) {
+            printf "%s%s", substr(line, 1, idx - 1), replacement
+            line = substr(line, idx + length(placeholder))
+            idx = index(line, placeholder)
+        }
+        print line
+    }
+    ' <<< "$template"
+}
+
+__cerberus_code_revision_template() {
+    local template_path="$SCRIPT_DIR/../prompts/revisions/code.md"
+    if [ -f "$template_path" ]; then
+        cat "$template_path"
+        return 0
+    fi
+
+    cat <<'TEMPLATE'
+Please revise the **code** to address the following issues:
+
+${ISSUES}
+
+## Fixing Strategy (MANDATORY)
+
+**YOU MUST use the Task tool to spawn sub-agents to fix issues.** Delegate each fix to a sub-agent. This preserves your context for self-review and ensures focused, high-quality fixes.
+
+## Self-Review Before Stopping
+
+After all sub-agents complete their fixes:
+1. Review the changes made by each sub-agent
+2. Verify the fixes address the original issues
+3. Check for any obvious regressions or new issues introduced
+4. Set author-context if there are false positives or clarifications for reviewers
+5. Only then finalize and STOP
+
+**Commit Policy (${DIFF_ARGS}):**
+${COMMIT_INSTRUCTIONS}
+
+**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run the external review.
+TEMPLATE
+}
+
+__cerberus_diff_args_for_revision() {
+    if [ -n "${RUN_DIR:-}" ] && [ -f "$RUN_DIR/gate-state.json" ]; then
+        jq -r '.mode.diff_args // empty' "$RUN_DIR/gate-state.json" 2>/dev/null || echo ""
+        return 0
+    fi
+    echo ""
+}
+
+__cerberus_format_revision_issues() {
     local body="$1"
-    printf '%s' "$body" | jq -r '
+    local fallback="$2"
+    local issues
+    issues="$(printf '%s' "$body" | jq -r --arg fallback "$fallback" '
         ([
           .aggregated_findings[]?
           | select(
@@ -423,13 +506,51 @@ __cerberus_format_blocking_message() {
               or ((.priority // "") == "P1")
             )
         ]) as $blocking
-        | "Continue working: Cerberus has \($blocking | length) blocking review finding(s) that must be fixed before stopping. Treat the items below as your fix queue and make the required changes now. If a finding needs more context, run Cerberus: Status for full details. After each round of fixes, run targeted verification, then re-run the appropriate Cerberus review. If blocking findings remain, continue iterating and do not stop yet. Do not clear or override the gate unless the user explicitly instructs you to do so.\n" +
-          ([
-            $blocking[]
-            | "- [\(.priority // "?")][\(.verdict // "?")] \(.reviewer // "?"): \(.summary // "")" +
-              (if ((.file_refs // []) | length) > 0 then "\n  Files: " + ((.file_refs // []) | join(", ")) else "" end)
-          ] | join("\n"))
-    ' 2>/dev/null || echo "Continue working: Cerberus has blocking review findings that must be fixed before stopping. Run Cerberus: Status for full details, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If blocking findings remain, continue iterating and do not stop yet. Do not clear or override the gate unless the user explicitly instructs you to do so."
+        | if ($blocking | length) == 0 then
+            $fallback
+          else
+            $blocking
+            | map(
+                "### " + (.reviewer // "?") + " (" + (.verdict // "?") + ")\n"
+                + "- "
+                + (if ((.priority // "") != "") then "[" + (.priority // "?") + "] " else "" end)
+                + (.title // .summary // "Finding")
+                + (if ((.body // "") != "") then ": " + .body elif ((.summary // "") != "" and (.title // "") != "") then ": " + .summary else "" end)
+                + (if ((.file_refs // []) | length) > 0 then "\n  Files: " + ((.file_refs // []) | join(", ")) else "" end)
+              )
+            | join("\n\n")
+          end
+    ' 2>/dev/null || echo "$fallback")"
+    if [ -z "$issues" ]; then
+        printf '%s' "$fallback"
+    else
+        printf '%s' "$issues"
+    fi
+}
+
+__cerberus_format_code_revision_message() {
+    local body="$1"
+    local fallback="$2"
+    local template issues diff_args commit_instructions result
+    template="$(__cerberus_code_revision_template)"
+    issues="$(__cerberus_format_revision_issues "$body" "$fallback")"
+    diff_args="$(__cerberus_diff_args_for_revision)"
+    commit_instructions="$(__cerberus_generate_commit_instructions "$diff_args")"
+
+    result="$(__cerberus_template_substitute "$template" '${ISSUES}' "$issues")"
+    result="$(__cerberus_template_substitute "$result" '${DIFF_ARGS}' "$diff_args")"
+    result="$(__cerberus_template_substitute "$result" '${COMMIT_INSTRUCTIONS}' "$commit_instructions")"
+    printf '%s' "$result"
+}
+
+# Helper: format row-6 user message from a status body. Multi-line
+# bullet list. jq emits canonical JSON so newlines survive as `\n` in
+# stdout, which Codex renders.
+__cerberus_format_blocking_message() {
+    local body="$1"
+    __cerberus_format_code_revision_message \
+        "$body" \
+        "Cerberus has blocking review findings that must be fixed before stopping. Run Cerberus: Status for full details."
 }
 
 # Helper: format row-9 user message (resolved + fail).
@@ -443,9 +564,9 @@ __cerberus_format_resolved_fail_message() {
         printf 'Cerberus resolved this gate as FAIL. Do not stop yet.\n%s' "$msg"
         return 0
     fi
-    printf '%s' "$body" | jq -r '
-        "Continue working: Cerberus resolved this gate as " + ((.consensus_verdict // "fail") | ascii_upcase) + ". Do not stop yet. Inspect Cerberus: Status for the review findings, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If the review still fails or blocking findings remain, continue iterating. Do not clear or override the gate unless the user explicitly instructs you to do so."
-    ' 2>/dev/null || echo "Continue working: Cerberus resolved this gate as FAIL. Do not stop yet. Inspect Cerberus: Status for the review findings, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If the review still fails or blocking findings remain, continue iterating. Do not clear or override the gate unless the user explicitly instructs you to do so."
+    __cerberus_format_code_revision_message \
+        "$body" \
+        "Cerberus resolved this gate as FAIL. Inspect Cerberus: Status for the review findings."
 }
 
 # Shared wait timeout. Match the Claude hook default; this is not a
