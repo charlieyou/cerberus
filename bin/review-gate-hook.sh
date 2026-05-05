@@ -836,6 +836,45 @@ review_gate_check() {
            "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
     }
 
+    should_mark_state_stale() {
+        local status reviewers_count reviewer completed_count=0
+        status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+        reviewers_count=$(jq -r '(.reviewers // {}) | keys | length' "$STATE_FILE" 2>/dev/null || echo "0")
+
+        # A pending state with no reviewers is the normal "Claude is fixing the
+        # prior findings" shape after clean_for_rerun. The next Stop hook must
+        # re-spawn reviewers even if the human/agent took longer than the stale
+        # threshold to make fixes.
+        if [[ "$status" == "pending" && "$reviewers_count" == "0" ]]; then
+            log "review-gate: old pending state has no reviewers; continuing so reviewers can re-spawn"
+            return 1
+        fi
+
+        # Awaiting-decision and already-resolved states are user decisions, not
+        # abandoned reviewer processes. Never rewrite them to stale_timeout.
+        if [[ "$status" != "pending" ]]; then
+            log "review-gate: old state status=$status; not marking stale"
+            return 1
+        fi
+
+        # If any reviewer produced a terminal marker or parseable output, keep
+        # the gate active so the hook can surface that result instead of
+        # silently discarding completed review work as stale.
+        while IFS= read -r reviewer; do
+            [[ -z "$reviewer" ]] && continue
+            if reviewer_has_terminal_marker_or_valid_output "$REVIEWS_DIR" "$reviewer"; then
+                completed_count=$((completed_count + 1))
+            fi
+        done < <(jq -r '(.reviewers // {}) | keys[]' "$STATE_FILE" 2>/dev/null || true)
+
+        if [[ "$completed_count" -gt 0 ]]; then
+            log "review-gate: old pending state has $completed_count completed reviewer(s); not marking stale"
+            return 1
+        fi
+
+        return 0
+    }
+
     # --- Ensure state has an owner to avoid cross-session blocking ---
     ensure_state_owner() {
         [[ -z "$SESSION_KEY" ]] && return 0
@@ -880,9 +919,11 @@ review_gate_check() {
             log "review-gate: state age ${AGE_SECONDS}s"
 
             if [[ $AGE_SECONDS -gt 1800 ]]; then
-                log "review-gate: stale state; marking resolved"
-                mark_stale_resolved
-                output_allow
+                if should_mark_state_stale; then
+                    log "review-gate: stale state; marking resolved"
+                    mark_stale_resolved
+                    output_allow
+                fi
             fi
         fi
         ensure_state_owner
@@ -2040,6 +2081,7 @@ ASK_REVISION
         reset_iteration
         CLAUDE_SESSION_ID="$SESSION_ID" \
             REVIEW_GATE_TRANSCRIPT_PATH="$TRANSCRIPT_PATH" \
+            REVIEW_GATE_RESOLVE_ACTION=proceed \
             "$0" resolve >&2 || true
 
         # Update run telemetry on auto_approve resolution

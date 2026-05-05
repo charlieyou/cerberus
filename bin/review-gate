@@ -4832,7 +4832,11 @@ review_gate_resolve() {
         artifact_sha=$(compute_sha256 "$artifact_path" 2>/dev/null || echo "")
     fi
 
-    local decision_action="manual_resolve"
+    local decision_action="${REVIEW_GATE_RESOLVE_ACTION:-manual_resolve}"
+    case "$decision_action" in
+        proceed|manual_resolve) ;;
+        *) decision_action="manual_resolve" ;;
+    esac
     if [[ "$reason" == "auto_proceed_max_iter" ]]; then
         decision_action="proceed"
     fi

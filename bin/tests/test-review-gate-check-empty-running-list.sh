@@ -234,3 +234,129 @@ if [[ "$stdout" == *"Reviewer process failed"* ]]; then
 fi
 
 log_pass "check ignores stale .failed when reviewer JSON is valid"
+
+SESSION_ID_OLD_RERUN="test-check-old-rerun-$$"
+TRANSCRIPT_PATH_OLD_RERUN="$HOME/.claude/projects/-tmp-check-test/${SESSION_ID_OLD_RERUN}.jsonl"
+REVIEW_DIR_OLD_RERUN="$HOME/.claude/projects/-tmp-check-test/cerberus/${SESSION_ID_OLD_RERUN}"
+STATE_FILE_OLD_RERUN="$REVIEW_DIR_OLD_RERUN/gate-state.json"
+REVIEWS_DIR_OLD_RERUN="$REVIEW_DIR_OLD_RERUN/reviews"
+PLAN_FILE_OLD_RERUN="$REVIEW_DIR_OLD_RERUN/plan.md"
+FAKE_BIN_OLD_RERUN="$TEST_DIR/fake-bin-old-rerun"
+
+mkdir -p "$REVIEWS_DIR_OLD_RERUN" "$(dirname "$TRANSCRIPT_PATH_OLD_RERUN")" "$FAKE_BIN_OLD_RERUN"
+touch "$TRANSCRIPT_PATH_OLD_RERUN"
+
+cat > "$FAKE_BIN_OLD_RERUN/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+    echo "Usage: codex exec"
+    exit 0
+fi
+
+if [[ "${1:-}" == "exec" ]]; then
+    shift
+fi
+
+out=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            out="${2:-}"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+cat >/dev/null
+if [[ -z "$out" ]]; then
+    echo "missing -o" >&2
+    exit 2
+fi
+
+printf '%s\n' '{"verdict":"PASS","summary":"old pending no-reviewer state re-spawned","findings":[]}' > "$out"
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+FAKE_CODEX
+chmod +x "$FAKE_BIN_OLD_RERUN/codex"
+
+cat > "$PLAN_FILE_OLD_RERUN" <<'EOF'
+# Old pending no-reviewer re-run plan
+
+This fixture verifies an aged clean_for_rerun state still re-spawns reviewers.
+EOF
+
+cat > "$REVIEW_DIR_OLD_RERUN/latest.md" <<EOF
+<!-- review-type: plan -->
+<!-- plan-path: $PLAN_FILE_OLD_RERUN -->
+<!-- agents: codex -->
+<!-- max-rounds: 3 -->
+
+# Old pending no-reviewer re-run artifact
+EOF
+
+cat > "$STATE_FILE_OLD_RERUN" <<EOF
+{
+  "version": 1,
+  "status": "pending",
+  "trigger_source": "plan",
+  "artifact": {
+    "path": "$REVIEW_DIR_OLD_RERUN/latest.md",
+    "sha256": "test"
+  },
+  "mode": {
+    "type": "plan",
+    "plan_path": "$PLAN_FILE_OLD_RERUN"
+  },
+  "config": {
+    "max_rounds": 3,
+    "consensus_mode": "majority"
+  },
+  "reviewers": {},
+  "consensus": null,
+  "decision": null,
+  "created_at": "2000-01-01T00:00:00Z",
+  "iteration": 1
+}
+EOF
+
+log_test "old pending state with no reviewers re-spawns instead of stale-resolving"
+
+stdout_file="$TEST_DIR/old-rerun-stdout"
+stderr_file="$TEST_DIR/old-rerun-stderr"
+
+set +e
+printf '{"session_id":"%s","transcript_path":"%s"}' "$SESSION_ID_OLD_RERUN" "$TRANSCRIPT_PATH_OLD_RERUN" \
+    | PATH="$FAKE_BIN_OLD_RERUN:$PATH" REVIEW_GATE_MAX_WAIT_SECONDS=10 REVIEW_GATE_POLL_INTERVAL_SECONDS=1 \
+        /bin/bash "$REVIEW_GATE" check >"$stdout_file" 2>"$stderr_file"
+status=$?
+set -e
+
+stdout=$(cat "$stdout_file")
+stderr=$(cat "$stderr_file")
+
+if [[ "$status" -ne 0 ]]; then
+    log_fail "expected check to exit 0 for old no-reviewer state, got $status\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+decision=$(jq -r '.decision // empty' "$stdout_file")
+if [[ "$decision" != "block" ]]; then
+    log_fail "expected hook to return block JSON after re-spawned review, got stdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+state_status=$(jq -r '.status // empty' "$STATE_FILE_OLD_RERUN")
+if [[ "$state_status" != "resolved" ]]; then
+    log_fail "expected old no-reviewer state to auto-approve after fake re-spawn, got state status $state_status\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+reason=$(jq -r '.decision.reason // empty' "$STATE_FILE_OLD_RERUN")
+if [[ "$reason" == "stale_timeout" ]]; then
+    log_fail "old no-reviewer state was incorrectly stale-resolved\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+if [[ ! -f "$REVIEWS_DIR_OLD_RERUN/codex.done" ]]; then
+    log_fail "expected fake codex reviewer to be spawned and complete\nstdout:\n$stdout\nstderr:\n$stderr"
+fi
+
+log_pass "old pending no-reviewer state re-spawns after long fix interval"
