@@ -565,21 +565,22 @@ fi
 wait "$c5_pid" 2>/dev/null
 c5_rc=$?
 c5_action="$(stop_action "$c5_out")"
+c5_msg="$(stop_reason "$c5_out")"
 c5_note="$(stop_system_message "$c5_out")"
 c5_state_status="$(jq -r '.status // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
 c5_state_consensus="$(jq -r '.consensus.verdict // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
 c5_state_reason="$(jq -r '.decision.reason // empty' "$c5_rd/gate-state.json" 2>/dev/null || echo "")"
-# Successful re-evaluation under row 8: action=allow + no row-4 note +
-# no row-3 'no review dir' note. (We accept either no `note` field at
-# all, or a note that does NOT contain "still running".)
-if [[ "$c5_rc" -eq 0 && "$c5_action" == "allow" \
-      && "$c5_note" != *"still running"* \
+# Successful re-evaluation under row 8: action=continue with Claude-style
+# review-complete summary prompt, not the row-4 still-running note.
+if [[ "$c5_rc" -eq 0 && "$c5_action" == "continue" \
+      && "$c5_msg" == *"## Review Complete"* \
+      && "$c5_note" == "" \
       && "$c5_state_status" == "resolved" \
       && "$c5_state_consensus" == "PASS" \
       && "$c5_state_reason" == "wait_finalize_pass" ]]; then
-    log_pass "Case 5 — Row 5b: completion mid-wait → row 8 allow"
+    log_pass "Case 5 — Row 5b: completion mid-wait → row 8 review-complete prompt"
 else
-    log_fail "Case 5: rc=$c5_rc action=$c5_action note='$c5_note' done=$c5_done state=$c5_state_status consensus=$c5_state_consensus reason=$c5_state_reason body=$(cat "$c5_out") stderr=$(cat "$c5_err")"
+    log_fail "Case 5: rc=$c5_rc action=$c5_action msg='$c5_msg' note='$c5_note' done=$c5_done state=$c5_state_status consensus=$c5_state_consensus reason=$c5_state_reason body=$(cat "$c5_out") stderr=$(cat "$c5_err")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -692,9 +693,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 7 — Row 8: resolved + consensus=pass → allow.
+# Case 7 — Row 8: resolved + consensus=pass → one review-complete prompt,
+# then allow on the next Stop.
 # ---------------------------------------------------------------------------
-log_test "Case 7 — Row 8: resolved + consensus=pass → allow"
+log_test "Case 7 — Row 8: resolved + consensus=pass → review-complete prompt then allow"
 c7_home="$TEST_DIR/case7"
 mkdir -p "$c7_home"
 c7_workspace="/tmp/cerberus-c7"
@@ -711,11 +713,133 @@ c7_err="$TEST_DIR/c7.err"
 c7_rc=0
 run_hook "$c7_home" "$c7_workspace" "sess-c7-001" "$c7_out" "$c7_err" || c7_rc=$?
 c7_action="$(stop_action "$c7_out")"
+c7_msg="$(stop_reason "$c7_out")"
 c7_note="$(stop_system_message "$c7_out")"
-if [[ "$c7_rc" -eq 0 && "$c7_action" == "allow" && "$c7_note" == "" ]]; then
-    log_pass "Case 7 — Row 8: allow, no note"
+c7_prompted="$(jq -r '.decision.codex_stop_review_complete_prompted // false' "$c7_rd/gate-state.json" 2>/dev/null || echo "false")"
+c7_second_out="$TEST_DIR/c7-second.out"
+c7_second_err="$TEST_DIR/c7-second.err"
+c7_second_rc=0
+run_hook "$c7_home" "$c7_workspace" "sess-c7-001" "$c7_second_out" "$c7_second_err" || c7_second_rc=$?
+c7_second_action="$(stop_action "$c7_second_out")"
+c7_second_note="$(stop_system_message "$c7_second_out")"
+if [[ "$c7_rc" -eq 0 && "$c7_action" == "continue" \
+      && "$c7_msg" == *"## Review Complete"* \
+      && "$c7_msg" == *"Please provide a brief summary"* \
+      && "$c7_note" == "" \
+      && "$c7_prompted" == "true" \
+      && "$c7_second_rc" -eq 0 \
+      && "$c7_second_action" == "allow" \
+      && "$c7_second_note" == "" ]]; then
+    log_pass "Case 7 — Row 8: review-complete prompt emitted once, then allow"
 else
-    log_fail "Case 7: rc=$c7_rc action=$c7_action note='$c7_note' body=$(cat "$c7_out") stderr=$(cat "$c7_err")"
+    log_fail "Case 7: rc=$c7_rc action=$c7_action prompted=$c7_prompted second_rc=$c7_second_rc second_action=$c7_second_action msg='$c7_msg' note='$c7_note' body=$(cat "$c7_out") second_body=$(cat "$c7_second_out") stderr=$(cat "$c7_err") second_stderr=$(cat "$c7_second_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — concurrent resolved+PASS Stops emit the review-complete prompt
+# exactly once; the other concurrent Stop observes the marker under the lock
+# and allows.
+# ---------------------------------------------------------------------------
+log_test "Regression — concurrent resolved PASS Stops prompt exactly once"
+c7c_home="$TEST_DIR/case7-concurrent"
+mkdir -p "$c7c_home"
+c7c_workspace="/tmp/cerberus-c7-concurrent"
+c7c_run="run-c7-concurrent-001"
+make_registry "$c7c_home" "$c7c_workspace" "$c7c_run" "sess-c7-concurrent-001"
+c7c_rd="$(make_review_dir "$c7c_home" "$c7c_workspace" "$c7c_run")"
+write_gate_state "$c7c_rd" "resolved" '{"codex":{}}' '{"verdict":"PASS"}' "$c7c_run"
+cat > "$c7c_rd/reviews/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"all good","findings":[]}
+EOF
+touch "$c7c_rd/reviews/codex.done"
+c7c_out1="$TEST_DIR/c7c-1.out"
+c7c_err1="$TEST_DIR/c7c-1.err"
+c7c_payload1="$TEST_DIR/c7c-1.payload"
+c7c_pid_file1="$TEST_DIR/c7c-1.pid"
+c7c_out2="$TEST_DIR/c7c-2.out"
+c7c_err2="$TEST_DIR/c7c-2.err"
+c7c_payload2="$TEST_DIR/c7c-2.payload"
+c7c_pid_file2="$TEST_DIR/c7c-2.pid"
+spawn_hook_bg "$c7c_home" "$c7c_workspace" "sess-c7-concurrent-001" \
+    "$c7c_out1" "$c7c_err1" "$c7c_payload1" "$c7c_pid_file1"
+spawn_hook_bg "$c7c_home" "$c7c_workspace" "sess-c7-concurrent-001" \
+    "$c7c_out2" "$c7c_err2" "$c7c_payload2" "$c7c_pid_file2"
+c7c_pid1="$(cat "$c7c_pid_file1")"
+c7c_pid2="$(cat "$c7c_pid_file2")"
+wait "$c7c_pid1" 2>/dev/null
+c7c_rc1=$?
+wait "$c7c_pid2" 2>/dev/null
+c7c_rc2=$?
+c7c_action1="$(stop_action "$c7c_out1")"
+c7c_action2="$(stop_action "$c7c_out2")"
+c7c_msg1="$(stop_reason "$c7c_out1")"
+c7c_msg2="$(stop_reason "$c7c_out2")"
+c7c_continue_count=0
+c7c_allow_count=0
+[[ "$c7c_action1" == "continue" ]] && c7c_continue_count=$((c7c_continue_count + 1))
+[[ "$c7c_action2" == "continue" ]] && c7c_continue_count=$((c7c_continue_count + 1))
+[[ "$c7c_action1" == "allow" ]] && c7c_allow_count=$((c7c_allow_count + 1))
+[[ "$c7c_action2" == "allow" ]] && c7c_allow_count=$((c7c_allow_count + 1))
+if [[ "$c7c_rc1" -eq 0 && "$c7c_rc2" -eq 0 \
+      && "$c7c_continue_count" -eq 1 \
+      && "$c7c_allow_count" -eq 1 \
+      && "$c7c_msg1$c7c_msg2" == *"## Review Complete"* ]]; then
+    log_pass "Regression — concurrent resolved PASS Stops prompt exactly once"
+else
+    log_fail "Concurrent PASS: rc1=$c7c_rc1 action1=$c7c_action1 msg1='$c7c_msg1' body1=$(cat "$c7c_out1") err1=$(cat "$c7c_err1") rc2=$c7c_rc2 action2=$c7c_action2 msg2='$c7c_msg2' body2=$(cat "$c7c_out2") err2=$(cat "$c7c_err2")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — SIGTERM after the pass marker is written but before stdout is
+# emitted must not consume the one-time Review Complete prompt.
+# ---------------------------------------------------------------------------
+log_test "Regression — SIGTERM during review-complete critical section still emits prompt"
+c7s_home="$TEST_DIR/case7-signal"
+mkdir -p "$c7s_home"
+c7s_workspace="/tmp/cerberus-c7-signal"
+c7s_run="run-c7-signal-001"
+make_registry "$c7s_home" "$c7s_workspace" "$c7s_run" "sess-c7-signal-001"
+c7s_rd="$(make_review_dir "$c7s_home" "$c7s_workspace" "$c7s_run")"
+write_gate_state "$c7s_rd" "resolved" '{"codex":{}}' '{"verdict":"PASS"}' "$c7s_run"
+cat > "$c7s_rd/reviews/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"all good","findings":[]}
+EOF
+touch "$c7s_rd/reviews/codex.done"
+c7s_out="$TEST_DIR/c7s.out"
+c7s_err="$TEST_DIR/c7s.err"
+c7s_payload="$TEST_DIR/c7s.payload"
+c7s_pid_file="$TEST_DIR/c7s.pid"
+spawn_hook_bg "$c7s_home" "$c7s_workspace" "sess-c7-signal-001" \
+    "$c7s_out" "$c7s_err" "$c7s_payload" "$c7s_pid_file" \
+    "CERBERUS_CODEX_STOP_REVIEW_COMPLETE_DELAY_SECONDS=2"
+c7s_pid="$(cat "$c7s_pid_file")"
+c7s_marked=0
+for _ in $(seq 1 20); do
+    if [[ "$(jq -r '.decision.codex_stop_review_complete_prompted // false' "$c7s_rd/gate-state.json" 2>/dev/null || echo "false")" == "true" ]]; then
+        c7s_marked=1
+        break
+    fi
+    sleep 0.1
+done
+kill -TERM "$c7s_pid" 2>/dev/null || true
+wait "$c7s_pid" 2>/dev/null
+c7s_rc=$?
+c7s_action="$(stop_action "$c7s_out")"
+c7s_msg="$(stop_reason "$c7s_out")"
+c7s_second_out="$TEST_DIR/c7s-second.out"
+c7s_second_err="$TEST_DIR/c7s-second.err"
+c7s_second_rc=0
+run_hook "$c7s_home" "$c7s_workspace" "sess-c7-signal-001" "$c7s_second_out" "$c7s_second_err" || c7s_second_rc=$?
+c7s_second_action="$(stop_action "$c7s_second_out")"
+if [[ "$c7s_marked" -eq 1 \
+      && "$c7s_rc" -eq 0 \
+      && "$c7s_action" == "continue" \
+      && "$c7s_msg" == *"## Review Complete"* \
+      && "$c7s_second_rc" -eq 0 \
+      && "$c7s_second_action" == "allow" ]]; then
+    log_pass "Regression — SIGTERM during review-complete critical section still emits prompt"
+else
+    log_fail "Signal review-complete: marked=$c7s_marked rc=$c7s_rc action=$c7s_action msg='$c7s_msg' second_rc=$c7s_second_rc second_action=$c7s_second_action body=$(cat "$c7s_out") second_body=$(cat "$c7s_second_out") stderr=$(cat "$c7s_err") second_stderr=$(cat "$c7s_second_err")"
 fi
 
 # ---------------------------------------------------------------------------

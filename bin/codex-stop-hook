@@ -569,6 +569,163 @@ __cerberus_format_resolved_fail_message() {
         "Cerberus resolved this gate as FAIL. Inspect Cerberus: Status for the review findings."
 }
 
+__cerberus_review_complete_state_file() {
+    local body="$1"
+    local review_dir
+    review_dir="$(__jq_get "$body" '.review_dir // empty')"
+    if [ -z "$review_dir" ]; then
+        return 1
+    fi
+    printf '%s/gate-state.json' "$review_dir"
+}
+
+__cerberus_review_complete_lock_dir() {
+    local body="$1"
+    local review_dir
+    review_dir="$(__jq_get "$body" '.review_dir // empty')"
+    if [ -z "$review_dir" ]; then
+        return 1
+    fi
+    printf '%s/.codex-stop-review-complete.lock' "$review_dir"
+}
+
+__cerberus_acquire_review_complete_lock() {
+    local body="$1"
+    local lock_dir attempts pid_file pid
+    lock_dir="$(__cerberus_review_complete_lock_dir "$body")" || return 1
+    attempts=0
+    while [ "$attempts" -lt 40 ]; do
+        if mkdir "$lock_dir" 2>/dev/null; then
+            printf '%s\n' "$$" > "$lock_dir/pid" 2>/dev/null || true
+            printf '%s' "$lock_dir"
+            return 0
+        fi
+        pid_file="$lock_dir/pid"
+        if [ -f "$pid_file" ]; then
+            pid="$(cat "$pid_file" 2>/dev/null || echo "")"
+            case "$pid" in
+                ''|*[!0-9]*) ;;
+                *)
+                    if ! kill -0 "$pid" 2>/dev/null; then
+                        rm -rf "$lock_dir" 2>/dev/null || true
+                        attempts=$((attempts + 1))
+                        continue
+                    fi
+                    ;;
+            esac
+        fi
+        sleep 0.05
+        attempts=$((attempts + 1))
+    done
+    return 1
+}
+
+__cerberus_review_complete_prompt_sent() {
+    local body="$1"
+    local state_file
+    state_file="$(__cerberus_review_complete_state_file "$body")" || return 1
+    [ -f "$state_file" ] || return 1
+    jq -e '(.decision.codex_stop_review_complete_prompted // false) == true' "$state_file" >/dev/null 2>&1
+}
+
+__cerberus_mark_review_complete_prompt_sent() {
+    local body="$1"
+    local state_file tmp
+    state_file="$(__cerberus_review_complete_state_file "$body")" || return 1
+    [ -f "$state_file" ] || return 1
+    tmp="${state_file}.codex-stop.$$"
+    __CERBERUS_STOP_TMPFILES+=("$tmp")
+    jq '.decision = (.decision // {}) | .decision.codex_stop_review_complete_prompted = true' \
+        "$state_file" > "$tmp" 2>/dev/null || return 1
+    mv "$tmp" "$state_file" 2>/dev/null || return 1
+}
+
+__cerberus_format_review_complete_message() {
+    local body="$1"
+    local reviewers findings message
+    reviewers="$(printf '%s' "$body" | jq -r '
+        [
+          .reviewers[]?
+          | select((.status // "") == "complete")
+          | "- " + (.name // "?") + ": " + (.verdict // "unknown")
+        ]
+        | join("\n")
+    ' 2>/dev/null || echo "")"
+    findings="$(printf '%s' "$body" | jq -r '
+        [
+          .aggregated_findings[]?
+          | "- "
+            + (if ((.priority // "") != "") then "[" + (.priority // "?") + "] " else "" end)
+            + (.summary // "Finding")
+            + (if ((.details // "") != "") then ": " + .details else "" end)
+            + (if ((.file_refs // []) | length) > 0 then " (" + ((.file_refs // []) | join(", ")) + ")" else "" end)
+        ]
+        | join("\n")
+    ' 2>/dev/null || echo "")"
+
+    message="## Review Complete
+
+**Review passed.**"
+    if [ -n "$reviewers" ]; then
+        message="$message
+
+Reviewers:
+$reviewers"
+    fi
+    if [ -n "$findings" ]; then
+        message="$message
+
+## Review Findings
+
+$findings"
+    fi
+    message="$message
+
+Please provide a brief summary of the review outcome, then you may stop."
+    printf '%s' "$message"
+}
+
+__cerberus_emit_review_complete_or_allow() {
+    local body="$1"
+    if __cerberus_review_complete_prompt_sent "$body"; then
+        __cerberus_emit_allow ""
+        return 0
+    fi
+
+    local msg lock_dir delay
+    msg="$(__cerberus_format_review_complete_message "$body")"
+
+    trap '' INT TERM HUP
+    if ! lock_dir="$(__cerberus_acquire_review_complete_lock "$body")"; then
+        __cerberus_restore_signal_trap
+        __cerberus_emit_allow ""
+        return 0
+    fi
+
+    if __cerberus_review_complete_prompt_sent "$body"; then
+        rm -rf "$lock_dir" 2>/dev/null || true
+        __cerberus_restore_signal_trap
+        __cerberus_emit_allow ""
+        return 0
+    fi
+
+    if __cerberus_mark_review_complete_prompt_sent "$body"; then
+        delay="${CERBERUS_CODEX_STOP_REVIEW_COMPLETE_DELAY_SECONDS:-0}"
+        case "$delay" in
+            ''|*[!0-9.]*) delay=0 ;;
+        esac
+        if [ "$delay" != "0" ]; then
+            sleep "$delay" 2>/dev/null || true
+        fi
+        rm -rf "$lock_dir" 2>/dev/null || true
+        __cerberus_emit_continue "$msg"
+    else
+        rm -rf "$lock_dir" 2>/dev/null || true
+        __cerberus_restore_signal_trap
+        __cerberus_emit_allow "Review passed; provide a brief summary of the review outcome, then you may stop."
+    fi
+}
+
 # Shared wait timeout. Match the Claude hook default; this is not a
 # Codex-specific user-facing knob.
 MAX_WAIT_SECONDS="${REVIEW_GATE_MAX_WAIT_SECONDS:-1800}"
@@ -652,6 +809,9 @@ __cerberus_decide() {
                     local msg
                     msg="$(__cerberus_format_resolved_fail_message "$body")"
                     __cerberus_emit_continue "$msg"
+                    ;;
+                pass)
+                    __cerberus_emit_review_complete_or_allow "$body"
                     ;;
                 *)
                     # Row 8 (pass / needs_revision / unknown with no blocking
