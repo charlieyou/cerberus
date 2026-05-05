@@ -1,17 +1,50 @@
-Please revise the **code** to satisfy the following unmet acceptance criteria:
+Please handle the following unmet acceptance criteria according to the mode instructions below:
 
 ${ISSUES}
 
+## Mode Selection (read first)
+
+Default to **Fix Mode** unless the user explicitly asked for report-only behavior (for example: "findings only", "report only", "do not fix", "no fixes", "don't use the gate", or "write a markdown doc").
+
+### Report-Only Mode (no fixes, no gate)
+
+Use this mode only when the user explicitly requests it.
+
+In Report-Only Mode:
+1. Do **not** edit implementation code, tests, plans, specs, or generated artifacts.
+2. Do **not** spawn implementation sub-agents.
+3. Do **not** use the review gate workflow: do not call `review-gate author-context`, `review-gate spawn*`, `review-gate wait`, `review-gate resolve`, or any clear-gate tool unless the user separately and explicitly asks you to clear an active gate.
+4. Write the findings only to a Markdown document. Use a user-specified path if one was provided; otherwise write `epic-verification-findings.md` at the repository root.
+5. The Markdown document must contain:
+   - Title and short summary
+   - One section per finding/unmet criterion
+   - Priority, affected file/line if present, acceptance criterion, evidence, and suggested fix
+   - A final "No fixes made" note
+6. Final response: report the Markdown path, state that no fixes were made, and state that the review gate was not used or cleared.
+
+After writing the Markdown report, stop. Do not continue into Fix Mode.
+
 ## Fixing Strategy (MANDATORY)
 
-**YOU MUST use the Task tool to spawn sub-agents to implement fixes.** Delegate each unmet criterion to a sub-agent. This preserves your context for self-review and ensures focused, high-quality implementations.
+**Fix Mode is the default. In Fix Mode, YOU MUST use the Task tool to spawn sub-agents to implement fixes.** Do not implement fixes directly in the parent agent except to resolve a small merge conflict or blocker created by a sub-agent. Delegate every unmet criterion (or a tightly related cluster in the same code area) to a sub-agent so implementation work is isolated, reviewable, and committed by the sub-agent that made it.
 
 **For each unmet criterion (or tightly related cluster in the same area):**
-1. Call the Task tool with the specific criterion details
-2. Wait for the sub-agent to complete and review its changes
-3. Run sub-agents **sequentially** (one at a time) to avoid edit conflicts
+1. Call the Task tool with the specific criterion details, evidence, and expected behavior
+2. Instruct the sub-agent to make the smallest correct code/test/doc changes needed for that criterion
+3. Instruct the sub-agent to verify its own changes with the narrowest useful check
+4. Instruct the sub-agent to create a git commit containing only its own changes before it returns
+5. Wait for the sub-agent to complete, then review its diff and commit
+6. Run sub-agents **sequentially** (one at a time) to avoid edit conflicts
 
-**Parent responsibilities:** After each sub-agent completes, verify its changes satisfy the criterion. If conflicts arise or changes are incomplete, spawn a follow-up Task. You orchestrate; sub-agents execute.
+**Parent responsibilities:** After each sub-agent completes, verify its changes satisfy the criterion and that it created a commit. If conflicts arise, changes are incomplete, verification is missing, or no commit was created, spawn a follow-up Task to finish or commit the work. You orchestrate; sub-agents execute and commit.
+
+**Sub-agent commit policy (MANDATORY):**
+- Each implementation sub-agent MUST run `git status` before editing so it can avoid unrelated user/agent changes.
+- Each implementation sub-agent MUST stage only the files it changed for its assigned criterion.
+- Each implementation sub-agent MUST create a new git commit before returning. Do not amend, rebase, reset, or stash unrelated work.
+- Commit message format: `Fix epic verification: <short criterion/finding summary>`.
+- Each implementation sub-agent MUST report the commit SHA, files changed, verification run, and any remaining risks.
+- If a sub-agent cannot commit because of a real blocker, it must leave a precise blocker report. The parent must not silently proceed as if the work is committed.
 
 **Task sub-agent format:**
 ```
@@ -28,7 +61,10 @@ Instructions:
 1. Find the registration form validation code
 2. Add email validation with appropriate error message
 3. Verify the fix works for the expected scenarios
-4. Report what you changed"
+4. Run git status before and after your changes
+5. Stage only the files you changed for this criterion
+6. Create a new git commit with message: Fix epic verification: invalid input error message
+7. Report the commit SHA, files changed, verification run, and any remaining risks"
 )
 ```
 
@@ -56,9 +92,10 @@ Keep it to 1-2 paragraphs max. Update each iteration to reflect current state; d
 
 After all sub-agents complete their fixes:
 1. Review the changes made by each sub-agent
-2. Verify the fixes address the original issues
-3. Check for any obvious regressions or new issues introduced
-4. Set author-context if there are false positives or clarifications for reviewers
-5. Only then finalize and STOP
+2. Confirm every sub-agent produced a commit SHA and that each commit contains only the intended changes
+3. Verify the fixes address the original issues
+4. Check for any obvious regressions or new issues introduced
+5. Set author-context if there are false positives or clarifications for reviewers
+6. Only then finalize and STOP
 
-**After fixing and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.
+**After fixing, confirming commits, and self-reviewing, STOP immediately.** The stop hook will automatically re-run epic verification.
