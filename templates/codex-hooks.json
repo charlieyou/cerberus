@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-session-init"
+            "command": "/bin/bash \"<CERBERUS_INSTALL_ROOT>/bin/codex-session-init\""
           }
         ]
       }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-session-init"
+            "command": "/bin/bash \"<CERBERUS_INSTALL_ROOT>/bin/codex-session-init\""
           }
         ]
       }
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<CERBERUS_INSTALL_ROOT>/bin/codex-stop-hook",
+            "command": "/bin/bash \"<CERBERUS_INSTALL_ROOT>/bin/codex-stop-hook\"",
             "timeout": 2100
           }
         ]

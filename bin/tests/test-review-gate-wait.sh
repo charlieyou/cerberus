@@ -399,3 +399,191 @@ if [[ "$parse_error" != "reviewer_failed" ]]; then
 fi
 
 log_pass "wait preserves .failed when reviewer JSON is partial"
+
+ACTIVE_STATE_ROOT="$TEST_DIR/active-state-root"
+ACTIVE_PROJECT_KEY="active-project"
+ACTIVE_RUN_KEY="active-run"
+ACTIVE_REVIEW_DIR="$ACTIVE_STATE_ROOT/$ACTIVE_PROJECT_KEY/$ACTIVE_RUN_KEY"
+ACTIVE_REVIEWS_DIR="$ACTIVE_REVIEW_DIR/reviews"
+ACTIVE_EPIC="$TEST_DIR/active-epic.md"
+mkdir -p "$ACTIVE_REVIEWS_DIR"
+cat > "$ACTIVE_EPIC" <<'EOF'
+# Active Gate Epic
+
+- [ ] Verify active gate handling.
+EOF
+active_created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+jq -n \
+    --arg created_at "$active_created_at" \
+    --arg review_dir "$ACTIVE_REVIEW_DIR" \
+    '{
+        status: "pending",
+        reviewers: {codex: {}},
+        created_at: $created_at,
+        iteration: 0,
+        artifact: {path: ($review_dir + "/latest.md")}
+    }' > "$ACTIVE_REVIEW_DIR/gate-state.json"
+cat > "$ACTIVE_REVIEWS_DIR/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"existing active review","findings":[]}
+EOF
+touch "$ACTIVE_REVIEWS_DIR/codex.done"
+
+log_test "spawn-epic-verify refuses active gate before archiving current reviews"
+
+set +e
+output=$(
+    CERBERUS_HOST=generic \
+    CERBERUS_STATE_ROOT="$ACTIVE_STATE_ROOT" \
+    CERBERUS_PROJECT_KEY="$ACTIVE_PROJECT_KEY" \
+    CERBERUS_RUN_KEY="$ACTIVE_RUN_KEY" \
+        "$REVIEW_GATE" spawn-epic-verify "$ACTIVE_EPIC" 2>&1
+)
+status=$?
+set -e
+
+if [[ "$status" -ne 2 ]]; then
+    log_fail "expected active gate spawn refusal exit code 2, got $status\n$output"
+fi
+if [[ "$output" != *"Review gate already active"* ]]; then
+    log_fail "expected active gate refusal message, got:\n$output"
+fi
+if [[ ! -f "$ACTIVE_REVIEWS_DIR/codex.json" || ! -f "$ACTIVE_REVIEWS_DIR/codex.done" ]]; then
+    log_fail "active gate spawn refusal removed current review artifacts"
+fi
+if compgen -G "$ACTIVE_REVIEW_DIR/reviews-iter-*" >/dev/null; then
+    log_fail "active gate spawn refusal archived reviews despite refusing to spawn"
+fi
+
+log_pass "spawn-epic-verify preserves current reviews when gate is already active"
+
+ACTIVE_PLAN_RUN_KEY="active-plan-run"
+ACTIVE_PLAN_REVIEW_DIR="$ACTIVE_STATE_ROOT/$ACTIVE_PROJECT_KEY/$ACTIVE_PLAN_RUN_KEY"
+ACTIVE_PLAN_REVIEWS_DIR="$ACTIVE_PLAN_REVIEW_DIR/reviews"
+ACTIVE_PLAN="$TEST_DIR/active-plan.md"
+mkdir -p "$ACTIVE_PLAN_REVIEWS_DIR"
+cat > "$ACTIVE_PLAN" <<'EOF'
+# New Plan
+
+This should not overwrite the active gate.
+EOF
+active_plan_created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+jq -n \
+    --arg created_at "$active_plan_created_at" \
+    --arg review_dir "$ACTIVE_PLAN_REVIEW_DIR" \
+    '{
+        status: "pending",
+        reviewers: {codex: {}},
+        created_at: $created_at,
+        iteration: 0,
+        artifact: {path: ($review_dir + "/latest.md")}
+    }' > "$ACTIVE_PLAN_REVIEW_DIR/gate-state.json"
+cat > "$ACTIVE_PLAN_REVIEW_DIR/latest.md" <<'EOF'
+# Original Active Artifact
+EOF
+cat > "$ACTIVE_PLAN_REVIEWS_DIR/review.prompt" <<'EOF'
+Original active prompt
+EOF
+cat > "$ACTIVE_PLAN_REVIEWS_DIR/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"existing active plan review","findings":[]}
+EOF
+touch "$ACTIVE_PLAN_REVIEWS_DIR/codex.done"
+
+log_test "spawn-plan-review refuses active gate before overwriting active artifacts"
+
+set +e
+output=$(
+    CERBERUS_HOST=generic \
+    CERBERUS_STATE_ROOT="$ACTIVE_STATE_ROOT" \
+    CERBERUS_PROJECT_KEY="$ACTIVE_PROJECT_KEY" \
+    CERBERUS_RUN_KEY="$ACTIVE_PLAN_RUN_KEY" \
+        "$REVIEW_GATE" spawn-plan-review "$ACTIVE_PLAN" 2>&1
+)
+status=$?
+set -e
+
+if [[ "$status" -ne 2 ]]; then
+    log_fail "expected active plan spawn refusal exit code 2, got $status\n$output"
+fi
+if [[ "$output" != *"Review gate already active"* ]]; then
+    log_fail "expected active plan refusal message, got:\n$output"
+fi
+if [[ "$(cat "$ACTIVE_PLAN_REVIEW_DIR/latest.md")" != "# Original Active Artifact" ]]; then
+    log_fail "active plan spawn refusal overwrote latest.md"
+fi
+if [[ "$(cat "$ACTIVE_PLAN_REVIEWS_DIR/review.prompt")" != "Original active prompt" ]]; then
+    log_fail "active plan spawn refusal overwrote review.prompt"
+fi
+if [[ ! -f "$ACTIVE_PLAN_REVIEWS_DIR/codex.json" || ! -f "$ACTIVE_PLAN_REVIEWS_DIR/codex.done" ]]; then
+    log_fail "active plan spawn refusal removed current review artifacts"
+fi
+if compgen -G "$ACTIVE_PLAN_REVIEW_DIR/reviews-iter-*" >/dev/null; then
+    log_fail "active plan spawn refusal archived reviews despite refusing to spawn"
+fi
+
+log_pass "spawn-plan-review preserves active artifacts when gate is already active"
+
+ACTIVE_SPEC_RUN_KEY="active-spec-run"
+ACTIVE_SPEC_REVIEW_DIR="$ACTIVE_STATE_ROOT/$ACTIVE_PROJECT_KEY/$ACTIVE_SPEC_RUN_KEY"
+ACTIVE_SPEC_REVIEWS_DIR="$ACTIVE_SPEC_REVIEW_DIR/reviews"
+ACTIVE_SPEC="$TEST_DIR/active-spec.md"
+mkdir -p "$ACTIVE_SPEC_REVIEWS_DIR"
+cat > "$ACTIVE_SPEC" <<'EOF'
+# New Spec
+
+This should not overwrite the active gate.
+EOF
+active_spec_created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+jq -n \
+    --arg created_at "$active_spec_created_at" \
+    --arg review_dir "$ACTIVE_SPEC_REVIEW_DIR" \
+    '{
+        status: "pending",
+        reviewers: {codex: {}},
+        created_at: $created_at,
+        iteration: 0,
+        artifact: {path: ($review_dir + "/latest.md")}
+    }' > "$ACTIVE_SPEC_REVIEW_DIR/gate-state.json"
+cat > "$ACTIVE_SPEC_REVIEW_DIR/latest.md" <<'EOF'
+# Original Active Spec Artifact
+EOF
+cat > "$ACTIVE_SPEC_REVIEWS_DIR/review.prompt" <<'EOF'
+Original active spec prompt
+EOF
+cat > "$ACTIVE_SPEC_REVIEWS_DIR/codex.json" <<'EOF'
+{"verdict":"PASS","summary":"existing active spec review","findings":[]}
+EOF
+touch "$ACTIVE_SPEC_REVIEWS_DIR/codex.done"
+
+log_test "spawn-spec-review refuses active gate before overwriting active artifacts"
+
+set +e
+output=$(
+    CERBERUS_HOST=generic \
+    CERBERUS_STATE_ROOT="$ACTIVE_STATE_ROOT" \
+    CERBERUS_PROJECT_KEY="$ACTIVE_PROJECT_KEY" \
+    CERBERUS_RUN_KEY="$ACTIVE_SPEC_RUN_KEY" \
+        "$REVIEW_GATE" spawn-spec-review "$ACTIVE_SPEC" 2>&1
+)
+status=$?
+set -e
+
+if [[ "$status" -ne 2 ]]; then
+    log_fail "expected active spec spawn refusal exit code 2, got $status\n$output"
+fi
+if [[ "$output" != *"Review gate already active"* ]]; then
+    log_fail "expected active spec refusal message, got:\n$output"
+fi
+if [[ "$(cat "$ACTIVE_SPEC_REVIEW_DIR/latest.md")" != "# Original Active Spec Artifact" ]]; then
+    log_fail "active spec spawn refusal overwrote latest.md"
+fi
+if [[ "$(cat "$ACTIVE_SPEC_REVIEWS_DIR/review.prompt")" != "Original active spec prompt" ]]; then
+    log_fail "active spec spawn refusal overwrote review.prompt"
+fi
+if [[ ! -f "$ACTIVE_SPEC_REVIEWS_DIR/codex.json" || ! -f "$ACTIVE_SPEC_REVIEWS_DIR/codex.done" ]]; then
+    log_fail "active spec spawn refusal removed current review artifacts"
+fi
+if compgen -G "$ACTIVE_SPEC_REVIEW_DIR/reviews-iter-*" >/dev/null; then
+    log_fail "active spec spawn refusal archived reviews despite refusing to spawn"
+fi
+
+log_pass "spawn-spec-review preserves active artifacts when gate is already active"

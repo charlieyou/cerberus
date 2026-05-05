@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/bin/codex-session-init"
+            "command": "/bin/bash \"${PLUGIN_ROOT}/bin/codex-session-init\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/bin/codex-session-init"
+            "command": "/bin/bash \"${PLUGIN_ROOT}/bin/codex-session-init\""
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/bin/codex-stop-hook",
+            "command": "/bin/bash \"${PLUGIN_ROOT}/bin/codex-stop-hook\"",
             "timeout": 2100
           }
         ]

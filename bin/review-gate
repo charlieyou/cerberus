@@ -364,6 +364,41 @@ __cerberus_is_spawn_command() {
     esac
 }
 
+__cerberus_abort_if_recent_active_gate() {
+    local review_dir="${1:-}"
+    local state_file="$review_dir/gate-state.json"
+
+    if [[ "${REVIEW_GATE_RERUN:-}" == "1" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$state_file" ]]; then
+        return 0
+    fi
+
+    local status
+    status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+    if [[ "$status" != "pending" && "$status" != "awaiting_decision" ]]; then
+        return 0
+    fi
+
+    local created_at age_seconds
+    created_at=$(jq -r '.created_at // ""' "$state_file" 2>/dev/null || echo "")
+    if [[ -z "$created_at" ]]; then
+        return 0
+    fi
+
+    local created_epoch now_epoch
+    created_epoch=$(iso8601_to_epoch "$created_at")
+    now_epoch=$(date +%s)
+    age_seconds=$((now_epoch - created_epoch))
+
+    if [[ $age_seconds -lt 1800 ]]; then
+        echo "Review gate already active (status: $status, age: ${age_seconds}s)" >&2
+        echo "Use ${CLI_CMD} resolve to complete the existing gate first." >&2
+        exit 2
+    fi
+}
+
 __cerberus_bootstrap_codex_env_for_cli() {
     local cmd="${1:-}"
     local explicit_run_key="${CERBERUS_RUN_KEY:-${REVIEW_GATE_SESSION_KEY:-}}"
@@ -1304,6 +1339,7 @@ USAGE
     local review_dir
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
+    __cerberus_abort_if_recent_active_gate "$review_dir"
 
     # --- Archive existing reviews so previous iteration is visible in prompt ---
     local reviews_dir="$review_dir/reviews"
@@ -1787,6 +1823,7 @@ USAGE
     local review_dir
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
+    __cerberus_abort_if_recent_active_gate "$review_dir"
 
     # --- Read plan content ---
     local plan_content
@@ -2145,6 +2182,7 @@ USAGE
     local review_dir
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
+    __cerberus_abort_if_recent_active_gate "$review_dir"
 
     # --- Read spec content ---
     local spec_content
@@ -2472,6 +2510,7 @@ USAGE
     local review_dir
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
+    __cerberus_abort_if_recent_active_gate "$review_dir"
 
     # --- Archive existing reviews for iteration context ---
     local reviews_dir="$review_dir/reviews"
@@ -2914,6 +2953,7 @@ USAGE
     local review_dir
     review_dir=$(resolve_review_dir "$session_id" "$transcript_path")
     mkdir -p "$review_dir"
+    __cerberus_abort_if_recent_active_gate "$review_dir"
 
     local reviews_dir="$review_dir/reviews"
     local iteration_file="$review_dir/iteration.txt"

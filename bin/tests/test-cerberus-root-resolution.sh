@@ -276,12 +276,12 @@ if [[ ! -f "$PLUGIN_ROOT/hooks/codex-hooks.json" ]]; then
     log_fail "expected bundled Codex hooks file at $PLUGIN_ROOT/hooks/codex-hooks.json"
 fi
 if ! jq -e '
-    .hooks.SessionStart[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-session-init"
-    and .hooks.UserPromptSubmit[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-session-init"
-    and .hooks.Stop[0].hooks[0].command == "${PLUGIN_ROOT}/bin/codex-stop-hook"
+    .hooks.SessionStart[0].hooks[0].command == "/bin/bash \"${PLUGIN_ROOT}/bin/codex-session-init\""
+    and .hooks.UserPromptSubmit[0].hooks[0].command == "/bin/bash \"${PLUGIN_ROOT}/bin/codex-session-init\""
+    and .hooks.Stop[0].hooks[0].command == "/bin/bash \"${PLUGIN_ROOT}/bin/codex-stop-hook\""
     and .hooks.Stop[0].hooks[0].timeout == 2100
 ' "$PLUGIN_ROOT/hooks/codex-hooks.json" >/dev/null 2>&1; then
-    log_fail "bundled Codex hooks file does not use expected PLUGIN_ROOT commands"
+    log_fail "bundled Codex hooks file does not use expected /bin/bash PLUGIN_ROOT commands"
 fi
 log_pass "Codex plugin manifest and bundled hooks are wired"
 

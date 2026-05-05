@@ -76,12 +76,13 @@ checkout root**. Installed skills are cached
 by Codex and are not rewritten during install, so they locate the shared
 backend through `CERBERUS_ROOT` at runtime.
 
-Enable Codex hooks in `~/.codex/config.toml` if your Codex install has
-not enabled them already:
+Enable Codex hooks and plugin-bundled hooks in `~/.codex/config.toml` if
+your Codex install has not enabled them already:
 
 ```toml
 [features]
 codex_hooks = true
+plugin_hooks = true
 ```
 
 The plugin manifest points `hooks` at `./hooks/codex-hooks.json`. Codex
@@ -297,11 +298,11 @@ Concretely:
   envelope, and exits 0. No long-running operations run inside the
   trap.
 
-The only state in which the hook returns `{"decision":"block", ...}` is
-when reviewers have **successfully completed** a round and the result is
-either `awaiting_decision` with blocking findings (verdict `FAIL` or
-priority `P0`/`P1`) or `resolved` with `consensus_verdict == "fail"`.
-In every other path the user keeps the ability to stop.
+The hook returns `{"decision":"block", ...}` only when reviewers have
+**successfully completed** a round and the canonical status payload still
+contains blocking findings (verdict `FAIL` or priority `P0`/`P1`), or when
+the resolved gate has an explicit `consensus_verdict == "fail"`. In every
+other path the user keeps the ability to stop.
 
 The `SessionStart` / `UserPromptSubmit` adapter
 (`bin/codex-session-init`) is **not** failure-open — it exits non-zero
