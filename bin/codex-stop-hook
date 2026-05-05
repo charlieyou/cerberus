@@ -465,6 +465,8 @@ __cerberus_decide() {
     local gs cv
     gs="$(__jq_get "$body" '.gate_status // empty')"
     cv="$(__jq_get "$body" '.consensus_verdict // empty')"
+    gs="$(printf '%s' "$gs" | tr '[:upper:]' '[:lower:]')"
+    cv="$(printf '%s' "$cv" | tr '[:upper:]' '[:lower:]')"
 
     case "$gs" in
         pending)
@@ -503,23 +505,36 @@ __cerberus_decide() {
             fi
             ;;
         resolved)
-            # Plan §Stop Decision Matrix:
-            #   Row 8: resolved + consensus_verdict == "pass" → allow
-            #   Row 9: resolved + consensus_verdict == "fail" → continue
-            # Round-2 review feedback #2: any other consensus
-            # (needs_revision, null/empty, etc.) is NOT a row-9 trigger
-            # — those gates are non-blocking by the canonical predicate
-            # and the user must be able to stop. Allow by default and
-            # only block on an explicit "fail".
+            # For resolved gates, canonical blocking findings take precedence
+            # over consensus_verdict. A gate that completes during Stop's
+            # wait/finalize path can become resolved with needs_revision while
+            # still carrying P0/P1/FAIL findings. Surface those just like row
+            # 6, then fall back to row 9's explicit fail handling; otherwise
+            # allow per row 8. The state file may store NEEDS_WORK, but
+            # status --json normalizes that verdict to needs_revision.
+            local n
+            n="$(__cerberus_count_blocking "$body")"
+            if [ "$n" -gt 0 ]; then
+                local msg
+                if [ "$cv" = "fail" ]; then
+                    msg="$(__cerberus_format_resolved_fail_message "$body")"
+                else
+                    msg="$(__cerberus_format_blocking_message "$body")"
+                fi
+                __cerberus_emit_continue "$msg"
+                return 0
+            fi
             case "$cv" in
                 fail)
-                    # Row 9.
+                    # Row 9 (explicit failure even when no canonical blocking
+                    # finding was emitted).
                     local msg
                     msg="$(__cerberus_format_resolved_fail_message "$body")"
                     __cerberus_emit_continue "$msg"
                     ;;
                 *)
-                    # Row 8 (pass / needs_revision / unknown) → allow.
+                    # Row 8 (pass / needs_revision / unknown with no blocking
+                    # findings) → allow.
                     __cerberus_emit_allow ""
                     ;;
             esac

@@ -1320,10 +1320,11 @@ fi
 # Regression — round-2 review #2: resolved + consensus_verdict ==
 # "needs_revision" is NOT a row-9 trigger. Plan §Stop Decision Matrix
 # row 9 is explicitly `consensus_verdict == "fail"`; any other resolved
-# verdict (needs_revision, null, or unknown) is non-blocking and must
-# allow stop. The prior code blocked anything not equal to "pass".
+# verdict (needs_revision, null, or unknown) with no canonical blocking
+# findings must allow stop. The prior code blocked anything not equal to
+# "pass".
 # ---------------------------------------------------------------------------
-log_test "Regression #5 — resolved + needs_revision (non-FAIL) → allow"
+log_test "Regression #5 — resolved + needs_revision with no blocking findings → allow"
 cR5_home="$TEST_DIR/regress5"
 mkdir -p "$cR5_home"
 cR5_workspace="/tmp/cerberus-regress5"
@@ -1343,9 +1344,99 @@ run_hook "$cR5_home" "$cR5_workspace" "sess-regress5-001" \
     || cR5_rc=$?
 cR5_action="$(stop_action "$cR5_out")"
 if [[ "$cR5_rc" -eq 0 && "$cR5_action" == "allow" ]]; then
-    log_pass "Regression #5 — resolved + needs_revision → continue:true"
+    log_pass "Regression #5 — resolved + needs_revision with no blocking findings → allow"
 else
     log_fail "Regression #5: rc=$cR5_rc action=$cR5_action body=$(cat "$cR5_out") stderr=$(cat "$cR5_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — a finalized/re-run gate can be resolved with consensus
+# needs_revision while still carrying canonical blocking findings. Stop must
+# surface those findings instead of treating non-FAIL consensus as allow.
+# ---------------------------------------------------------------------------
+log_test "Regression #5b — resolved + needs_revision + blocking findings → block"
+cR5b_home="$TEST_DIR/regress5b"
+mkdir -p "$cR5b_home"
+cR5b_workspace="/tmp/cerberus-regress5b"
+cR5b_run="regress5b-run-001"
+make_registry "$cR5b_home" "$cR5b_workspace" "$cR5b_run" "sess-regress5b-001"
+cR5b_rd="$(make_review_dir "$cR5b_home" "$cR5b_workspace" "$cR5b_run")"
+write_gate_state "$cR5b_rd" "resolved" '{"codex":{}}' '{"verdict":"NEEDS_WORK"}' "$cR5b_run"
+cat > "$cR5b_rd/reviews/codex.json" <<'EOF'
+{"verdict":"NEEDS_WORK","summary":"blocking","findings":[{"title":"must fix","body":"y","priority":0,"file_path":"src/example.py","line_start":1,"line_end":1}]}
+EOF
+touch "$cR5b_rd/reviews/codex.done"
+cR5b_out="$TEST_DIR/cR5b.out"
+cR5b_err="$TEST_DIR/cR5b.err"
+cR5b_rc=0
+run_hook "$cR5b_home" "$cR5b_workspace" "sess-regress5b-001" \
+    "$cR5b_out" "$cR5b_err" \
+    || cR5b_rc=$?
+cR5b_action="$(stop_action "$cR5b_out")"
+cR5b_msg="$(stop_reason "$cR5b_out")"
+if [[ "$cR5b_rc" -eq 0 && "$cR5b_action" == "continue" && "$cR5b_msg" == *"blocking"* && "$cR5b_msg" != *"resolved this gate as FAIL"* ]]; then
+    log_pass "Regression #5b — resolved needs_revision with blocking findings blocks Stop"
+else
+    log_fail "Regression #5b: rc=$cR5b_rc action=$cR5b_action msg='$cR5b_msg' body=$(cat "$cR5b_out") stderr=$(cat "$cR5b_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — the reported failure path: initial status is pending, Stop waits
+# and finalizes, then post-wait status returns resolved + needs_revision with
+# blocking findings. The post-wait re-evaluation must block.
+# ---------------------------------------------------------------------------
+log_test "Regression #5c — post-wait resolved needs_revision with blocking findings → block"
+cR5c_home="$TEST_DIR/regress5c"
+mkdir -p "$cR5c_home"
+cR5c_workspace="/tmp/cerberus-regress5c"
+cR5c_run="regress5c-run-001"
+make_registry "$cR5c_home" "$cR5c_workspace" "$cR5c_run" "sess-regress5c-001"
+cR5c_rd="$(make_review_dir "$cR5c_home" "$cR5c_workspace" "$cR5c_run")"
+cR5c_count="$TEST_DIR/cR5c-status-count"
+cR5c_stub="$TEST_DIR/cR5c-review-gate"
+cR5c_bash="${BASH:-/bin/bash}"
+cat > "$cR5c_stub" <<EOF
+#!$cR5c_bash
+set -euo pipefail
+count_file="$cR5c_count"
+case "\${1:-}" in
+    status)
+        count="0"
+        if [[ -f "\$count_file" ]]; then
+            count="\$(cat "\$count_file")"
+        fi
+        count="\$((count + 1))"
+        printf '%s' "\$count" > "\$count_file"
+        if [[ "\$count" -eq 1 ]]; then
+            printf '%s\n' '{"gate_status":"pending","consensus_verdict":null,"pending_reviewers":["codex"],"aggregated_findings":[]}'
+        else
+            printf '%s\n' '{"gate_status":"resolved","consensus_verdict":"needs_revision","pending_reviewers":[],"aggregated_findings":[{"reviewer":"codex","priority":"P1","verdict":"NEEDS_REVISION","summary":"post-wait blocker"}]}'
+        fi
+        ;;
+    wait)
+        printf '%s\n' '{"status":"resolved"}'
+        ;;
+    *)
+        exit 2
+        ;;
+esac
+EOF
+chmod +x "$cR5c_stub"
+cR5c_out="$TEST_DIR/cR5c.out"
+cR5c_err="$TEST_DIR/cR5c.err"
+cR5c_rc=0
+run_hook "$cR5c_home" "$cR5c_workspace" "sess-regress5c-001" \
+    "$cR5c_out" "$cR5c_err" \
+    "CERBERUS_REVIEW_GATE_BIN=$cR5c_stub" \
+    "REVIEW_GATE_MAX_WAIT_SECONDS=5" \
+    || cR5c_rc=$?
+cR5c_action="$(stop_action "$cR5c_out")"
+cR5c_msg="$(stop_reason "$cR5c_out")"
+cR5c_status_calls="$(cat "$cR5c_count" 2>/dev/null || echo 0)"
+if [[ "$cR5c_rc" -eq 0 && "$cR5c_action" == "continue" && "$cR5c_msg" == *"post-wait blocker"* && "$cR5c_status_calls" -eq 2 ]]; then
+    log_pass "Regression #5c — post-wait resolved needs_revision blocks Stop"
+else
+    log_fail "Regression #5c: rc=$cR5c_rc action=$cR5c_action status_calls=$cR5c_status_calls msg='$cR5c_msg' body=$(cat "$cR5c_out") stderr=$(cat "$cR5c_err")"
 fi
 
 # ---------------------------------------------------------------------------
