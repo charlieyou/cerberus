@@ -677,8 +677,17 @@ c6_rc=0
 run_hook "$c6_home" "$c6_workspace" "sess-c6-001" "$c6_out" "$c6_err" || c6_rc=$?
 c6_action="$(stop_action "$c6_out")"
 c6_msg="$(stop_reason "$c6_out")"
-if [[ "$c6_rc" -eq 0 && "$c6_action" == "continue" && -n "$c6_msg" ]]; then
-    log_pass "Case 6 — Row 6: continue + non-empty reason"
+if [[ "$c6_rc" -eq 0 && "$c6_action" == "continue" \
+      && "$c6_msg" == *"Continue working"* \
+      && "$c6_msg" == *"must be fixed before stopping"* \
+      && "$c6_msg" == *"make the required changes"* \
+      && "$c6_msg" == *"run targeted verification"* \
+      && "$c6_msg" == *"re-run the appropriate Cerberus review"* \
+      && "$c6_msg" == *"continue iterating"* \
+      && "$c6_msg" == *"do not stop yet"* \
+      && "$c6_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* \
+      && "$c6_msg" == *"src/main.c"* ]]; then
+    log_pass "Case 6 — Row 6: continue + actionable reason"
 else
     log_fail "Case 6: rc=$c6_rc action=$c6_action msg='$c6_msg' body=$(cat "$c6_out") stderr=$(cat "$c6_err")"
 fi
@@ -731,10 +740,55 @@ c8_rc=0
 run_hook "$c8_home" "$c8_workspace" "sess-c8-001" "$c8_out" "$c8_err" || c8_rc=$?
 c8_action="$(stop_action "$c8_out")"
 c8_msg="$(stop_reason "$c8_out")"
-if [[ "$c8_rc" -eq 0 && "$c8_action" == "continue" && -n "$c8_msg" ]]; then
-    log_pass "Case 8 — Row 9: continue + non-empty reason"
+if [[ "$c8_rc" -eq 0 && "$c8_action" == "continue" \
+      && "$c8_msg" == *"resolved this gate as FAIL"* \
+      && "$c8_msg" == *"Continue working"* \
+      && "$c8_msg" == *"Do not stop yet"* \
+      && "$c8_msg" == *"make the required changes"* \
+      && "$c8_msg" == *"run targeted verification"* \
+      && "$c8_msg" == *"re-run the appropriate Cerberus review"* \
+      && "$c8_msg" == *"continue iterating"* \
+      && "$c8_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* ]]; then
+    log_pass "Case 8 — Row 9: continue + actionable reason"
 else
     log_fail "Case 8: rc=$c8_rc action=$c8_action msg='$c8_msg' body=$(cat "$c8_out") stderr=$(cat "$c8_err")"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression — resolved + FAIL with no blocking aggregated findings still
+# must produce an actionable continue prompt, not a vague status-only note.
+# Exercises __cerberus_format_resolved_fail_message fallback branch.
+# ---------------------------------------------------------------------------
+log_test "Regression — resolved + FAIL + no blocking findings → actionable continue"
+c8b_home="$TEST_DIR/case8b"
+mkdir -p "$c8b_home"
+c8b_workspace="/tmp/cerberus-c8b"
+c8b_run="run-c8b-001"
+make_registry "$c8b_home" "$c8b_workspace" "$c8b_run" "sess-c8b-001"
+c8b_rd="$(make_review_dir "$c8b_home" "$c8b_workspace" "$c8b_run")"
+write_gate_state "$c8b_rd" "resolved" '{"codex":{}}' '{"verdict":"FAIL"}' "$c8b_run"
+cat > "$c8b_rd/reviews/codex.json" <<'EOF'
+{"verdict":"FAIL","summary":"bad","findings":[]}
+EOF
+touch "$c8b_rd/reviews/codex.done"
+c8b_out="$TEST_DIR/c8b.out"
+c8b_err="$TEST_DIR/c8b.err"
+c8b_rc=0
+run_hook "$c8b_home" "$c8b_workspace" "sess-c8b-001" "$c8b_out" "$c8b_err" || c8b_rc=$?
+c8b_action="$(stop_action "$c8b_out")"
+c8b_msg="$(stop_reason "$c8b_out")"
+if [[ "$c8b_rc" -eq 0 && "$c8b_action" == "continue" \
+      && "$c8b_msg" == *"resolved this gate as FAIL"* \
+      && "$c8b_msg" == *"Do not stop yet"* \
+      && "$c8b_msg" == *"Inspect Cerberus: Status"* \
+      && "$c8b_msg" == *"make the required changes"* \
+      && "$c8b_msg" == *"run targeted verification"* \
+      && "$c8b_msg" == *"re-run the appropriate Cerberus review"* \
+      && "$c8b_msg" == *"continue iterating"* \
+      && "$c8b_msg" == *"Do not clear or override the gate unless the user explicitly instructs"* ]]; then
+    log_pass "Regression — resolved FAIL fallback is actionable"
+else
+    log_fail "Regression resolved FAIL fallback: rc=$c8b_rc action=$c8b_action msg='$c8b_msg' body=$(cat "$c8b_out") stderr=$(cat "$c8b_err")"
 fi
 
 # ---------------------------------------------------------------------------

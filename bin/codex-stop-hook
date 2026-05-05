@@ -423,20 +423,29 @@ __cerberus_format_blocking_message() {
               or ((.priority // "") == "P1")
             )
         ]) as $blocking
-        | "Cerberus has \($blocking | length) blocking finding(s); run Cerberus: Status to inspect.\n" +
+        | "Continue working: Cerberus has \($blocking | length) blocking review finding(s) that must be fixed before stopping. Treat the items below as your fix queue and make the required changes now. If a finding needs more context, run Cerberus: Status for full details. After each round of fixes, run targeted verification, then re-run the appropriate Cerberus review. If blocking findings remain, continue iterating and do not stop yet. Do not clear or override the gate unless the user explicitly instructs you to do so.\n" +
           ([
             $blocking[]
-            | "- [\(.priority // "?")][\(.verdict // "?")] \(.reviewer // "?"): \(.summary // "")"
+            | "- [\(.priority // "?")][\(.verdict // "?")] \(.reviewer // "?"): \(.summary // "")" +
+              (if ((.file_refs // []) | length) > 0 then "\n  Files: " + ((.file_refs // []) | join(", ")) else "" end)
           ] | join("\n"))
-    ' 2>/dev/null || echo "Cerberus has blocking findings; run Cerberus: Status to inspect."
+    ' 2>/dev/null || echo "Continue working: Cerberus has blocking review findings that must be fixed before stopping. Run Cerberus: Status for full details, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If blocking findings remain, continue iterating and do not stop yet. Do not clear or override the gate unless the user explicitly instructs you to do so."
 }
 
 # Helper: format row-9 user message (resolved + fail).
 __cerberus_format_resolved_fail_message() {
     local body="$1"
+    local n
+    n="$(__cerberus_count_blocking "$body")"
+    if [ "$n" -gt 0 ]; then
+        local msg
+        msg="$(__cerberus_format_blocking_message "$body")"
+        printf 'Cerberus resolved this gate as FAIL. Do not stop yet.\n%s' "$msg"
+        return 0
+    fi
     printf '%s' "$body" | jq -r '
-        "Cerberus gate resolved with consensus: \(.consensus_verdict // "fail"). Run Cerberus: Status for details."
-    ' 2>/dev/null || echo "Cerberus gate resolved with consensus: fail."
+        "Continue working: Cerberus resolved this gate as " + ((.consensus_verdict // "fail") | ascii_upcase) + ". Do not stop yet. Inspect Cerberus: Status for the review findings, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If the review still fails or blocking findings remain, continue iterating. Do not clear or override the gate unless the user explicitly instructs you to do so."
+    ' 2>/dev/null || echo "Continue working: Cerberus resolved this gate as FAIL. Do not stop yet. Inspect Cerberus: Status for the review findings, make the required changes, run targeted verification, then re-run the appropriate Cerberus review. If the review still fails or blocking findings remain, continue iterating. Do not clear or override the gate unless the user explicitly instructs you to do so."
 }
 
 # Shared wait timeout. Match the Claude hook default; this is not a
