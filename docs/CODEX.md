@@ -7,7 +7,7 @@
 > lifecycle adapters and packaging differ.
 >
 > **Feature scope.** Codex discovers the same generic Cerberus skills
-> used by Claude and Amp from `skills/<skill>/SKILL.md`. The
+> used by Claude from `skills/<skill>/SKILL.md`. The
 > Tier-1 review skills (`review-code`, `review-plan`, `review-spec`,
 > `ask`, `status`, `clear-gate`) are the supported Codex lifecycle
 > workflows and use the **`SessionStart` + `UserPromptSubmit` + `Stop`** hooks.
@@ -488,8 +488,7 @@ plus the full Phase 0 + Phase 1 automated test suite green.
 
 ### Phase 1 Exit Criteria Recap
 
-These are the testable exit criteria from the plan
-(`docs/2026-04-29-codex-amp-plugin-port-plan.md` L926-L935):
+These are the testable exit criteria from the original Phase 1 plan:
 
 | Criterion | Verified by |
 |---|---|
@@ -507,7 +506,7 @@ release tag may be cut.
 
 These findings are the resolutions of **OQ-1** (Codex skill manifest
 fields) and **OQ-2** (stable Codex plugin-install path env var) from
-`docs/2026-04-29-codex-amp-plugin-port-plan.md`, recorded **2026-04-30**.
+the original Phase 1 plan, recorded **2026-04-30**.
 They are preserved here for auditability of the design decisions that
 shaped Phase 1; future contributors can revisit them when an
 authoritative Codex schema or env-var lands.
@@ -551,7 +550,7 @@ skills/
 ```
 
 The manifest points at `skills/` so the same flat skill tree is shared
-by Claude, Codex, and Amp.
+by Claude and Codex.
 
 #### Slash-command vs skill semantics for the six Tier-1 workflows
 

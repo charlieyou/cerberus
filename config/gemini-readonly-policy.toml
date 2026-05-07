@@ -7,7 +7,7 @@
 # and policy files are loaded from `$PLUGIN_ROOT/config/...`, where
 # `$PLUGIN_ROOT` is resolved via `__cerberus_resolve_root` and therefore
 # follows `CERBERUS_ROOT` (with `CLAUDE_PLUGIN_ROOT` as alias). The
-# policy applies cleanly under `CERBERUS_HOST=claude`, `codex`, `amp`,
+# policy applies cleanly under `CERBERUS_HOST=claude`, `codex`,
 # and `generic`. See `bin/tests/test-review-gate-gemini-policy.sh` for
 # the cross-host assertion. No host-specific knobs are required.
 

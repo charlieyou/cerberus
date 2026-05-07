@@ -14,8 +14,6 @@ In scope:
 - Codex plugin lifecycle scripts and shared backend scripts used by
   `.codex-plugin/plugin.json` and `hooks/codex-hooks.json`.
 - Shared shell helper libraries sourced by the plugin scripts.
-- The Amp plugin adapter (`.amp/plugins/cerberus.ts`), because it uses the
-  same host-neutral backend and constrains shared script behavior.
 - The release/update helper for installed Claude plugins.
 
 Out of scope:
@@ -30,8 +28,8 @@ Out of scope:
 
 | Path | Kind | Primary host(s) | Functional role |
 |---|---|---:|---|
-| `bin/review-gate` | executable | Claude, Codex, Amp, generic | Main review gate CLI and shared orchestration backend. |
-| `bin/generate` | executable | Claude, Codex, Amp, generic | Multi-model generator backend for plan/spec/healthcheck/architecture drafts. |
+| `bin/review-gate` | executable | Claude, Codex, generic | Main review gate CLI and shared orchestration backend. |
+| `bin/generate` | executable | Claude, Codex, generic | Multi-model generator backend for plan/spec/healthcheck/architecture drafts. |
 | `bin/claude-session-init` | hook executable | Claude | Captures Claude `session_id` and `transcript_path` into `CLAUDE_ENV_FILE`. |
 | `bin/codex-session-init` | hook executable | Codex | Writes the Codex active-session registry used by skills and Stop hooks. |
 | `bin/codex-stop-hook` | hook executable | Codex | Maps Cerberus gate status to Codex Stop hook allow/block JSON. |
@@ -40,11 +38,10 @@ Out of scope:
 | `bin/review-gate-models.sh` | sourced helper | all | Resolves model modes, emits schemas, invokes reviewers, extracts JSON. |
 | `bin/review-gate-debate.sh` | sourced helper | all | Implements debate mode hashing, anonymization, rounds, aggregation. |
 | `bin/telemetry-lib.sh` | sourced helper | all | Writes and summarizes telemetry for runs, iterations, and agents. |
-| `bin/cerberus-skill-env` | sourced helper | Claude, Codex, Amp, generic | Normalizes env vars before skill snippets call backend scripts. |
+| `bin/cerberus-skill-env` | sourced helper | Claude, Codex, generic | Normalizes env vars before skill snippets call backend scripts. |
 | `bin/cerberus-task-completed-hook` | hook executable | Claude | Gates Claude agent-team task completion through verification and code review. |
 | `bin/cerberus-teammate-idle-hook` | hook executable | Claude | Suppresses duplicate idle notifications for Cerberus implementer teammates. |
 | `bin/update-plugin` | executable | Claude maintainer | Updates installed plugin cache and rewrites Claude allowlist paths. |
-| `.amp/plugins/cerberus.ts` | Amp plugin | Amp | TypeScript Amp plugin that registers Cerberus tools/commands and dispatches to the shared `bin/review-gate` backend. |
 
 ## Hook Manifests
 
@@ -113,7 +110,7 @@ aliases preserved.
 
 | Canonical variable | Meaning | Alias or fallback |
 |---|---|---|
-| `CERBERUS_HOST` | `claude`, `codex`, `amp`, or `generic` | Derived from host-specific env when unset. |
+| `CERBERUS_HOST` | `claude`, `codex`, or `generic` | Derived from host-specific env when unset. |
 | `CERBERUS_ROOT` | Cerberus plugin/repo root | `CLAUDE_PLUGIN_ROOT`. |
 | `CERBERUS_STATE_ROOT` | Base state directory | Host default. Claude uses `~/.claude/projects`; other hosts use `~/.cerberus/projects` unless overridden. |
 | `CERBERUS_PROJECT_KEY` | Stable workspace key | Computed by `get_project_hash`. |
@@ -143,7 +140,7 @@ is:
 Default state roots:
 
 - Claude: `~/.claude/projects`
-- Codex, Amp, generic: `~/.cerberus/projects`
+- Codex, generic: `~/.cerberus/projects`
 
 The resolver must reject:
 
@@ -362,8 +359,8 @@ consumers.
 - Exit `4` when no active gate exists.
 - Exit `2` on internal error.
 
-The JSON shape is consumed by `bin/codex-stop-hook` and Amp status surfaces,
-so compatibility is part of the hook contract.
+The JSON shape is consumed by `bin/codex-stop-hook`, so compatibility is part
+of the hook contract.
 
 ### `resolve`
 
@@ -574,7 +571,7 @@ Functional requirements:
 
 This script is sourced by skill Bash snippets before they invoke backend
 commands. It normalizes root, host, project, and run-key environment across
-Claude, Codex, Amp, and generic shells.
+Claude, Codex, and generic shells.
 
 Functional requirements:
 
@@ -583,13 +580,10 @@ Functional requirements:
 - Verify the root contains backend files; otherwise fall back to the
   script-derived root.
 - Infer `CERBERUS_HOST`:
-  - `amp` if Amp thread env exists.
   - `claude` if Claude env exists.
   - `codex` if Codex env exists or a Codex registry exists for the current
     project.
   - `generic` otherwise.
-- For Amp, use a valid `AMP_THREAD_ID` or `AMP_CURRENT_THREAD_ID` as run key
-  when no explicit run key is set.
 - For Codex, read the active-session registry and export
   `CERBERUS_PROJECT_KEY` and `CERBERUS_RUN_KEY`.
 - If the Codex registry is missing or stale and `CODEX_THREAD_ID` exists,
@@ -802,63 +796,6 @@ Functional requirements:
 - Exit non-zero if the version cannot be determined or settings JSON cannot
   be rewritten validly.
 
-## `.amp/plugins/cerberus.ts`
-
-### Purpose
-
-The Amp plugin adapter exposes the shared Cerberus backend through the Amp
-Plugin API (`@ampcode/plugin`). It is included here because it uses the same
-host-neutral state contract and is a compatibility consumer of `review-gate`.
-
-Registered surfaces:
-
-| Surface | Names | Behavior |
-|---|---|---|
-| Tools | `review-code`, `review-plan`, `review-spec`, `ask`, `ask-panel`, `status`, `clear-gate` | Each tool dispatches one or more `bin/review-gate` subcommands and returns the combined stdout/stderr to the model. |
-| Slash commands | Same names as tools, under the `Cerberus` category | Prompt the user via `ctx.ui.input` for required arguments, then invoke the same backend dispatcher and notify the user with the output. |
-| Lifecycle hooks | `session.start`, `agent.start`, `agent.end` | `session.start` and `agent.start` ensure the Amp session registry exists. `agent.end` runs `review-gate completion-check --host amp --json` and, when the gate requires action, returns `{ action: 'continue', userMessage }` to keep Amp engaged. |
-| Background monitor | Auto-started after each `review-code` / `review-plan` / `review-spec` dispatch | Polls `review-gate status --json` every `CERBERUS_AMP_MONITOR_INTERVAL_MS` (default 5000ms) up to `CERBERUS_AMP_MONITOR_DEADLINE_MS` (default 30 minutes). When `pending_reviewers.length === 0` and at least one reviewer has completed (or a `consensus_verdict` is set), it pushes a `user-message` into the captured `ctx.thread` via `thread.append([...])` describing the gate status, verdict, and finding count. Monitors are deduped per `${projectKey}:${runKey}`, feature-detect `thread.append`, and timers are `unref()`'d so they never block process exit. The monitor is best-effort UX sugar; the `agent.end` completion-check remains the authoritative enforcement backstop. |
-
-Backend dispatch (per command):
-
-| Command | Required input | Backend call(s) |
-|---|---|---|
-| `review-code` | optional `diff_mode` and matching `base`/`commit`/`commits`/`range` plus reviewer flags | `review-gate spawn-code-review [...flags]` |
-| `review-plan` | `plan_path` | `review-gate spawn-plan-review <plan_path>` |
-| `review-spec` | `spec_path` | `review-gate spawn-spec-review <spec_path>` |
-| `ask` / `ask-panel` | `question` | `review-gate spawn-ask <question>` then `review-gate wait --json --finalize` |
-| `status` | none | `review-gate status --json` (exit code `4` is treated as "no active gate" and ignored) |
-| `clear-gate` | optional `reason` | `review-gate resolve --reason <reason>` (defaults to `manual clear via Amp plugin`) |
-
-Run-key behavior:
-
-- Explicit `CERBERUS_RUN_KEY` (or the legacy alias `REVIEW_GATE_SESSION_KEY`)
-  wins and is treated as a one-shot bypass: the plugin uses the override for
-  the current invocation but does not persist it into the workspace's
-  active-session registry.
-- A valid `AMP_THREAD_ID` or `AMP_CURRENT_THREAD_ID` is preferred for new
-  thread-bound runs and is persisted into the registry.
-- If prior registry state used a generated UUID because no thread id existed,
-  the adapter preserves that UUID for continuity.
-- If no valid thread id or registry exists, generate and persist a UUID.
-
-Before each backend call, the plugin exports:
-
-```text
-CERBERUS_HOST=amp
-CERBERUS_ROOT=<plugin-resolved root>
-CERBERUS_STATE_ROOT=<default or override>
-CERBERUS_PROJECT_KEY=<workspace key>
-CERBERUS_RUN_KEY=<resolved run key>
-AMP_THREAD_ID=<resolved thread id, if any>
-AMP_CURRENT_THREAD_ID=<resolved thread id, if any>
-```
-
-The plugin also strips inherited `REVIEW_GATE_*` variables and Claude-specific
-`CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` / `CLAUDE_SESSION_ID` /
-`CLAUDE_TRANSCRIPT_PATH` from the backend environment so cross-host state
-cannot leak.
-
 ## Security and Safety Requirements
 
 - Hook scripts are part of the trusted plugin boundary. Any actor that can
@@ -888,7 +825,7 @@ Runtime and integration tests should cover:
   blocking states, kills children on signals, and fails open on malformed
   state.
 - `cerberus-skill-env` resolves the correct root, host, project key, and run
-  key under Claude, Codex, Amp, and generic shells.
+  key under Claude, Codex, and generic shells.
 - `review-gate status --json` is non-mutating and uses the same run-key
   lookup as `wait`.
 - `review-gate wait --json` returns documented statuses and exit codes.
@@ -906,8 +843,6 @@ Runtime and integration tests should cover:
   changed evidence through.
 - `update-plugin` rewrites only Cerberus allowlist paths and preserves valid
   JSON.
-- Amp toolbox `describe` and `execute` validate JSON, export host-neutral env,
-  and propagate backend exit codes.
 
 ## Compatibility Requirements
 

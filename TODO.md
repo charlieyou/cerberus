@@ -1,5 +1,11 @@
 # TODO
 
+## Priorities
+* Rewrite in Go, native Codex support
+* Support arbitrary model mixes w/ different prompts
+
+## Other
+
 * Add strict mode where only passes if no feedback at all
 
 * add /constitution command (from Spec Kit)
@@ -56,19 +62,6 @@ Task review should use multi-models
 * Persist P2/P3 review issues
 * Config-driven validation, more triggers
 * File locking + enable parallel implementers
-
-
-## Amp
-
-* Agent team
-
-* Add gating, rest of the commands
-
-
-## Codex
-
-* Test it
-* Rest of commands
 
 ## Debate
 

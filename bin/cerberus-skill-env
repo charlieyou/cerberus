@@ -83,9 +83,7 @@ if ! __cerberus_skill_env_has_backend "$CERBERUS_ROOT"; then
 fi
 
 if [ -z "${CERBERUS_HOST:-}" ]; then
-    if [ -n "${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}" ]; then
-        export CERBERUS_HOST="amp"
-    elif [ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]; then
+    if [ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]; then
         export CERBERUS_HOST="claude"
     elif [ -n "${CODEX_THREAD_ID:-${CODEX_API_KEY:-${CODEX_HOME:-${CODEX_SANDBOX:-}}}}" ]; then
         export CERBERUS_HOST="codex"
@@ -109,13 +107,7 @@ if [ -z "${CERBERUS_HOST:-}" ]; then
 fi
 
 if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
-    if [ "$CERBERUS_HOST" = "amp" ]; then
-        __cerberus_skill_amp_thread="${AMP_THREAD_ID:-${AMP_CURRENT_THREAD_ID:-}}"
-        case "$__cerberus_skill_amp_thread" in
-            T-*) export CERBERUS_RUN_KEY="$__cerberus_skill_amp_thread" ;;
-        esac
-        unset __cerberus_skill_amp_thread
-    elif [ "$CERBERUS_HOST" = "codex" ] && [ -z "${CLAUDE_SESSION_ID:-}" ]; then
+    if [ "$CERBERUS_HOST" = "codex" ] && [ -z "${CLAUDE_SESSION_ID:-}" ]; then
         if [ ! -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ]; then
             echo "cerberus skill: cannot read Codex active-session registry; missing $CERBERUS_ROOT/bin/review-gate-lib.sh" >&2
             return 1 2>/dev/null || exit 1

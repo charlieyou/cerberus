@@ -4,10 +4,10 @@
 # Plan reference: §Phase 0 Tests (L1074-L1113) and §State Resolution
 # Algorithm (L300-L353).
 #
-# Coverage matrix (15 rows). All rows green after T004:
+# Coverage matrix (14 rows; Row 4 retired with Amp host removal). All rows green after T004:
 #
 #   Row  1: T001 — legacy Claude path byte-for-byte equivalence [DONE]
-#   Rows 2-7: T001 — neutral resolver / host auto-detect [DONE]
+#   Rows 2-3, 5-7: T001 — neutral resolver / host auto-detect [DONE]
 #   Row  8: T002 — alias precedence + once-per-process warning [DONE]
 #   Row  9: T002 — alias-only legacy run key [DONE]
 #   Row 10: T002 — empty-string env vars treated as unset [DONE]
@@ -154,21 +154,6 @@ EOF
 row3_actual="$(resolve_in_subshell "$row3_env" "" "")"
 row3_expected="$TEST_HOME/.cerberus/projects/row3-key/row3-run"
 assert_resolved_eq "Row 3: codex neutral layout" "$row3_expected" "$row3_actual"
-
-# ---------------------------------------------------------------------------
-# Row 4 — Amp neutral path.
-# Same shape as Row 2 with CERBERUS_HOST=amp.
-# ---------------------------------------------------------------------------
-log_test "Row 4 — amp neutral path (CERBERUS_HOST=amp)"
-row4_env="$(cat <<EOF
-CERBERUS_HOST=amp
-CERBERUS_PROJECT_KEY=row4-key
-CERBERUS_RUN_KEY=row4-run
-EOF
-)"
-row4_actual="$(resolve_in_subshell "$row4_env" "" "")"
-row4_expected="$TEST_HOME/.cerberus/projects/row4-key/row4-run"
-assert_resolved_eq "Row 4: amp neutral layout" "$row4_expected" "$row4_actual"
 
 # ---------------------------------------------------------------------------
 # Row 5 — Custom CERBERUS_STATE_ROOT override.

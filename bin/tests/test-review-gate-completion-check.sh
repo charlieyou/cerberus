@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for bin/review-gate completion-check, the compact lifecycle envelope
-# consumed by the Amp agent.end plugin hook.
+# consumed by host adapters.
 
 set -uo pipefail
 
@@ -53,7 +53,7 @@ write_state() {
         --arg run_key "$RUN_KEY" \
         '{
             status: $status,
-            host: "amp",
+            host: "codex",
             owner: {project_key: $project_key, session_key: $run_key},
             reviewers: {},
             consensus: (if $consensus == "" then {} else {verdict: $consensus} end),
@@ -62,15 +62,15 @@ write_state() {
 }
 
 run_check() {
-    CERBERUS_HOST=amp \
+    CERBERUS_HOST=codex \
     CERBERUS_STATE_ROOT="$STATE_ROOT" \
     CERBERUS_PROJECT_KEY="$PROJECT_KEY" \
     CERBERUS_RUN_KEY="$RUN_KEY" \
-        "$REVIEW_GATE" completion-check --host amp --json
+        "$REVIEW_GATE" completion-check --host codex --json
 }
 
 run_resolve() {
-    CERBERUS_HOST=amp \
+    CERBERUS_HOST=codex \
     CERBERUS_STATE_ROOT="$STATE_ROOT" \
     CERBERUS_PROJECT_KEY="$PROJECT_KEY" \
     CERBERUS_RUN_KEY="$RUN_KEY" \
@@ -153,7 +153,7 @@ fi
 rm -f "$REVIEWS_DIR"/*
 jq -n '{
     status: "pending",
-    host: "amp",
+    host: "codex",
     owner: {project_key: "completion-project", session_key: "completion-run"},
     reviewers: {gemini: {}},
     consensus: {verdict: "FAIL"},
@@ -177,7 +177,7 @@ rm -f "$REVIEWS_DIR"/*
 mkdir -p "$REVIEWS_DIR"
 jq -n '{
     status: "pending",
-    host: "amp",
+    host: "codex",
     owner: {project_key: "completion-project", session_key: "completion-run"},
     reviewers: {claude: {}, codex: {}},
     consensus: {},

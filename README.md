@@ -14,7 +14,6 @@ Cerberus runs as a plugin/skill set in any of the following host environments. T
 |------|--------|---------|------|
 | Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
 | Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/<skill>/SKILL.md` | [`docs/CODEX.md`](docs/CODEX.md) |
-| Amp CLI | Phase 2 plugin integration (pending cross-host manual smoke) | `skills/<skill>/SKILL.md`, `.amp/plugins/cerberus.ts` | [`docs/AMP.md`](docs/AMP.md) |
 | `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
 
 Existing Claude users do not need to change anything: the legacy `CLAUDE_*` env vars and `~/.claude/projects/...` state paths remain byte-for-byte identical.
@@ -479,7 +478,7 @@ The shared backend reads a host-neutral env contract. Every entry has a legacy a
 
 | Variable | Purpose | Alias / fallback |
 |---|---|---|
-| `CERBERUS_HOST` | `claude` \| `codex` \| `amp` \| `generic` | defaults to `claude` if any `CLAUDE_*` is set, else `generic` |
+| `CERBERUS_HOST` | `claude` \| `codex` \| `generic` | defaults to `claude` if any `CLAUDE_*` is set, else `generic` |
 | `CERBERUS_ROOT` | Plugin/repo root | `CLAUDE_PLUGIN_ROOT` |
 | `CERBERUS_STATE_ROOT` | Override for state base directory | host default (`~/.claude/projects` for Claude, `~/.cerberus/projects` otherwise) |
 | `CERBERUS_PROJECT_KEY` | Stable workspace key | computed via `get_project_hash` fallback |
@@ -523,13 +522,12 @@ Model override variables (override the mode-based defaults):
 
 ### Multi-Host Release Phases
 
-The Codex/Amp port ships in three sequential, independently shippable, independently revertable releases. Each phase's rollback is a single `git revert`.
+The Codex port ships in two sequential, independently shippable, independently revertable releases. Each phase's rollback is a single `git revert`.
 
 | Release | Scope | Validation |
 |---|---|---|
 | Cerberus vX (Phase 0) | Shared backend host neutralization. New `status --json` subcommand. New `CERBERUS_*` env contract with full back-compat. | Existing Claude `bin/tests/*.sh` + new neutral-state + `status` tests. No host adapter changes. |
 | Cerberus vX+1 (Phase 1) | Codex port: `.codex-plugin/plugin.json`, skills, `templates/codex-hooks.json`, `bin/codex-session-init`, `bin/codex-stop-hook`, `docs/CODEX.md`. | Phase 0 tests + Codex tests + manual Codex smoke checks. |
-| Cerberus vX+2 (Phase 2) | Amp port: `.amp/plugins/cerberus.ts` + `docs/AMP.md`. | Phase 0/1 tests + `bin/tests/test-amp-plugin.sh` + manual Amp smoke checks. |
 
 Phase 3 (generator workflow ports) and Phase 4 (team automation revisit) ship in subsequent releases as scope and external host maturity allow. Phase 0 ships behind no flag because it's strictly additive; the regression suite (Claude tests) is the gate, and `CERBERUS_HOST=generic` mode in CI exercises the neutral path before any host adapter is shipped.
 

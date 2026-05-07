@@ -316,8 +316,7 @@ thread_output="$TEST_DIR/codex-thread.out"
 thread_registry="$thread_home/.cerberus/runtime/codex/$codex_pk/active-session.json"
 (
     cd "$FOREIGN_CWD"
-    env -u AMP_THREAD_ID -u AMP_CURRENT_THREAD_ID \
-        HOME="$thread_home" CODEX_THREAD_ID=codex-thread-001 CERBERUS_ROOT="$PLUGIN_ROOT" \
+    env HOME="$thread_home" CODEX_THREAD_ID=codex-thread-001 CERBERUS_ROOT="$PLUGIN_ROOT" \
         "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env" || exit $?; printf "%s\n%s\n%s\n" "$CERBERUS_HOST" "$CERBERUS_PROJECT_KEY" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT"
 ) > "$thread_output"
 thread_host="$(sed -n '1p' "$thread_output")"

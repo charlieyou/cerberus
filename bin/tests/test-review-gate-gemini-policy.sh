@@ -354,7 +354,7 @@ log_pass "gemini repair uses policy-based read-only invocation"
 #
 # Asserts that `config/gemini-readonly-policy.toml` continues to bound the
 # Gemini reviewer's tool/file access when invoked under non-Claude
-# CERBERUS_HOST values. The Codex and Amp adapters do NOT need to exist for
+# CERBERUS_HOST values. The Codex adapter does NOT need to exist for
 # this check; CERBERUS_HOST is just a label the resolver consumes for
 # state-path selection.
 # ---------------------------------------------------------------------------
@@ -441,4 +441,3 @@ assert_cross_host_policy() {
 
 assert_cross_host_policy generic
 assert_cross_host_policy codex
-assert_cross_host_policy amp

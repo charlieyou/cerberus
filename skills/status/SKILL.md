@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 ## Host-Neutral Execution
 
-Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, Amp, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
+Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
 
 ```bash
 cerberus_root=""
@@ -114,7 +114,7 @@ export CERBERUS_ROOT="$cerberus_root"
 
 - `gate_status` — one of `pending`, `awaiting_decision`, `resolved`, or `unknown`.
 - `consensus_verdict` — one of `pass`, `fail`, `needs_revision`, or JSON `null` while still pending.
-- `host` — the host that owns the run (`claude`, `codex`, `amp`, or `generic`).
+- `host` — the host that owns the run (`claude`, `codex`, or `generic`).
 - `run_key` — the run key resolved by `__cerberus_resolve_run_key`.
 - `reviewers`, `pending_reviewers`, `aggregated_findings`, and `parse_errors` describe review progress and findings.
 

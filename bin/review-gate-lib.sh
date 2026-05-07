@@ -112,9 +112,9 @@ resolve_review_dir() {
         fi
     fi
     case "$host" in
-        claude|codex|amp|generic) ;;
+        claude|codex|generic) ;;
         *)
-            log "review-gate: invalid CERBERUS_HOST='$host' (expected one of claude|codex|amp|generic)"
+            log "review-gate: invalid CERBERUS_HOST='$host' (expected one of claude|codex|generic)"
             return 1
             ;;
     esac

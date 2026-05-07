@@ -12,7 +12,7 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 # T004 + T0155: alias CERBERUS_ROOT → CLAUDE_PLUGIN_ROOT so non-Claude hosts
-# (Codex/Amp/generic) can configure the plugin root without setting Claude-
+# (Codex/generic) can configure the plugin root without setting Claude-
 # specific env. Precedence mirrors __cerberus_resolve_root in bin/review-gate.
 # The warning is INLINED here (rather than calling the helper) because
 # bin/generate is a separate binary and sourcing bin/review-gate at top of
