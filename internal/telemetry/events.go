@@ -33,6 +33,19 @@ type Event struct {
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
+func (event Event) MarshalJSON() ([]byte, error) {
+	record := make(map[string]any, len(event.Payload)+2)
+	for key, value := range event.Payload {
+		if key == "event" || key == "timestamp" {
+			continue
+		}
+		record[key] = value
+	}
+	record["event"] = event.Event
+	record["timestamp"] = event.Timestamp
+	return json.Marshal(record)
+}
+
 func WriteEvent(runRoot string, event Event) error {
 	path := filepath.Join(runRoot, "event-log.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

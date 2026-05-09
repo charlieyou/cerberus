@@ -107,6 +107,17 @@ func TestWriteEventAppendsOneJSONLinePerCall(t *testing.T) {
 	if events[1].Event != EventBuildCompleted {
 		t.Fatalf("second event = %q, want %q", events[1].Event, EventBuildCompleted)
 	}
+
+	firstLine := readEventLine(t, filepath.Join(runRoot, "event-log.jsonl"))
+	if _, ok := firstLine["payload"]; ok {
+		t.Fatalf("event line contains nested payload key: %#v", firstLine)
+	}
+	if firstLine["run_key"] != "run-1" {
+		t.Fatalf("run_key = %v, want run-1", firstLine["run_key"])
+	}
+	if firstLine["event"] != EventBuildStarted {
+		t.Fatalf("event = %v, want %s", firstLine["event"], EventBuildStarted)
+	}
 }
 
 func TestWriteEventConcurrentAppendsDistinctLines(t *testing.T) {
@@ -263,6 +274,22 @@ func readEventLog(t *testing.T, path string) []Event {
 		t.Fatalf("scan event log: %v", err)
 	}
 	return events
+}
+
+func readEventLine(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read event log: %v", err)
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+
+	var event map[string]any
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		t.Fatalf("unmarshal first event line: %v", err)
+	}
+	return event
 }
 
 func assertJSONFileKeys(t *testing.T, path string, keys []string) {
