@@ -195,6 +195,25 @@ if [[ "$claude_transcript" != "/tmp/claude-transcript.jsonl" ]]; then
 fi
 log_pass "cerberus-skill-env maps Claude session into v2 run env"
 
+log_test "cerberus-skill-env maps legacy review gate session key for Claude"
+legacy_claude_env_output="$TEST_DIR/claude-legacy-skill-env.out"
+env CERBERUS_ROOT="$PLUGIN_ROOT" CERBERUS_HOST=claude REVIEW_GATE_SESSION_KEY=legacy-claude-run-001 CLAUDE_TRANSCRIPT_PATH=/tmp/legacy-claude-transcript.jsonl \
+    "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n%s\n%s\n" "$CERBERUS_SESSION_ID" "$CERBERUS_RUN_KEY" "$CERBERUS_TRANSCRIPT_PATH"' _ "$PLUGIN_ROOT" \
+    > "$legacy_claude_env_output"
+legacy_claude_session="$(sed -n '1p' "$legacy_claude_env_output")"
+legacy_claude_run="$(sed -n '2p' "$legacy_claude_env_output")"
+legacy_claude_transcript="$(sed -n '3p' "$legacy_claude_env_output")"
+if [[ "$legacy_claude_session" != "legacy-claude-run-001" ]]; then
+    log_fail "expected legacy Claude skill env to backfill session id from REVIEW_GATE_SESSION_KEY, got: $legacy_claude_session"
+fi
+if [[ "$legacy_claude_run" != "legacy-claude-run-001" ]]; then
+    log_fail "expected legacy Claude skill env to export run key legacy-claude-run-001, got: $legacy_claude_run"
+fi
+if [[ "$legacy_claude_transcript" != "/tmp/legacy-claude-transcript.jsonl" ]]; then
+    log_fail "expected legacy Claude skill env to export transcript path, got: $legacy_claude_transcript"
+fi
+log_pass "cerberus-skill-env maps legacy review gate session key for Claude"
+
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
 extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \

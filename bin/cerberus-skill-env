@@ -106,19 +106,25 @@ if [ -z "${CERBERUS_HOST:-}" ]; then
     fi
 fi
 
-if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
-    if [ "$CERBERUS_HOST" = "claude" ]; then
-        if [ -z "${CERBERUS_SESSION_ID:-}" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
-            export CERBERUS_SESSION_ID="$CLAUDE_SESSION_ID"
-        fi
-        if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -n "${CERBERUS_SESSION_ID:-}" ]; then
-            export CERBERUS_RUN_KEY="$CERBERUS_SESSION_ID"
-        fi
-        if [ -z "${CERBERUS_TRANSCRIPT_PATH:-}" ] && [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ]; then
-            export CERBERUS_TRANSCRIPT_PATH="$CLAUDE_TRANSCRIPT_PATH"
-        fi
+if [ "$CERBERUS_HOST" = "claude" ]; then
+    if [ -z "${CERBERUS_SESSION_ID:-}" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+        export CERBERUS_SESSION_ID="$CLAUDE_SESSION_ID"
     fi
+    if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -n "${REVIEW_GATE_SESSION_KEY:-}" ]; then
+        export CERBERUS_RUN_KEY="$REVIEW_GATE_SESSION_KEY"
+    fi
+    if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -n "${CERBERUS_SESSION_ID:-}" ]; then
+        export CERBERUS_RUN_KEY="$CERBERUS_SESSION_ID"
+    fi
+    if [ -z "${CERBERUS_SESSION_ID:-}" ] && [ -n "${CERBERUS_RUN_KEY:-}" ]; then
+        export CERBERUS_SESSION_ID="$CERBERUS_RUN_KEY"
+    fi
+    if [ -z "${CERBERUS_TRANSCRIPT_PATH:-}" ] && [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ]; then
+        export CERBERUS_TRANSCRIPT_PATH="$CLAUDE_TRANSCRIPT_PATH"
+    fi
+fi
 
+if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
     if [ "$CERBERUS_HOST" = "codex" ] && [ -z "${CLAUDE_SESSION_ID:-}" ]; then
         if [ ! -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ]; then
             echo "cerberus skill: cannot read Codex active-session registry; missing $CERBERUS_ROOT/bin/review-gate-lib.sh" >&2
