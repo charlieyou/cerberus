@@ -21,7 +21,7 @@ func TestGenerateWrapperFallsBackFromInvalidRoot(t *testing.T) {
 	outputDir := t.TempDir()
 	recordDir := t.TempDir()
 	badRoot := t.TempDir()
-	fixtureDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
+	fixtureDir := keyedGenerateFixtureDir(t, repoRoot, "create-spec", "write a create-spec draft", generateProviders)
 
 	cmd := exec.Command(filepath.Join(pluginRoot, "bin", "generate"), outputDir, "--type", "create-spec", "--mode", "smart", "--prompt-file", promptFile)
 	cmd.Dir = t.TempDir()

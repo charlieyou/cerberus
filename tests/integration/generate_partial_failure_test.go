@@ -15,17 +15,11 @@ func TestGeneratePartialFailure(t *testing.T) {
 	for _, generatorType := range []string{"create-spec", "create-plan", "healthcheck", "architecture-review"} {
 		t.Run(generatorType, func(t *testing.T) {
 			root := newGeneratePromptRoot(t, generatorType, "partial "+generatorType+" template")
-			fixtureDir := t.TempDir()
-			for _, provider := range []string{"claude", "gemini"} {
-				source := filepath.Join(repoRoot, "tests", "fixtures", "generate", provider+"-"+generatorType+".md")
-				data, err := os.ReadFile(source)
-				if err != nil {
-					t.Fatalf("ReadFile(%s) error = %v", source, err)
-				}
-				if err := os.WriteFile(filepath.Join(fixtureDir, provider+"-"+generatorType+".md"), data, 0o644); err != nil {
-					t.Fatalf("WriteFile(%s fixture) error = %v", provider, err)
-				}
+			prompt := "write a " + generatorType + " draft"
+			if generatorType == "healthcheck" {
+				prompt = "review error handling"
 			}
+			fixtureDir := keyedGenerateFixtureDir(t, repoRoot, generatorType, prompt, []string{"claude", "gemini"})
 
 			outputDir := t.TempDir()
 			recordDir := t.TempDir()
@@ -33,7 +27,7 @@ func TestGeneratePartialFailure(t *testing.T) {
 			if generatorType == "healthcheck" {
 				args = append(args, "--focus", "review error handling")
 			} else {
-				args = append(args, "--mode", "smart", "--prompt-file", writePromptFile(t, "write a "+generatorType+" draft"))
+				args = append(args, "--mode", "smart", "--prompt-file", writePromptFile(t, prompt))
 			}
 			cmd := exec.Command(binary, args...)
 			cmd.Dir = t.TempDir()

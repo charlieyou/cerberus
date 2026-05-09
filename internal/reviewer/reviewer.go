@@ -20,6 +20,7 @@ type Request struct {
 // ProviderInvocation describes one provider CLI subprocess invocation.
 type ProviderInvocation struct {
 	Label              string
+	InstanceID         string
 	Provider           string
 	Model              string
 	Mode               string

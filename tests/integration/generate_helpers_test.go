@@ -2,7 +2,9 @@ package integration_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,7 +85,7 @@ func runGenerateCommand(t *testing.T, repoRoot, binary, root string, args ...str
 	t.Helper()
 	outputDir := t.TempDir()
 	recordDir := t.TempDir()
-	fixtureDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
+	fixtureDir := keyedGenerateFixtureDirFromArgs(t, repoRoot, args, generateProviders)
 	fullArgs := append([]string{"generate", outputDir}, args...)
 	cmd := exec.Command(binary, fullArgs...)
 	cmd.Dir = t.TempDir()
@@ -98,6 +100,57 @@ func runGenerateCommand(t *testing.T, repoRoot, binary, root string, args ...str
 		t.Fatalf("cerberus generate %q failed: %v\n%s", fullArgs, err, output)
 	}
 	return generateRun{outputDir: outputDir, recordDir: recordDir, stderr: string(output)}
+}
+
+func keyedGenerateFixtureDirFromArgs(t *testing.T, repoRoot string, args []string, providers []string) string {
+	t.Helper()
+	generatorType := "create-spec"
+	prompt := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--type":
+			if i+1 < len(args) {
+				generatorType = args[i+1]
+				i++
+			}
+		case "--prompt-file":
+			if i+1 < len(args) {
+				data, err := os.ReadFile(args[i+1])
+				if err != nil {
+					t.Fatalf("ReadFile(prompt file) error = %v", err)
+				}
+				prompt = string(data)
+				i++
+			}
+		case "--focus":
+			if i+1 < len(args) {
+				prompt = args[i+1]
+				i++
+			}
+		}
+	}
+	if prompt == "" && len(args) > 0 {
+		prompt = args[len(args)-1]
+	}
+	return keyedGenerateFixtureDir(t, repoRoot, generatorType, prompt, providers)
+}
+
+func keyedGenerateFixtureDir(t *testing.T, repoRoot, generatorType, prompt string, providers []string) string {
+	t.Helper()
+	fixtureDir := t.TempDir()
+	promptHash := fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
+	sourceDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
+	for _, provider := range providers {
+		data, err := os.ReadFile(filepath.Join(sourceDir, provider+"-"+generatorType+".md"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s fixture) error = %v", provider, err)
+		}
+		target := filepath.Join(fixtureDir, promptHash+":"+provider+"#1.md")
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			t.Fatalf("WriteFile(%s fixture) error = %v", provider, err)
+		}
+	}
+	return fixtureDir
 }
 
 func assertGenerateOutputs(t *testing.T, repoRoot, outputDir, generatorType string) {

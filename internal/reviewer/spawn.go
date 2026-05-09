@@ -81,6 +81,7 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 
 	output, runErr := RunProvider(ctx, ProviderInvocation{
 		Label:              "reviewer " + request.ID,
+		InstanceID:         request.ID,
 		Provider:           request.Provider,
 		Model:              request.Model,
 		Mode:               request.Mode,
@@ -249,7 +250,11 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 	default:
 		return nil, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
 	}
-	return exec.CommandContext(ctx, invocation.Provider, args...), nil
+	command := exec.CommandContext(ctx, invocation.Provider, args...)
+	if invocation.InstanceID != "" {
+		command.Env = append(os.Environ(), "CERBERUS_MOCK_INSTANCE_ID="+invocation.InstanceID)
+	}
+	return command, nil
 }
 
 func systemPromptWithMode(system []byte, mode string) []byte {

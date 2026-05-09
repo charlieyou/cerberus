@@ -26,7 +26,7 @@ func TestGeneratePath(t *testing.T) {
 	}
 	outputDir := t.TempDir()
 	recordDir := t.TempDir()
-	fixtureDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
+	fixtureDir := keyedGenerateFixtureDir(t, repoRoot, "create-spec", "write a create-spec draft", generateProviders)
 
 	cmd := exec.Command(binary, "generate", outputDir, "--type", "create-spec", "--mode", "smart", "--prompt-file", promptFile)
 	cmd.Dir = t.TempDir()
@@ -45,7 +45,7 @@ func TestGeneratePath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(%s draft) error = %v", provider, err)
 		}
-		want, err := os.ReadFile(filepath.Join(fixtureDir, provider+"-create-spec.md"))
+		want, err := os.ReadFile(filepath.Join(repoRoot, "tests", "fixtures", "generate", provider+"-create-spec.md"))
 		if err != nil {
 			t.Fatalf("ReadFile(%s fixture) error = %v", provider, err)
 		}
