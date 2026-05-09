@@ -148,6 +148,18 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		_ = state.WriteGateState(gatePath, gate)
 		return nil, err
 	}
+	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventReviewSpawned,
+		Timestamp: startedAt,
+		Payload: map[string]any{
+			"run_key":        resolvedEnv.RunKey,
+			"reviewer_count": len(slots),
+		},
+	}); err != nil {
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("debate spawn telemetry failed: %v", err))
+		_ = state.WriteGateState(gatePath, gate)
+		return nil, err
+	}
 	params.Reviewers = slots
 	params.Mode = mode
 	params.MaxRounds = maxRounds

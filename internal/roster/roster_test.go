@@ -48,6 +48,30 @@ func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
 	assertSlotModels(t, slots, []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"})
 }
 
+func TestBuiltInDefaultPanelDebateRejectsZeroAvailableReviewersWithDebateMinimum(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	t.Setenv("PATH", filepath.Join(dir, "empty-bin"))
+
+	_, err := ResolveWithOptions(nil, ResolveOptions{Debate: true})
+	if err == nil {
+		t.Fatal("ResolveWithOptions() error = nil, want debate minimum error")
+	}
+	var preflight PreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("ResolveWithOptions() error type = %T, want PreflightError", err)
+	}
+	if preflight.ExitCode() != 6 {
+		t.Fatalf("ExitCode() = %d, want 6", preflight.ExitCode())
+	}
+	if preflight.TelemetryReason() != DebateMinimumReason {
+		t.Fatalf("TelemetryReason() = %q, want %q", preflight.TelemetryReason(), DebateMinimumReason)
+	}
+	if !strings.Contains(err.Error(), "--debate requires at least 2 reviewers in the resolved roster (got 0)") {
+		t.Fatalf("error = %q, want debate minimum zero-reviewer message", err.Error())
+	}
+}
+
 func TestNamedRosterWithoutFileErrors(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)

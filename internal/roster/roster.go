@@ -175,11 +175,11 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 	}
 	assignInstanceIDs(slots)
 	warnDuplicates(os.Stderr, slots)
-	if len(slots) == 0 {
-		return nil, preflightError(filePath(file), rosterName, 0, "resulting panel is empty")
-	}
 	if err := EnforceDebateMinimum(slots, opts.Debate); err != nil {
 		return nil, err
+	}
+	if len(slots) == 0 {
+		return nil, preflightError(filePath(file), rosterName, 0, "resulting panel is empty")
 	}
 	return slots, nil
 }

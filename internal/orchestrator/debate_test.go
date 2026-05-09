@@ -84,6 +84,7 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	}
 
 	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewSpawned, 1)
 	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerSpawned, 1, 2)
 	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerSpawned, 2, 2)
 	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerCompleted, 1, 2)
