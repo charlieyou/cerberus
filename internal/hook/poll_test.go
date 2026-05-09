@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
+	"github.com/charlieyou/cerberus/internal/host"
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
@@ -134,5 +136,52 @@ func TestHandleClaudeSessionStartPayloadOverridesStaleEnvRunIdentity(t *testing.
 	}
 	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "stale-run", "session.json")); !os.IsNotExist(err) {
 		t.Fatalf("stale env run was used; stat err = %v", err)
+	}
+}
+
+func TestHandleClaudeSessionStartPayloadCWDOverridesProcessCWDAndStaleProjectKey(t *testing.T) {
+	pluginRoot := t.TempDir()
+	projectRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git marker: %v", err)
+	}
+	projectSubdir := filepath.Join(projectRoot, "pkg")
+	if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
+		t.Fatalf("create project subdir: %v", err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	if err := os.Chdir(pluginRoot); err != nil {
+		t.Fatalf("os.Chdir(pluginRoot) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	env := &config.Env{
+		Host:       "generic",
+		StateRoot:  t.TempDir(),
+		ProjectKey: "stale-project",
+		RunKey:     "stale-run",
+	}
+	payload := []byte(`{"session_id":"current-session","cwd":` + strconv.Quote(projectSubdir) + `}`)
+
+	if err := HandleClaudeSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleClaudeSessionStart() error = %v", err)
+	}
+
+	projectKey, err := host.ProjectKeyFromDir(projectSubdir)
+	if err != nil {
+		t.Fatalf("ProjectKeyFromDir() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, projectKey, "current-session", "session.json")); err != nil {
+		t.Fatalf("payload cwd run was not initialized: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "stale-project", "current-session", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale project key was used; stat err = %v", err)
 	}
 }

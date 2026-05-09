@@ -84,6 +84,28 @@ func TestProjectKeyDerivesFromWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestProjectKeyFromDirUsesExplicitWorkspaceRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git marker: %v", err)
+	}
+	nestedDir := filepath.Join(workspaceRoot, "pkg", "subpkg")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+
+	got, err := ProjectKeyFromDir(nestedDir)
+	if err != nil {
+		t.Fatalf("ProjectKeyFromDir() returned error: %v", err)
+	}
+
+	sum := sha256.Sum256([]byte(workspaceRoot))
+	want := hex.EncodeToString(sum[:])[:16]
+	if got != want {
+		t.Fatalf("ProjectKeyFromDir() = %q, want %q", got, want)
+	}
+}
+
 func TestProjectKeyUsesExplicitEnvValue(t *testing.T) {
 	adapter, err := NewFromEnv(&config.Env{Host: "codex"})
 	if err != nil {

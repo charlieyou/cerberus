@@ -75,6 +75,13 @@ func resolveHookRun(stdinPayload []byte, env *config.Env) (*config.Env, string, 
 	} else if resolved.RunKey == "" {
 		resolved.RunKey = resolved.SessionID
 	}
+	if payload.CWD != "" {
+		projectKey, err := host.ProjectKeyFromDir(payload.CWD)
+		if err != nil {
+			return nil, "", err
+		}
+		resolved.ProjectKey = projectKey
+	}
 	if resolved.RunKey == "" {
 		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or Claude session_id is required")
 	}

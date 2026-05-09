@@ -67,7 +67,16 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 		return env.ProjectKey, nil
 	}
 
-	repoRoot, err := repoRootFromWorkingDirectory()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	return ProjectKeyFromDir(workingDirectory)
+}
+
+// ProjectKeyFromDir derives the stable project key for an explicit host cwd.
+func ProjectKeyFromDir(dir string) (string, error) {
+	repoRoot, err := repoRootFromDir(dir)
 	if err != nil {
 		return "", err
 	}
@@ -76,15 +85,10 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 	return hex.EncodeToString(sum[:])[:16], nil
 }
 
-func repoRootFromWorkingDirectory() (string, error) {
-	workingDirectory, err := os.Getwd()
+func repoRootFromDir(path string) (string, error) {
+	dir, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve working directory: %w", err)
-	}
-
-	dir, err := filepath.Abs(workingDirectory)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute working directory: %w", err)
+		return "", fmt.Errorf("resolve absolute working directory %q: %w", path, err)
 	}
 
 	for {
@@ -96,7 +100,7 @@ func repoRootFromWorkingDirectory() (string, error) {
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return filepath.Abs(workingDirectory)
+			return filepath.Abs(path)
 		}
 		dir = parent
 	}
