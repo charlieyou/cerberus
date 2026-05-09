@@ -79,7 +79,7 @@ func normalizeMode(mode Mode) Mode {
 
 func confidenceWeight(confidence *float64) float64 {
 	if confidence == nil {
-		return 1
+		return 0
 	}
 	if *confidence <= 0 {
 		return 0

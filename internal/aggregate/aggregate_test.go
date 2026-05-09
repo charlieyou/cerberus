@@ -46,6 +46,19 @@ func TestComputeMajorityUsesConfidenceWeights(t *testing.T) {
 	}
 }
 
+func TestComputeMajorityDoesNotGiveNullConfidenceFullVoteWeight(t *testing.T) {
+	got, err := Compute([]reviewer.RawReviewerOutput{
+		outputWithoutConfidence("PASS"),
+		output("FAIL", 0.9),
+	}, ModeMajority)
+	if err != nil {
+		t.Fatalf("Compute() error = %v", err)
+	}
+	if got.Verdict != VerdictFail {
+		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictFail)
+	}
+}
+
 func TestComputeAll(t *testing.T) {
 	got, err := Compute([]reviewer.RawReviewerOutput{
 		output("PASS", 1),
@@ -124,6 +137,13 @@ func output(verdict string, confidence float64, findings ...reviewer.RawFinding)
 		Verdict:           verdict,
 		OverallConfidence: &confidence,
 		Findings:          findings,
+	}
+}
+
+func outputWithoutConfidence(verdict string, findings ...reviewer.RawFinding) reviewer.RawReviewerOutput {
+	return reviewer.RawReviewerOutput{
+		Verdict:  verdict,
+		Findings: findings,
 	}
 }
 
