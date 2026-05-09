@@ -776,7 +776,7 @@ Output summary:
 ```
 ## Tasks Generated
 
-**Output**: [TODO.md path] or [team-tasks.md path] or [Beads epic ID] or [Linear project URL/ID]
+**Output**: [TODO.md path] or [Beads epic ID] or [Linear project URL/ID]
 **Linear Issues**: Created X, updated Y (only for Linear output)
 **Total Tasks**: N
 **Phases**: X
