@@ -44,30 +44,38 @@ type ReviewerSlot struct {
 	InstanceIndex int
 }
 
+// StartedRun contains the persisted inputs needed to finish a started review.
+type StartedRun struct {
+	Env     config.Env
+	RunRoot string
+	Params  Params
+}
+
 // RunSinglePass executes one review round and resolves the gate from reviewer output.
 func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner reviewer.Spawner) error {
+	started, err := StartSinglePass(env, params)
+	if err != nil {
+		return err
+	}
+	return CompleteSinglePass(ctx, started, spawner)
+}
+
+// StartSinglePass creates the pending gate and records review-spawn telemetry.
+func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if env == nil {
 		env = config.Resolve()
 	}
 	slots, defaults, err := resolveSlots(params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := preflightExplicitSlots(slots, params.Reviewers != nil); err != nil {
-		return err
+		return nil, err
 	}
 
 	resolvedEnv, runRoot, err := resolveRun(env)
 	if err != nil {
-		return err
-	}
-	if spawner == nil {
-		spawner = reviewer.Runner{
-			Root:      resolvedEnv.Root,
-			RunRoot:   runRoot,
-			Iteration: 1,
-			Round:     1,
-		}
+		return nil, err
 	}
 
 	gatePath := state.GateStatePath(runRoot)
@@ -114,7 +122,7 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 		StartedAt:        startedAt,
 	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
-		return err
+		return nil, err
 	}
 	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
 		Event:     telemetry.EventReviewSpawned,
@@ -124,15 +132,37 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 			"reviewer_count": len(slots),
 		},
 	}); err != nil {
-		return err
+		return nil, err
+	}
+	params.Reviewers = slots
+	params.RosterDefaults = defaults
+	params.Mode = mode
+	params.MaxRounds = maxRounds
+	params.Consensus = consensus
+	params.RosterID = rosterID
+	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
+}
+
+// CompleteSinglePass runs reviewers for a pending gate and resolves it.
+func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner reviewer.Spawner) error {
+	if started == nil {
+		return fmt.Errorf("started run is required")
+	}
+	if spawner == nil {
+		spawner = reviewer.Runner{
+			Root:      started.Env.Root,
+			RunRoot:   started.RunRoot,
+			Iteration: 1,
+			Round:     1,
+		}
 	}
 
 	roundStartedAt := time.Now().UTC()
-	roundResults, err := runRound(ctx, slots, spawner, roundPrompts{
-		User:        params.Prompt,
-		RunRoot:     runRoot,
-		Root:        resolvedEnv.Root,
-		RuntimeMode: mode,
+	roundResults, err := runRound(ctx, started.Params.Reviewers, spawner, roundPrompts{
+		User:        started.Params.Prompt,
+		RunRoot:     started.RunRoot,
+		Root:        started.Env.Root,
+		RuntimeMode: started.Params.Mode,
 	})
 	if err != nil {
 		return err
@@ -141,14 +171,14 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	for i, result := range roundResults {
 		outputs[i] = result.Output
 	}
-	result, err := aggregate.Compute(outputs, consensus)
+	result, err := aggregate.Compute(outputs, started.Params.Consensus)
 	if err != nil {
 		return err
 	}
 
 	endedAt := time.Now().UTC()
 	reviewerSummary, totalTokens, totalCostUSD := telemetryTotals(roundResults)
-	if err := telemetry.WriteRoundTelemetry(runRoot, 1, 1, &telemetry.RoundTelemetry{
+	if err := telemetry.WriteRoundTelemetry(started.RunRoot, 1, 1, &telemetry.RoundTelemetry{
 		Round:         1,
 		ReviewerCount: len(roundResults),
 		ConsensusPct:  consensusPct(roundResults, result.Verdict),
@@ -159,7 +189,7 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	}); err != nil {
 		return err
 	}
-	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+	if err := telemetry.WriteEvent(started.RunRoot, telemetry.Event{
 		Event:     telemetry.EventReviewRoundComplete,
 		Timestamp: endedAt,
 		Payload: map[string]any{
@@ -171,7 +201,13 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	}); err != nil {
 		return err
 	}
-	if err := telemetry.WriteIterationTelemetry(runRoot, 1, &telemetry.IterationTelemetry{
+	gatePath := state.GateStatePath(started.RunRoot)
+	gate, err := state.ReadGateState(gatePath)
+	if err != nil {
+		return err
+	}
+	startedAt := gate.StartedAt
+	if err := telemetry.WriteIterationTelemetry(started.RunRoot, 1, &telemetry.IterationTelemetry{
 		Iteration:       1,
 		Rounds:          1,
 		Verdict:         result.Verdict,
@@ -185,21 +221,21 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return err
 	}
-	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+	if err := telemetry.WriteEvent(started.RunRoot, telemetry.Event{
 		Event:     telemetry.EventReviewResolved,
 		Timestamp: endedAt,
 		Payload: map[string]any{
-			"run_key": resolvedEnv.RunKey,
+			"run_key": started.Env.RunKey,
 			"verdict": result.Verdict,
 		},
 	}); err != nil {
 		return err
 	}
-	return telemetry.WriteRunTelemetry(runRoot, &telemetry.RunTelemetry{
-		RunKey:       resolvedEnv.RunKey,
-		Host:         resolvedEnv.Host,
-		Mode:         mode,
-		RosterID:     rosterID,
+	return telemetry.WriteRunTelemetry(started.RunRoot, &telemetry.RunTelemetry{
+		RunKey:       started.Env.RunKey,
+		Host:         started.Env.Host,
+		Mode:         started.Params.Mode,
+		RosterID:     started.Params.RosterID,
 		Debate:       false,
 		Iterations:   1,
 		TotalRounds:  1,

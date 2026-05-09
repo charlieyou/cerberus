@@ -61,11 +61,75 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		Consensus:      aggregate.Mode(opts.consensus),
 		RosterID:       resolved.rosterID,
 	}
-	if err := orchestrator.RunSinglePass(context.Background(), config.Resolve(), params, nil); err != nil {
+	started, err := orchestrator.StartSinglePass(config.Resolve(), params)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "review resolved")
+	if err := startReviewRuntime(started); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "review spawned")
+	return 0
+}
+
+var startReviewRuntime = startReviewRuntimeProcess
+
+func startReviewRuntimeProcess(started *orchestrator.StartedRun) error {
+	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
+	data, err := json.MarshalIndent(started, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal single-pass request: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(requestPath, data, 0o644); err != nil {
+		return fmt.Errorf("write single-pass request: %w", err)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	cmd := exec.Command(exe, "run-single-pass", requestPath)
+	stdout, err := os.OpenFile(filepath.Join(started.RunRoot, "single-pass.stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open single-pass stdout log: %w", err)
+	}
+	defer stdout.Close()
+	stderr, err := os.OpenFile(filepath.Join(started.RunRoot, "single-pass.stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open single-pass stderr log: %w", err)
+	}
+	defer stderr.Close()
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start single-pass runtime: %w", err)
+	}
+	return cmd.Process.Release()
+}
+
+func runSinglePassRuntime(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: cerberus run-single-pass <request-path>")
+		return 2
+	}
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var started orchestrator.StartedRun
+	if err := json.Unmarshal(data, &started); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := orchestrator.CompleteSinglePass(context.Background(), &started, nil); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	_ = stdout
 	return 0
 }
 

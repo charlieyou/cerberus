@@ -38,6 +38,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "spawn-code-review":
 		return runSpawnCodeReview(args[1:], stdout, stderr)
+	case "run-single-pass":
+		return runSinglePassRuntime(args[1:], stdout, stderr)
 	case "wait":
 		return runWait(args[1:], stdout, stderr)
 	case "resolve":

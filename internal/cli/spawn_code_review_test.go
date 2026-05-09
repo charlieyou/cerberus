@@ -2,16 +2,21 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charlieyou/cerberus/internal/hook"
+	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
 func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	setSpawnTestEnv(t)
+	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"spawn-code-review", "--consensus", "majority", "--agents", "claude,codex,gemini"}, &stdout, &stderr)
@@ -19,7 +24,7 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	gate := readSpawnGate(t)
+	gate := waitForSpawnGateStatus(t, state.StatusResolved)
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want resolved", gate.Status)
 	}
@@ -33,6 +38,7 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 
 func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 	setSpawnTestEnv(t)
+	startRuntimeInlineForTest(t, nil)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	var stdout, stderr bytes.Buffer
@@ -42,7 +48,7 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	gate := readSpawnGate(t)
+	gate := waitForSpawnGateStatus(t, state.StatusResolved)
 	if gate.RosterID != "default" {
 		t.Fatalf("gate roster_id = %q, want default", gate.RosterID)
 	}
@@ -76,6 +82,48 @@ func TestSpawnCodeReviewRejectsDebate(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "debate not yet implemented in Epic B; see Epic C") {
 		t.Fatalf("stderr = %q, want debate error", stderr.String())
+	}
+}
+
+func TestSpawnCodeReviewCreatesPendingGateObservedByHookPoll(t *testing.T) {
+	setSpawnTestEnv(t)
+	releaseRuntime := make(chan struct{})
+	startRuntimeInlineForTest(t, func() {
+		<-releaseRuntime
+	})
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "claude,codex,gemini"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusPending {
+		t.Fatalf("gate status after spawn = %q, want pending", gate.Status)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("hook poll returned while gate pending: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseRuntime)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("hook poll error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("hook poll did not return after gate resolved")
+	}
+	gate = readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status after runtime = %q, want resolved", gate.Status)
 	}
 }
 
@@ -440,11 +488,53 @@ func writeStrategy(t *testing.T, name string) {
 
 func readSpawnGate(t *testing.T) *state.GateState {
 	t.Helper()
-	gate, err := state.ReadGateState(state.GateStatePath(state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run")))
+	gate, err := state.ReadGateState(spawnGatePath())
 	if err != nil {
 		t.Fatalf("ReadGateState() error = %v", err)
 	}
 	return gate
+}
+
+func spawnGatePath() string {
+	return state.GateStatePath(state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run"))
+}
+
+func startRuntimeInlineForTest(t *testing.T, beforeComplete func()) {
+	t.Helper()
+	old := startReviewRuntime
+	startReviewRuntime = func(started *orchestrator.StartedRun) error {
+		go func() {
+			if beforeComplete != nil {
+				beforeComplete()
+			}
+			_ = orchestrator.CompleteSinglePass(context.Background(), started, nil)
+		}()
+		return nil
+	}
+	t.Cleanup(func() {
+		startReviewRuntime = old
+	})
+}
+
+func waitForSpawnGateStatus(t *testing.T, want string) *state.GateState {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	var last *state.GateState
+	for time.Now().Before(deadline) {
+		gate, err := state.ReadGateState(spawnGatePath())
+		if err == nil {
+			last = gate
+			if gate.Status == want {
+				return gate
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if last == nil {
+		t.Fatalf("gate status never reached %q; gate was not readable", want)
+	}
+	t.Fatalf("gate status = %q, want %q", last.Status, want)
+	return nil
 }
 
 func assertRecordedModel(t *testing.T, provider, want string) {
