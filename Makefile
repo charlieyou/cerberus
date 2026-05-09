@@ -20,4 +20,4 @@ lint:
 	go run ./tools/r3lint
 
 fixtures-refresh:
-	@echo "fixtures-refresh: to be implemented in Epic G"
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; go build -o "$$tmp/fixtures-refresh" ./tests/fixtures/refresh.go; "$$tmp/fixtures-refresh"

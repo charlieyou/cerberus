@@ -1,0 +1,1 @@
+mock smoke prompt for gemini
