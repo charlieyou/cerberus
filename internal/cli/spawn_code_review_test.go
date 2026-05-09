@@ -75,6 +75,12 @@ func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
 			wantPrompt: []string{"Implementation Plan Review Guidelines", "<plan>\nPLAN BODY\n</plan>"},
 		},
 		{
+			name:       "plan file with focus",
+			subcommand: "spawn-plan-review",
+			args:       []string{"--agents", "codex", writeSpawnFixture(t, "focused-plan.md", "PLAN BODY"), "focus", "on", "error", "handling"},
+			wantPrompt: []string{"Implementation Plan Review Guidelines", "<plan>\nPLAN BODY\n</plan>", "Focus: focus on error handling"},
+		},
+		{
 			name:       "spec file",
 			subcommand: "spawn-spec-review",
 			args:       []string{"--agents", "codex", writeSpawnFixture(t, "spec.md", "SPEC BODY")},

@@ -537,12 +537,13 @@ func prepareReviewPrompt(opts *spawnCodeReviewOptions) ([]byte, error) {
 	case "", "code":
 		return buildCodeReviewPromptBody(*opts)
 	case "plan", "spec", "epic-verify":
-		content, err := artifactReviewContent(*opts)
+		content, focus, err := artifactReviewContent(*opts)
 		if err != nil {
 			return nil, err
 		}
 		opts.artifactContent = content
-		return nil, nil
+		opts.focus = focus
+		return artifactReviewPrompt(*opts), nil
 	case "ask":
 		content, context, err := askReviewContent(*opts)
 		if err != nil {
@@ -583,17 +584,26 @@ func buildCodeReviewPromptBody(opts spawnCodeReviewOptions) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func artifactReviewContent(opts spawnCodeReviewOptions) (string, error) {
+func artifactReviewContent(opts spawnCodeReviewOptions) (string, string, error) {
 	if len(opts.positionals) == 0 {
-		return "", fmt.Errorf("%s review requires input", opts.artifactType)
+		return "", "", fmt.Errorf("%s review requires input", opts.artifactType)
 	}
 	input := opts.positionals[0]
 	if data, err := os.ReadFile(input); err == nil {
-		return string(data), nil
+		return string(data), strings.Join(opts.positionals[1:], " "), nil
 	} else if opts.artifactType != "epic-verify" {
-		return "", fmt.Errorf("read %s review file %s: %w", opts.artifactType, input, err)
+		return "", "", fmt.Errorf("read %s review file %s: %w", opts.artifactType, input, err)
 	}
-	return strings.Join(opts.positionals, " "), nil
+	return strings.Join(opts.positionals, " "), "", nil
+}
+
+func artifactReviewPrompt(opts spawnCodeReviewOptions) []byte {
+	if opts.focus == "" {
+		return nil
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "Focus: %s\n", opts.focus)
+	return buf.Bytes()
 }
 
 func askReviewContent(opts spawnCodeReviewOptions) (string, string, error) {
