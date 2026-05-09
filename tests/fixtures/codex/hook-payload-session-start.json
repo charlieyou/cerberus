@@ -1,0 +1,6 @@
+{
+  "session_id": "codex-fixture-session",
+  "transcript_path": "/tmp/cerberus/codex-fixture-session.jsonl",
+  "project_key": "codex-fixture-project",
+  "event": "SessionStart"
+}

@@ -10,22 +10,26 @@ import (
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/host"
 	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 type codexPayload struct {
 	SessionID      string `json:"session_id"`
 	TranscriptPath string `json:"transcript_path"`
+	ProjectKey     string `json:"project_key"`
 	Transcript     string `json:"transcript"`
 	CWD            string `json:"cwd"`
 	WorkspaceRoot  string `json:"workspace_root"`
+	Prompt         string `json:"prompt"`
+	StopReason     string `json:"stop_reason"`
 }
 
 func HandleCodexStop(stdinPayload []byte, env *config.Env) error {
-	_, runRoot, err := resolveCodexHookRun(stdinPayload, env)
+	resolved, runRoot, err := resolveCodexHookRun(stdinPayload, env)
 	if err != nil {
 		return err
 	}
-	return PollGateState(state.GateStatePath(runRoot), PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	return writeCodexHookAllowed(runRoot, resolved)
 }
 
 func HandleCodexSessionStart(stdinPayload []byte, env *config.Env) error {
@@ -58,7 +62,7 @@ func writeCodexSessionState(stdinPayload []byte, env *config.Env) error {
 	if err := os.WriteFile(filepath.Join(runRoot, "session.json"), data, 0o644); err != nil {
 		return fmt.Errorf("write codex session state: %w", err)
 	}
-	return nil
+	return writeCodexHookAllowed(runRoot, resolved)
 }
 
 func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, string, error) {
@@ -79,6 +83,9 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 	}
 	if payload.TranscriptPath != "" || payload.Transcript != "" {
 		resolved.TranscriptPath = firstNonEmpty(payload.TranscriptPath, payload.Transcript)
+	}
+	if payload.ProjectKey != "" {
+		resolved.ProjectKey = payload.ProjectKey
 	}
 	if workspace := firstNonEmpty(payload.WorkspaceRoot, payload.CWD); workspace != "" {
 		projectKey, err := host.ProjectKeyFromDir(workspace)
@@ -117,6 +124,20 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or Codex session_id is required")
 	}
 	return &resolved, state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey), nil
+}
+
+func writeCodexHookAllowed(runRoot string, env *config.Env) error {
+	return telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventHookAllowed,
+		Timestamp: time.Now().UTC(),
+		Payload: map[string]any{
+			"host":            "codex",
+			"run_key":         env.RunKey,
+			"session_id":      env.SessionID,
+			"project_key":     env.ProjectKey,
+			"transcript_path": env.TranscriptPath,
+		},
+	})
 }
 
 func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) {
