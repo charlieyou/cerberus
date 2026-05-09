@@ -82,6 +82,21 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 	}
 }
 
+func TestParseSpawnCodeReviewCommitConsumesAllTrailingSHAs(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "abc123", "def456"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
+	}
+	if got, want := strings.Join(opts.commits, ","), "abc123,def456"; got != want {
+		t.Fatalf("commits = %q, want %q", got, want)
+	}
+	if opts.focus != "" {
+		t.Fatalf("focus = %q, want empty for trailing --commit SHAs", opts.focus)
+	}
+}
+
 func TestResolveReviewersAppendsCLIReviewer(t *testing.T) {
 	setRosterTestCWD(t)
 
@@ -147,6 +162,14 @@ func TestCodeReviewGitArgsAppliesExcludeToCommitReview(t *testing.T) {
 	got := strings.Join(args, " ")
 	if !strings.Contains(got, "show --format=fuller --stat --patch --no-ext-diff abc123 -- . :(exclude)vendor/**") {
 		t.Fatalf("git args = %q, want commit review with exclude pathspec", got)
+	}
+}
+
+func TestCodeReviewGitArgsDefaultIncludesStagedChanges(t *testing.T) {
+	args := codeReviewGitArgs(spawnCodeReviewOptions{})
+
+	if got, want := strings.Join(args, " "), "diff --no-ext-diff HEAD"; got != want {
+		t.Fatalf("git args = %q, want %q", got, want)
 	}
 }
 

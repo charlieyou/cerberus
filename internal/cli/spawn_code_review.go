@@ -111,7 +111,11 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	opts.reviewers = reviewers
 	opts.excludes = excludes
 	opts.commits = commits
-	opts.focus = strings.Join(fs.Args(), " ")
+	if len(opts.commits) > 0 {
+		opts.commits = append(opts.commits, fs.Args()...)
+	} else {
+		opts.focus = strings.Join(fs.Args(), " ")
+	}
 	if err := validateSpawnCodeReviewOptions(opts); err != nil {
 		return opts, err
 	}
@@ -270,7 +274,7 @@ func codeReviewDiff(opts spawnCodeReviewOptions) (string, error) {
 
 func codeReviewGitArgs(opts spawnCodeReviewOptions) []string {
 	args := []string{"diff", "--no-ext-diff"}
-	if opts.uncommitted {
+	if opts.uncommitted || (opts.base == "" && len(opts.commits) == 0) {
 		args = append(args, "HEAD")
 	} else if opts.base != "" {
 		args = append(args, opts.base+"...HEAD")
