@@ -5,6 +5,7 @@ record_dir=${CERBERUS_MOCK_RECORD_DIR:?}
 mkdir -p "$record_dir"
 cat > "$record_dir/$provider.stdin"
 printf '%s\n' "$@" > "$record_dir/$provider.args"
+printf 'mock %s argv: %s\n' "$provider" "$*" >&2
 if [ "${CERBERUS_MOCK_EXIT:-0}" != "0" ]; then
   echo "mock exit" >&2
   exit "$CERBERUS_MOCK_EXIT"

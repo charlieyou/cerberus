@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "title": "falsifier accepted anonymized consensus",
+      "body": "peer context resolved the falsifier concern",
+      "severity": "info",
+      "priority": 4,
+      "file_path": "internal/orchestrator/round.go",
+      "line_start": 52,
+      "line_end": 52,
+      "confidence": 0.92,
+      "evidence": "round two preserved anonymous peer ordering",
+      "recommendation": "accept the debate result"
+    }
+  ],
+  "verdict": "PASS",
+  "summary": "peer context resolved my falsifier concern",
+  "overall_confidence": 0.92,
+  "strategy": "falsification-first",
+  "round": 2,
+  "peer_responses_seen": ["peer_1", "peer_2", "peer_3", "peer_4"]
+}
