@@ -11,7 +11,7 @@ import (
 
 func runHook(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: cerberus hook <claude-stop|claude-session-start>")
+		fmt.Fprintln(stderr, "usage: cerberus hook <claude-stop|claude-session-start|codex-stop|codex-session-start|codex-prompt-submit>")
 		return 2
 	}
 	payload, err := io.ReadAll(os.Stdin)
@@ -25,6 +25,12 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 		err = hook.HandleClaudeStop(payload, env)
 	case "claude-session-start":
 		err = hook.HandleClaudeSessionStart(payload, env)
+	case "codex-stop":
+		err = hook.HandleCodexStop(payload, env)
+	case "codex-session-start":
+		err = hook.HandleCodexSessionStart(payload, env)
+	case "codex-prompt-submit":
+		err = hook.HandleCodexPromptSubmit(payload, env)
 	default:
 		fmt.Fprintf(stderr, "unknown hook subcommand %q\n", args[0])
 		return 2
