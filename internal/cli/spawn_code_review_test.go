@@ -79,6 +79,25 @@ func TestSpawnCodeReviewRejectsDebate(t *testing.T) {
 	}
 }
 
+func TestReviewersFromAgentsUsesProviderOccurrenceForInstanceIndex(t *testing.T) {
+	reviewers, rosterID, err := reviewersFromAgents("codex,claude")
+	if err != nil {
+		t.Fatalf("reviewersFromAgents() error = %v", err)
+	}
+	if rosterID != "agents" {
+		t.Fatalf("rosterID = %q, want agents", rosterID)
+	}
+	if got, want := len(reviewers), 2; got != want {
+		t.Fatalf("len(reviewers) = %d, want %d", got, want)
+	}
+	if reviewers[1].ID != "claude#1" {
+		t.Fatalf("second reviewer ID = %q, want claude#1", reviewers[1].ID)
+	}
+	if got, want := reviewers[1].InstanceIndex, 1; got != want {
+		t.Fatalf("claude#1 instance index = %d, want %d", got, want)
+	}
+}
+
 func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 	var stderr bytes.Buffer
 
