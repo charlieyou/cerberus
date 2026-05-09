@@ -244,6 +244,21 @@ if [[ "$inherited_claude_run" != "claude-session-003" ]]; then
 fi
 log_pass "cerberus-skill-env overrides inherited Claude run key from session id"
 
+log_test "cerberus-skill-env overrides inherited Claude session id from payload id"
+inherited_session_env_output="$TEST_DIR/claude-inherited-session-id.out"
+env CERBERUS_ROOT="$PLUGIN_ROOT" CLAUDE_SESSION_ID=new-session CERBERUS_SESSION_ID=old-session CERBERUS_RUN_KEY=old-run \
+    "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n%s\n" "$CERBERUS_SESSION_ID" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT" \
+    > "$inherited_session_env_output"
+inherited_session_id="$(sed -n '1p' "$inherited_session_env_output")"
+inherited_session_run="$(sed -n '2p' "$inherited_session_env_output")"
+if [[ "$inherited_session_id" != "new-session" ]]; then
+    log_fail "expected inherited Claude skill env to override stale session id from payload id, got: $inherited_session_id"
+fi
+if [[ "$inherited_session_run" != "new-session" ]]; then
+    log_fail "expected inherited Claude skill env to align run key with payload session id, got: $inherited_session_run"
+fi
+log_pass "cerberus-skill-env overrides inherited Claude session id from payload id"
+
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
 extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \

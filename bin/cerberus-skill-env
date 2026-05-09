@@ -107,7 +107,7 @@ if [ -z "${CERBERUS_HOST:-}" ]; then
 fi
 
 if [ "$CERBERUS_HOST" = "claude" ]; then
-    if [ -z "${CERBERUS_SESSION_ID:-}" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
         export CERBERUS_SESSION_ID="$CLAUDE_SESSION_ID"
     fi
     if [ -n "${CERBERUS_SESSION_ID:-}" ]; then
