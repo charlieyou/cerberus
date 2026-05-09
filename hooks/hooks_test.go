@@ -2,7 +2,6 @@ package hooks_test
 
 import (
 	"encoding/json"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -123,6 +122,7 @@ func assertCodexHookManifest(t *testing.T, path string) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
+	assertNoLegacyHookTerms(t, path, string(data))
 
 	for event, subcommand := range map[string]string{
 		"SessionStart":     "codex-session-start",
@@ -144,33 +144,18 @@ func assertCodexHookManifest(t *testing.T, path string) {
 			t.Fatalf("%s hook command = %q, must not call legacy Codex scripts", event, command)
 		}
 	}
+}
 
-	err = filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+func assertNoLegacyHookTerms(t *testing.T, path, text string) {
+	t.Helper()
+	for _, term := range []string{
+		"task" + "-completed-hook",
+		"teammate" + "-idle-hook",
+		"run" + "-team",
+	} {
+		if strings.Contains(text, term) {
+			t.Fatalf("%s contains legacy hook wiring term %q", path, term)
 		}
-		if d.IsDir() || filepath.Ext(path) != ".json" {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		text := string(data)
-		legacyTerms := []string{
-			"task" + "-completed-hook",
-			"teammate" + "-idle-hook",
-			"run" + "-team",
-		}
-		for _, term := range legacyTerms {
-			if strings.Contains(text, term) {
-				t.Fatalf("%s contains legacy hook wiring term %q", path, term)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan hook manifests: %v", err)
 	}
 }
 
