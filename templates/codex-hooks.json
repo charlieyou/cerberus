@@ -2,31 +2,26 @@
   "_install_instructions": [
     "templates/codex-hooks.json — User-installed Codex lifecycle hook template (two-step install).",
     "",
-    "STEP 1. Locate your Cerberus install root — the directory containing bin/, skills/,",
-    "        .codex-plugin/, etc. (e.g. ~/code/cerberus, /opt/cerberus).",
+    "STEP 1. Confirm Codex exposes PLUGIN_ROOT for plugin hook execution. The bundled",
+    "        Cerberus hooks use PLUGIN_ROOT by default and CERBERUS_ROOT as an explicit",
+    "        override for nonstandard installs.",
     "",
-    "STEP 2. Replace EVERY occurrence of the placeholder <CERBERUS_INSTALL_ROOT> below",
-    "        with the absolute path to that install root, then copy the resulting JSON",
-    "        into Codex's hooks configuration file (typically ~/.codex/hooks.json or",
-    "        the platform equivalent — see docs/CODEX.md §Configure Hooks for the exact",
-    "        target path).",
+    "STEP 2. Copy this JSON into Codex's hooks configuration file (typically",
+    "        ~/.codex/hooks.json or the platform equivalent — see docs/CODEX.md",
+    "        §Configure Hooks for the exact target path) only if plugin-bundled hooks",
+    "        are unavailable.",
     "",
     "        Example (POSIX shell):",
-    "          sed 's|<CERBERUS_INSTALL_ROOT>|/Users/me/code/cerberus|g' \\",
-    "              templates/codex-hooks.json > ~/.codex/hooks.json",
+    "          cp templates/codex-hooks.json ~/.codex/hooks.json",
     "",
-    "        Alternative: users who set CERBERUS_ROOT in their shell profile may instead",
-    "        replace the placeholder with ${CERBERUS_ROOT} and rely on env-var expansion",
-    "        at hook-invocation time (Codex's hook runner expands shell-style variables",
-    "        in the same way Claude's runner expands ${CLAUDE_PLUGIN_ROOT}). The shared",
-    "        backend reads CERBERUS_ROOT first via __cerberus_resolve_root, so this path",
-    "        is supported without further changes.",
+    "        Users who set CERBERUS_ROOT in their shell profile can point hooks at a",
+    "        checkout root different from the installed plugin cache. The shared backend",
+    "        reads CERBERUS_ROOT first via __cerberus_resolve_root, so this path is",
+    "        supported without further changes.",
     "",
-    "OQ-2 RESOLUTION (docs/CODEX.md §Phase 1 Spike Findings, 2026-04-30): no stable",
-    "Codex-provided env var equivalent to Claude's CLAUDE_PLUGIN_ROOT is documented as",
-    "of authoring. The placeholder approach is the documented fallback. If a future",
-    "Codex release ships a stable env var (e.g. CODEX_PLUGIN_ROOT), update this template",
-    "to default to ${CODEX_PLUGIN_ROOT} and demote the placeholder to fallback.",
+    "OQ-Plan-3 / D48 RESOLUTION: Codex CLI 0.130.0 validates plugin-bundled hooks",
+    "resolving their installed root through ${PLUGIN_ROOT}. This template therefore",
+    "defaults to ${PLUGIN_ROOT} and keeps CERBERUS_ROOT as the explicit override.",
     "",
     "This template registers SessionStart and UserPromptSubmit to keep the Codex",
     "active-session registry fresh, plus Stop to enforce the review gate.",
@@ -39,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'root=\"${CERBERUS_ROOT:-<CERBERUS_INSTALL_ROOT>}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-session-start'"
+            "command": "sh -c 'root=\"${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-session-start'"
           }
         ]
       }
@@ -49,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'root=\"${CERBERUS_ROOT:-<CERBERUS_INSTALL_ROOT>}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-prompt-submit'"
+            "command": "sh -c 'root=\"${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-prompt-submit'"
           }
         ]
       }
@@ -59,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'root=\"${CERBERUS_ROOT:-<CERBERUS_INSTALL_ROOT>}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-stop'",
+            "command": "sh -c 'root=\"${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-stop'",
             "timeout": 2100
           }
         ]

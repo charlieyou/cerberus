@@ -108,10 +108,11 @@ effect.
 
 Older Codex versions may not load plugin-bundled lifecycle hooks. For
 those versions, the repository still ships the fallback template at
-`templates/codex-hooks.json`; substitute `<CERBERUS_INSTALL_ROOT>` with
-the absolute checkout root and copy it to `~/.codex/hooks.json`. Do not
-keep both plugin-bundled hooks and the manual template active at the
-same time, or Codex will run duplicate Cerberus hooks.
+`templates/codex-hooks.json`; it defaults to `${PLUGIN_ROOT}` with
+`CERBERUS_ROOT` as the explicit override. Copy it to
+`~/.codex/hooks.json` only if plugin-bundled hooks are unavailable. Do
+not keep both plugin-bundled hooks and the manual template active at
+the same time, or Codex will run duplicate Cerberus hooks.
 
 ### Verifying the install
 
@@ -126,8 +127,9 @@ found". If you don't, check:
 - `CERBERUS_ROOT` is set in Codex's shell environment and points at the
   backend checkout root, not at `` or Codex's plugin
   cache.
-- `bin/cerberus` exists or Codex's hook runner can find `make` and
-  Go on `PATH` to lazy-build it from the checkout.
+- Codex's hook runner can find `make` on `PATH`; hooks always use
+  `make -q` to decide whether `bin/cerberus` is current. If a rebuild
+  is needed, Go >= 1.22 must also be on `PATH`.
 - `~/.cerberus/runtime/codex/<workspace-key>/active-session.json`
   exists after `SessionStart` or `UserPromptSubmit` fires.
 
@@ -317,18 +319,16 @@ intact.
 
 ## Troubleshooting
 
-### Legacy Manual Template Placeholder Not Substituted
+### Codex Hook Root Not Set
 
-**Symptom:** SessionStart or Stop fails with `command not found:
-<CERBERUS_INSTALL_ROOT>/bin/...`.
+**Symptom:** SessionStart or Stop fails with `cerberus: plugin root not
+set` or cannot find `bin/cerberus`.
 
-**Fix:** This only applies to the legacy manual hook template. Re-run
-the `sed` substitution with the absolute backend checkout root, or set
-`CERBERUS_ROOT` and switch the template to `${CERBERUS_ROOT}`. Confirm
-the resulting `~/.codex/hooks.json` contains an absolute path (or the
-literal `${CERBERUS_ROOT}`) in every `command:` field. If you are using
-plugin-bundled hooks, ensure `plugin_hooks = true` and restart Codex
-instead.
+**Fix:** For plugin-bundled hooks, ensure `plugin_hooks = true` and
+restart Codex so `${PLUGIN_ROOT}` is available to the hook runner. For
+manual `~/.codex/hooks.json` installs, either run the template in a
+Codex context that exposes `${PLUGIN_ROOT}` or set `CERBERUS_ROOT` to
+the absolute backend checkout root.
 
 ### Skill cannot find `bin/review-gate`
 
@@ -508,8 +508,8 @@ release tag may be cut.
 ## Phase 1 Spike Findings
 
 These findings are the resolutions of **OQ-1** (Codex skill manifest
-fields) and **OQ-2** (stable Codex plugin-install path env var) from
-the original Phase 1 plan, recorded **2026-04-30**.
+fields) and the Codex plugin-install root contract from the original
+Phase 1 plan and later OQ-Plan-3 validation.
 They are preserved here for auditability of the design decisions that
 shaped Phase 1; future contributors can revisit them when an
 authoritative Codex schema or env-var lands.
@@ -617,36 +617,26 @@ This is the manifest shape:
 }
 ```
 
-### OQ-2 — Stable plugin-install path env var
+### Codex Plugin-Install Root Contract
 
-**Resolution:** **No** stable, documented Codex-provided env var
-equivalent to Claude's `CLAUDE_PLUGIN_ROOT` is known as of 2026-04-30.
+**Resolution:** Codex CLI 0.130.0 validates `${PLUGIN_ROOT}` as the
+plugin-bundled hook root. `hooks/codex-hooks.json` and the fallback
+`templates/codex-hooks.json` use `${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}`,
+so `CERBERUS_ROOT` remains the explicit override and `${PLUGIN_ROOT}` is
+the default installed-plugin root for Codex hook execution.
 
-**Legacy fallback approach:** `templates/codex-hooks.json` ships with a
-documented placeholder string for older Codex versions that do not load
-plugin-bundled lifecycle hooks. The placeholder is:
-
-```text
-<CERBERUS_INSTALL_ROOT>
-```
-
-It appears in every `command:` field in the hook template that needs
-to invoke a Cerberus binary. In current Codex installs the bundled
-`hooks/codex-hooks.json` uses `${PLUGIN_ROOT}`, so no manual placeholder
-substitution is required. The legacy `templates/codex-hooks.json`
-fallback still contains `<CERBERUS_INSTALL_ROOT>` for older Codex
-versions that do not load plugin-bundled lifecycle hooks; if you use
-that fallback, replace the placeholder with the absolute Cerberus
-backend checkout root (the directory containing `bin/` and
-`templates/`). Do not use Codex's plugin cache path for this
-substitution.
+The hook commands invoke the Go binary entrypoints directly:
+`bin/cerberus hook codex-session-start`, `bin/cerberus hook
+codex-prompt-submit`, and `bin/cerberus hook codex-stop`. They no
+longer depend on legacy Codex shell adapters.
 
 **Rationale.**
 
-- Plan §Risks (L1033) called out the original placeholder-template
-  fallback. Current Codex plugin hooks provide `${PLUGIN_ROOT}`, so the
-  bundled hook config is now the primary path and the template remains
-  only as a legacy fallback.
+- Plan D48 resolved OQ-Plan-3 by validating that Codex plugin-bundled
+  hooks provide `${PLUGIN_ROOT}` and deliver hook payloads on stdin.
+  The bundled hook config is the primary path and the template remains
+  only as a legacy fallback for installs that still require
+  `~/.codex/hooks.json`.
 - The shared backend already accepts `CERBERUS_ROOT` as an explicit
   override (plan §API/Interface Design L549). Codex skills also require
   this env var because installed skill markdown is cached and is not
@@ -681,9 +671,10 @@ backend code path or current Codex skill body.
   revised after Codex 0.128 rejected the initial descriptor-array
   schema; the current manifest uses `skills` as a directory path and
   includes `interface` metadata.
-- **T010** (landed) authored `templates/codex-hooks.json` using the
-  `<CERBERUS_INSTALL_ROOT>` placeholder per OQ-2 and shipped the first
-  Codex skills. The current package uses the generic skill tree under
+- **T010** (landed) authored `templates/codex-hooks.json` and shipped
+  the first Codex skills. The template now uses the validated
+  `${PLUGIN_ROOT}` default with `CERBERUS_ROOT` override, and the
+  current package uses the generic skill tree under
   `skills/<skill>/SKILL.md` as the single source.
 - **T011** (this task) finalizes the user-facing sections of this
   document and links them from the host catalog in `README.md`.
