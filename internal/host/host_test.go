@@ -32,11 +32,19 @@ func TestNewFromEnvRejectsUnknownHost(t *testing.T) {
 
 func TestProjectKeyDerivesFromWorkspaceRoot(t *testing.T) {
 	workspaceRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git marker: %v", err)
+	}
+	nestedDir := filepath.Join(workspaceRoot, "pkg", "subpkg")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("os.Getwd() returned error: %v", err)
 	}
-	if err := os.Chdir(workspaceRoot); err != nil {
+	if err := os.Chdir(nestedDir); err != nil {
 		t.Fatalf("os.Chdir() returned error: %v", err)
 	}
 	t.Cleanup(func() {
@@ -64,11 +72,8 @@ func TestProjectKeyDerivesFromWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Getwd() returned error: %v", err)
 	}
-	absRoot, err := filepath.Abs(currentRoot)
-	if err != nil {
-		t.Fatalf("filepath.Abs() returned error: %v", err)
-	}
-	sum := sha256.Sum256([]byte(absRoot))
+	repoRoot := filepath.Dir(filepath.Dir(currentRoot))
+	sum := sha256.Sum256([]byte(repoRoot))
 	want := hex.EncodeToString(sum[:])[:16]
 
 	if first != want {

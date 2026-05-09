@@ -67,18 +67,39 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 		return env.ProjectKey, nil
 	}
 
-	workspaceRoot, err := os.Getwd()
+	repoRoot, err := repoRootFromWorkingDirectory()
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace root: %w", err)
+		return "", err
 	}
 
-	absWorkspaceRoot, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute workspace root: %w", err)
-	}
-
-	sum := sha256.Sum256([]byte(absWorkspaceRoot))
+	sum := sha256.Sum256([]byte(repoRoot))
 	return hex.EncodeToString(sum[:])[:16], nil
+}
+
+func repoRootFromWorkingDirectory() (string, error) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	dir, err := filepath.Abs(workingDirectory)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute working directory: %w", err)
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect git root marker: %w", err)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return filepath.Abs(workingDirectory)
+		}
+		dir = parent
+	}
 }
 
 func (a adapter) projectStateRoot(env *config.Env, hostDir string) (string, error) {
