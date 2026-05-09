@@ -25,6 +25,8 @@ Subcommands:
   generate           generate multi-model drafts
 `
 
+const ExitCodePreflight = 6
+
 // Run dispatches the cerberus CLI and returns a process exit code.
 func Run(args []string) int {
 	return run(args, os.Stdout, os.Stderr)

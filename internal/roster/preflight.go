@@ -14,6 +14,39 @@ import (
 
 var rosterNamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
+const DebateMinimumReason = "debate_min_reviewers"
+
+// PreflightError is a roster validation failure that carries the CLI exit code
+// and telemetry reason expected by pre-run checks.
+type PreflightError struct {
+	Message string
+	Code    int
+	Reason  string
+}
+
+func (err PreflightError) Error() string {
+	return err.Message
+}
+
+func (err PreflightError) ExitCode() int {
+	return err.Code
+}
+
+func (err PreflightError) TelemetryReason() string {
+	return err.Reason
+}
+
+func EnforceDebateMinimum(slots []RosterSlot, debate bool) error {
+	if !debate || len(slots) >= 2 {
+		return nil
+	}
+	return PreflightError{
+		Message: fmt.Sprintf("--debate requires at least 2 reviewers in the resolved roster (got %d); see docs/debate.md for rationale", len(slots)),
+		Code:    6,
+		Reason:  DebateMinimumReason,
+	}
+}
+
 func rejectUnknownFields(data []byte, path string) error {
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {

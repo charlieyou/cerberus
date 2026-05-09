@@ -178,8 +178,8 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 	if len(slots) == 0 {
 		return nil, preflightError(filePath(file), rosterName, 0, "resulting panel is empty")
 	}
-	if opts.Debate && len(slots) == 1 {
-		return nil, preflightError(filePath(file), rosterName, 1, "1-reviewer panel is not valid with --debate")
+	if err := EnforceDebateMinimum(slots, opts.Debate); err != nil {
+		return nil, err
 	}
 	return slots, nil
 }

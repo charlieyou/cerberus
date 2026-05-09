@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -432,6 +433,12 @@ func writePreflightFailureEvent(runRoot string, env *config.Env, stage string, c
 	}
 	if cause != nil {
 		payload["error"] = cause.Error()
+	}
+	var reasoned interface {
+		TelemetryReason() string
+	}
+	if cause != nil && errors.As(cause, &reasoned) && reasoned.TelemetryReason() != "" {
+		payload["reason"] = reasoned.TelemetryReason()
 	}
 	return telemetry.WriteEvent(runRoot, telemetry.Event{
 		Event:     telemetry.EventPreflightFailed,

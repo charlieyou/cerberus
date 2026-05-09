@@ -2,6 +2,7 @@ package roster
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,6 +226,53 @@ func TestDuplicateTriplesWarnAndGetDistinctInstanceIDs(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "duplicate reviewer slot tuple") {
 		t.Fatalf("stderr = %q, want duplicate warning", stderr)
+	}
+}
+
+func TestEnforceDebateMinimumRejectsOneReviewer(t *testing.T) {
+	err := EnforceDebateMinimum([]RosterSlot{{Provider: "codex", Model: "gpt-5.5"}}, true)
+	if err == nil {
+		t.Fatal("EnforceDebateMinimum() error = nil, want debate minimum error")
+	}
+	var preflight PreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("EnforceDebateMinimum() error type = %T, want PreflightError", err)
+	}
+	if preflight.ExitCode() != 6 {
+		t.Fatalf("ExitCode() = %d, want 6", preflight.ExitCode())
+	}
+	if preflight.TelemetryReason() != DebateMinimumReason {
+		t.Fatalf("TelemetryReason() = %q, want %q", preflight.TelemetryReason(), DebateMinimumReason)
+	}
+	if !strings.Contains(err.Error(), "--debate requires at least 2 reviewers in the resolved roster (got 1)") {
+		t.Fatalf("error = %q, want resolved roster count", err.Error())
+	}
+}
+
+func TestEnforceDebateMinimumRejectsZeroReviewers(t *testing.T) {
+	err := EnforceDebateMinimum(nil, true)
+	if err == nil {
+		t.Fatal("EnforceDebateMinimum() error = nil, want debate minimum error")
+	}
+	if !strings.Contains(err.Error(), "got 0") {
+		t.Fatalf("error = %q, want zero count", err.Error())
+	}
+}
+
+func TestEnforceDebateMinimumAcceptsTwoReviewers(t *testing.T) {
+	err := EnforceDebateMinimum([]RosterSlot{
+		{Provider: "codex", Model: "gpt-5.5"},
+		{Provider: "claude", Model: "claude-opus-4-7"},
+	}, true)
+	if err != nil {
+		t.Fatalf("EnforceDebateMinimum() error = %v, want nil", err)
+	}
+}
+
+func TestEnforceDebateMinimumAllowsOneReviewerWithoutDebate(t *testing.T) {
+	err := EnforceDebateMinimum([]RosterSlot{{Provider: "codex", Model: "gpt-5.5"}}, false)
+	if err != nil {
+		t.Fatalf("EnforceDebateMinimum() error = %v, want nil", err)
 	}
 }
 

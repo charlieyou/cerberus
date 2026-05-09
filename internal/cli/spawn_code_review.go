@@ -37,24 +37,32 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if opts.debate {
-		err := errors.New("debate not yet implemented in Epic B; see Epic C")
-		recordSpawnPreflightFailure("debate", err)
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
 
 	resolved, err := resolveReviewers(opts)
 	if err != nil {
 		recordSpawnPreflightFailure("roster", err)
 		fmt.Fprintln(stderr, err)
-		return 2
+		return exitCodeForError(err, 2)
 	}
 	prompt, err := buildCodeReviewPrompt(opts)
 	if err != nil {
 		recordSpawnPreflightFailure("prompt", err)
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if opts.debate {
+		_, err := (orchestrator.Orchestrator{
+			Env:       config.Resolve(),
+			Consensus: aggregate.Mode(opts.consensus),
+			Mode:      opts.mode,
+			RosterID:  resolved.rosterID,
+		}).RunDebate(context.Background(), resolved.reviewers, prompt, opts.maxRounds)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "review spawned")
+		return 0
 	}
 
 	params := orchestrator.Params{
@@ -85,6 +93,16 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 
 func recordSpawnPreflightFailure(stage string, err error) {
 	_ = orchestrator.RecordPreflightFailure(config.Resolve(), stage, err)
+}
+
+func exitCodeForError(err error, fallback int) int {
+	var coded interface {
+		ExitCode() int
+	}
+	if errors.As(err, &coded) && coded.ExitCode() != 0 {
+		return coded.ExitCode()
+	}
+	return fallback
 }
 
 var startReviewRuntime = startReviewRuntimeProcess
@@ -177,7 +195,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	fs := flag.NewFlagSet("spawn-code-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&opts.mode, "mode", "smart", "review mode")
-	fs.IntVar(&opts.maxRounds, "max-rounds", 1, "maximum review rounds")
+	fs.IntVar(&opts.maxRounds, "max-rounds", 3, "maximum review rounds")
 	fs.StringVar(&opts.consensus, "consensus", "majority", "consensus mode")
 	fs.StringVar(&opts.agents, "agents", "", "legacy comma-separated reviewer providers")
 	fs.StringVar(&opts.roster, "roster", "", "roster name")
@@ -207,7 +225,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 		opts.mode = ""
 	}
 	if !opts.maxRoundsSet {
-		opts.maxRounds = 0
+		opts.maxRounds = 3
 	}
 	if len(opts.commits) > 0 {
 		opts.commits, opts.focus = splitTrailingCommitArgs(opts.commits, fs.Args())
@@ -285,6 +303,12 @@ type resolvedReviewerConfig struct {
 func resolveReviewers(opts spawnCodeReviewOptions) (resolvedReviewerConfig, error) {
 	if opts.agents != "" {
 		reviewers, rosterID, err := reviewersFromAgents(opts.agents)
+		if err != nil {
+			return resolvedReviewerConfig{}, err
+		}
+		if err := enforceDebateMinimumForReviewers(reviewers, opts.debate); err != nil {
+			return resolvedReviewerConfig{}, err
+		}
 		return resolvedReviewerConfig{reviewers: reviewers, rosterID: rosterID}, err
 	}
 
@@ -296,6 +320,7 @@ func resolveReviewers(opts spawnCodeReviewOptions) (resolvedReviewerConfig, erro
 		RosterName:   opts.roster,
 		CLIReviewers: opts.reviewers,
 		ReplaceSlot:  opts.replaceSlot,
+		Debate:       opts.debate,
 	})
 	if err != nil {
 		return resolvedReviewerConfig{}, err
@@ -309,6 +334,22 @@ func resolveReviewers(opts spawnCodeReviewOptions) (resolvedReviewerConfig, erro
 		rosterID:  rosterID,
 		defaults:  defaultsFromRosterFile(file),
 	}, nil
+}
+
+func enforceDebateMinimumForReviewers(reviewers []orchestrator.ReviewerSlot, debate bool) error {
+	slots := make([]roster.RosterSlot, len(reviewers))
+	for i, reviewer := range reviewers {
+		slots[i] = roster.RosterSlot{
+			Provider:      reviewer.Provider,
+			Model:         reviewer.Model,
+			Strategy:      reviewer.Strategy,
+			PersonaPath:   reviewer.PersonaPath,
+			Mode:          reviewer.Mode,
+			InstanceID:    reviewer.ID,
+			InstanceIndex: reviewer.InstanceIndex,
+		}
+	}
+	return roster.EnforceDebateMinimum(slots, debate)
 }
 
 func reviewersFromRosterSlots(slots []roster.RosterSlot) []orchestrator.ReviewerSlot {

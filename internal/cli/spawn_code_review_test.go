@@ -79,17 +79,92 @@ func TestSpawnCodeReviewRejectsAgentsWithRoster(t *testing.T) {
 	}
 }
 
-func TestSpawnCodeReviewRejectsDebate(t *testing.T) {
+func TestSpawnCodeReviewDebateRejectsOneReviewerYAMLRoster(t *testing.T) {
 	setSpawnTestEnv(t)
+	setRosterTestCWD(t)
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"spawn-code-review", "--debate"}, &stdout, &stderr)
 
-	if code == 0 {
-		t.Fatal("spawn-code-review --debate exit code = 0, want non-zero")
+	if code != ExitCodePreflight {
+		t.Fatalf("spawn-code-review --debate exit code = %d, want %d", code, ExitCodePreflight)
 	}
-	if !strings.Contains(stderr.String(), "debate not yet implemented in Epic B; see Epic C") {
-		t.Fatalf("stderr = %q, want debate error", stderr.String())
+	if !strings.Contains(stderr.String(), "--debate requires at least 2 reviewers in the resolved roster (got 1)") {
+		t.Fatalf("stderr = %q, want debate reviewer-count error", stderr.String())
+	}
+	if _, err := os.Stat(spawnGatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gate-state stat error = %v, want not exist", err)
+	}
+	events := readSpawnEventLog(t)
+	event := findSpawnEvent(t, events, telemetry.EventPreflightFailed)
+	if got, want := event["reason"], "debate_min_reviewers"; got != want {
+		t.Fatalf("preflight failed reason = %v, want %q", got, want)
+	}
+}
+
+func TestSpawnCodeReviewDebateRejectsDegradedDefaultToOneReviewer(t *testing.T) {
+	setSpawnTestEnv(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	onlyCodexCLIOnPath(t)
+	var stdout, stderr bytes.Buffer
+
+	var code int
+	osStderr := captureProcessStderr(t, func() {
+		code = run([]string{"spawn-code-review", "--debate"}, &stdout, &stderr)
+	})
+	allStderr := stderr.String() + osStderr
+
+	if code != ExitCodePreflight {
+		t.Fatalf("spawn-code-review --debate exit code = %d, want %d", code, ExitCodePreflight)
+	}
+	for _, want := range []string{
+		`warning: default panel CLI "claude" missing on PATH`,
+		`warning: default panel CLI "gemini" missing on PATH`,
+		"--debate requires at least 2 reviewers in the resolved roster (got 1)",
+	} {
+		if !strings.Contains(allStderr, want) {
+			t.Fatalf("stderr = %q, want %q", allStderr, want)
+		}
+	}
+	if _, err := os.Stat(spawnGatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gate-state stat error = %v, want not exist", err)
+	}
+}
+
+func TestSpawnCodeReviewDebateTwoReviewersDefaultMaxRounds(t *testing.T) {
+	setSpawnTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review --debate exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate := readSpawnGate(t)
+	if !gate.Debate {
+		t.Fatal("gate debate = false, want true")
+	}
+	if gate.MaxRounds != 3 {
+		t.Fatalf("gate max_rounds = %d, want 3", gate.MaxRounds)
+	}
+}
+
+func TestSpawnCodeReviewDebateMaxRoundsOverride(t *testing.T) {
+	setSpawnTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate", "--max-rounds", "5"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review --debate exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate := readSpawnGate(t)
+	if !gate.Debate {
+		t.Fatal("gate debate = false, want true")
+	}
+	if gate.MaxRounds != 5 {
+		t.Fatalf("gate max_rounds = %d, want 5", gate.MaxRounds)
 	}
 }
 
@@ -262,8 +337,8 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 	if opts.roster != "default" || opts.replaceSlot != "claude#1" || opts.consensus != "all" {
 		t.Fatalf("parsed options = %#v, want roster/replace/consensus", opts)
 	}
-	if opts.mode != "" || opts.maxRounds != 0 {
-		t.Fatalf("implicit mode/maxRounds = %q/%d, want empty/0", opts.mode, opts.maxRounds)
+	if opts.mode != "" || opts.maxRounds != 3 {
+		t.Fatalf("implicit mode/maxRounds = %q/%d, want empty/3", opts.mode, opts.maxRounds)
 	}
 	if got, want := strings.Join(opts.reviewers, ","), "claude:opus,codex:gpt-5.3-codex:falsification-first"; got != want {
 		t.Fatalf("reviewers = %q, want %q", got, want)
@@ -278,12 +353,12 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	var stderr bytes.Buffer
 
-	opts, err := parseSpawnCodeReviewFlags([]string{"--mode", "smart", "--max-rounds", "1"}, &stderr)
+	opts, err := parseSpawnCodeReviewFlags([]string{"--mode", "smart", "--max-rounds", "5"}, &stderr)
 	if err != nil {
 		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
 	}
-	if opts.mode != "smart" || opts.maxRounds != 1 {
-		t.Fatalf("mode/maxRounds = %q/%d, want smart/1", opts.mode, opts.maxRounds)
+	if opts.mode != "smart" || opts.maxRounds != 5 {
+		t.Fatalf("mode/maxRounds = %q/%d, want smart/5", opts.mode, opts.maxRounds)
 	}
 }
 
@@ -548,6 +623,39 @@ func setSpawnTestEnv(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", "project")
 	t.Setenv("CERBERUS_RUN_KEY", "run")
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+}
+
+func onlyCodexCLIOnPath(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	path := filepath.Join(bin, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(codex) error = %v", err)
+	}
+	t.Setenv("PATH", bin)
+}
+
+func captureProcessStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe() error = %v", err)
+	}
+	os.Stderr = write
+	defer func() {
+		os.Stderr = original
+	}()
+
+	fn()
+	if err := write.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(read); err != nil {
+		t.Fatalf("ReadFrom() error = %v", err)
+	}
+	return buf.String()
 }
 
 func setRosterTestCWD(t *testing.T) {

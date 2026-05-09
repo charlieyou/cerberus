@@ -53,3 +53,23 @@ func TestRunMissingSubcommand(t *testing.T) {
 		t.Fatalf("run(no args) stderr = %q, want usage", got)
 	}
 }
+
+func TestSpawnCodeReviewMaxRoundsFlagParsing(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags(nil, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(default) error = %v", err)
+	}
+	if opts.maxRounds != 3 {
+		t.Fatalf("default maxRounds = %d, want 3", opts.maxRounds)
+	}
+
+	opts, err = parseSpawnCodeReviewFlags([]string{"--max-rounds", "5"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(override) error = %v", err)
+	}
+	if opts.maxRounds != 5 {
+		t.Fatalf("override maxRounds = %d, want 5", opts.maxRounds)
+	}
+}
