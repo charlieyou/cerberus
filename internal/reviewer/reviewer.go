@@ -46,15 +46,18 @@ type RawReviewerOutput struct {
 	Strategy          *string      `json:"strategy"`
 	Round             *int         `json:"round"`
 	PeerResponsesSeen []string     `json:"peer_responses_seen"`
+	InstanceID        string       `json:"-"`
 }
 
 type RawFinding struct {
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Severity   *string  `json:"severity"`
-	Priority   *int     `json:"priority"`
-	FilePath   *string  `json:"file_path"`
-	LineStart  *int     `json:"line_start"`
-	LineEnd    *int     `json:"line_end"`
-	Confidence *float64 `json:"confidence"`
+	Title          string   `json:"title"`
+	Body           string   `json:"body"`
+	Severity       *string  `json:"severity"`
+	Priority       *int     `json:"priority"`
+	FilePath       *string  `json:"file_path"`
+	LineStart      *int     `json:"line_start"`
+	LineEnd        *int     `json:"line_end"`
+	Confidence     *float64 `json:"confidence"`
+	Evidence       string   `json:"evidence,omitempty"`
+	Recommendation string   `json:"recommendation,omitempty"`
 }

@@ -26,10 +26,16 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	verdict, err := (Orchestrator{
 		Env:     env,
 		Spawner: spawner,
-		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput, _ []string) ([]anonymize.PeerRecord, error) {
+		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput, rosterModelNames []string) ([]anonymize.PeerRecord, error) {
 			anonymizerCalls++
 			if len(outputs) != 2 {
 				t.Fatalf("anonymizer outputs length = %d, want 2", len(outputs))
+			}
+			if got, want := strings.Join(rosterModelNames, ","), "stub,stub"; got != want {
+				t.Fatalf("anonymizer roster models = %q, want %q", got, want)
+			}
+			if outputs[0].InstanceID != "codex#1" || outputs[1].InstanceID != "codex#2" {
+				t.Fatalf("anonymizer instance IDs = %q,%q, want codex#1,codex#2", outputs[0].InstanceID, outputs[1].InstanceID)
 			}
 			return []anonymize.PeerRecord{
 				{PeerID: "peer_1", Verdict: outputs[0].Verdict, Summary: outputs[0].Summary},

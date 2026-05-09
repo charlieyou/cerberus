@@ -1,0 +1,120 @@
+package anonymize
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/charlieyou/cerberus/internal/reviewer"
+)
+
+func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *testing.T) {
+	confidence := 0.81
+	severity := "high"
+	priority := 1
+	lineStart := 12
+	lineEnd := 13
+	strategy := "verification-first"
+	round := 1
+	outputs := []reviewer.RawReviewerOutput{
+		rawOutput("codex#2", "NEEDS_WORK", "codex on gpt-5.5 found Y", confidence, strategy, round, severity, priority, lineStart, lineEnd),
+		rawOutput("gemini#1", "NEEDS_WORK", "gemini on gemini-3.1-pro found Z", confidence, strategy, round, severity, priority, lineStart, lineEnd),
+		rawOutput("claude#1", "NEEDS_WORK", "claude on claude-opus-4-7 found X", confidence, strategy, round, severity, priority, lineStart, lineEnd),
+		rawOutput("codex#1", "PASS", "As codex, I agree", confidence, strategy, round, severity, priority, lineStart, lineEnd),
+	}
+	models := []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"}
+
+	got, err := AnonymizePeerBroadcast(outputs, models)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast() error = %v", err)
+	}
+	wantIDs := []string{"peer_1", "peer_2", "peer_3", "peer_4"}
+	if gotIDs := peerIDs(got); !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("peer IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if got[0].Summary != "peer on peer-model found X" {
+		t.Fatalf("claude summary = %q, want scrubbed provider/model", got[0].Summary)
+	}
+	if got[1].Summary != "As peer_2, I agree" {
+		t.Fatalf("codex self-reference summary = %q, want peer_2 attribution", got[1].Summary)
+	}
+	if got[0].Verdict != "NEEDS_WORK" || got[1].Verdict != "PASS" {
+		t.Fatalf("verdicts not preserved: %#v", got)
+	}
+	if got[0].OverallConfidence == nil || *got[0].OverallConfidence != confidence {
+		t.Fatalf("overall confidence = %v, want %v", got[0].OverallConfidence, confidence)
+	}
+	if got[0].Strategy == nil || *got[0].Strategy != strategy {
+		t.Fatalf("strategy = %v, want %q", got[0].Strategy, strategy)
+	}
+	if got[0].Round == nil || *got[0].Round != round {
+		t.Fatalf("round = %v, want %d", got[0].Round, round)
+	}
+	if got[0].Findings[0].Severity == nil || *got[0].Findings[0].Severity != severity {
+		t.Fatalf("severity = %v, want %q", got[0].Findings[0].Severity, severity)
+	}
+	if got[0].Findings[0].Confidence == nil || *got[0].Findings[0].Confidence != confidence {
+		t.Fatalf("finding confidence = %v, want %v", got[0].Findings[0].Confidence, confidence)
+	}
+	if got[0].Findings[0].Evidence != "peer evidence uses peer-model" || got[0].Findings[0].Recommendation != "ask peer to fix" {
+		t.Fatalf("finding free text not scrubbed: %#v", got[0].Findings[0])
+	}
+
+	shuffled := []reviewer.RawReviewerOutput{outputs[3], outputs[0], outputs[2], outputs[1]}
+	again, err := AnonymizePeerBroadcast(shuffled, models)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast(shuffled) error = %v", err)
+	}
+	if !reflect.DeepEqual(got, again) {
+		t.Fatalf("shuffled output changed:\n got: %#v\nwant: %#v", again, got)
+	}
+}
+
+func TestAnonymizePeerBroadcastEmptyInput(t *testing.T) {
+	got, err := AnonymizePeerBroadcast(nil, nil)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast(nil) error = %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("AnonymizePeerBroadcast(nil) = %#v, want empty non-nil slice", got)
+	}
+}
+
+func TestAnonymizePeerBroadcastRejectsMissingInstanceID(t *testing.T) {
+	_, err := AnonymizePeerBroadcast([]reviewer.RawReviewerOutput{{Findings: []reviewer.RawFinding{}, Verdict: "PASS"}}, nil)
+	if err == nil {
+		t.Fatal("AnonymizePeerBroadcast() error = nil, want missing instance ID error")
+	}
+}
+
+func rawOutput(instanceID, verdict, summary string, confidence float64, strategy string, round int, severity string, priority int, lineStart int, lineEnd int) reviewer.RawReviewerOutput {
+	return reviewer.RawReviewerOutput{
+		InstanceID:        instanceID,
+		Verdict:           verdict,
+		Summary:           summary,
+		OverallConfidence: &confidence,
+		Strategy:          &strategy,
+		Round:             &round,
+		PeerResponsesSeen: []string{},
+		Findings: []reviewer.RawFinding{
+			{
+				Title:          "Claude title",
+				Body:           "Gemini body",
+				Severity:       &severity,
+				Priority:       &priority,
+				LineStart:      &lineStart,
+				LineEnd:        &lineEnd,
+				Confidence:     &confidence,
+				Evidence:       "Claude evidence uses claude-opus-4-7",
+				Recommendation: "ask claude to fix",
+			},
+		},
+	}
+}
+
+func peerIDs(records []PeerRecord) []string {
+	ids := make([]string, len(records))
+	for i, record := range records {
+		ids[i] = record.PeerID
+	}
+	return ids
+}

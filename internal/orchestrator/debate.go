@@ -25,7 +25,7 @@ type Orchestrator struct {
 	Consensus              aggregate.Mode
 	Mode                   string
 	RosterID               string
-	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput) ([]anonymize.PeerRecord, error)
+	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput, []string) ([]anonymize.PeerRecord, error)
 }
 
 // RunDebate executes a multi-round debate review on the same orchestrator path
@@ -106,6 +106,7 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 	if anonymizeBroadcast == nil {
 		anonymizeBroadcast = anonymize.AnonymizePeerBroadcast
 	}
+	rosterModelNames := modelNames(slots)
 
 	var final Verdict
 	var previous []reviewer.RawReviewerOutput
@@ -117,7 +118,7 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 
 	for round := 1; round <= maxRounds; round++ {
 		if round > 1 {
-			records, err := anonymizeBroadcast(previous)
+			records, err := anonymizeBroadcast(previous, rosterModelNames)
 			if err != nil {
 				return Verdict{}, err
 			}
@@ -143,6 +144,7 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 		outputs := make([]reviewer.RawReviewerOutput, len(roundResults))
 		for i, result := range roundResults {
 			outputs[i] = result.Output
+			outputs[i].InstanceID = slots[i].ID
 			totalTokens.Input += result.Row.Tokens.Input
 			totalTokens.Output += result.Row.Tokens.Output
 			totalCostUSD += result.Row.CostUSD
@@ -226,6 +228,16 @@ func writePeerBroadcast(runRoot string, iteration, round int, records []anonymiz
 		return nil, fmt.Errorf("write peer broadcast: %w", err)
 	}
 	return data, nil
+}
+
+func modelNames(slots []ReviewerSlot) []string {
+	models := make([]string, 0, len(slots))
+	for _, slot := range slots {
+		if slot.Model != "" {
+			models = append(models, slot.Model)
+		}
+	}
+	return models
 }
 
 func promptWithPeerBroadcast(prompt, broadcast []byte) []byte {

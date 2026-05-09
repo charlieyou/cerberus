@@ -31,8 +31,8 @@ func TestDebatePath(t *testing.T) {
 	verdict, err := (orchestrator.Orchestrator{
 		Env: env,
 	}).RunDebate(context.Background(), []orchestrator.ReviewerSlot{
-		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
-		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "gpt-5.5", InstanceIndex: 2},
 	}, []byte("Review this change."), 2)
 	if err != nil {
 		t.Fatalf("RunDebate() error = %v", err)
@@ -52,8 +52,15 @@ func TestDebatePath(t *testing.T) {
 	}
 
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
-	if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-2", "peer-broadcast.json")); err != nil {
+	broadcastPath := filepath.Join(runRoot, "iterations", "1", "round-2", "peer-broadcast.json")
+	broadcast, err := os.ReadFile(broadcastPath)
+	if err != nil {
 		t.Fatalf("round-2 peer-broadcast.json missing: %v", err)
+	}
+	for _, leaked := range []string{"claude", "codex", "gemini", "claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"} {
+		if strings.Contains(strings.ToLower(string(broadcast)), leaked) {
+			t.Fatalf("round-2 peer-broadcast.json leaked %q:\n%s", leaked, broadcast)
+		}
 	}
 	gate, err := state.ReadGateState(state.GateStatePath(runRoot))
 	if err != nil {
