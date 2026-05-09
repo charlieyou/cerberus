@@ -13,7 +13,8 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	priority := 1
 	lineStart := 12
 	lineEnd := 13
-	strategy := "verification-first"
+	strategy := "codex-falsification"
+	modelStrategy := "claude-opus-4-7"
 	round := 1
 	outputs := []reviewer.RawReviewerOutput{
 		rawOutput("codex#2", "NEEDS_WORK", "codex on gpt-5.5 found Y", confidence, strategy, round, severity, priority, lineStart, lineEnd),
@@ -21,6 +22,7 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 		rawOutput("claude#1", "NEEDS_WORK", "claude on claude-opus-4-7 found X", confidence, strategy, round, severity, priority, lineStart, lineEnd),
 		rawOutput("codex#1", "PASS", "As codex, I agree", confidence, strategy, round, severity, priority, lineStart, lineEnd),
 	}
+	outputs[2].Strategy = &modelStrategy
 	models := []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"}
 
 	got, err := AnonymizePeerBroadcast(outputs, models)
@@ -43,8 +45,11 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	if got[0].OverallConfidence == nil || *got[0].OverallConfidence != confidence {
 		t.Fatalf("overall confidence = %v, want %v", got[0].OverallConfidence, confidence)
 	}
-	if got[0].Strategy == nil || *got[0].Strategy != strategy {
-		t.Fatalf("strategy = %v, want %q", got[0].Strategy, strategy)
+	if got[0].Strategy == nil || *got[0].Strategy != "peer-model" {
+		t.Fatalf("model strategy = %v, want scrubbed peer-model", got[0].Strategy)
+	}
+	if got[1].Strategy == nil || *got[1].Strategy != "peer-falsification" {
+		t.Fatalf("provider strategy = %v, want scrubbed peer-falsification", got[1].Strategy)
 	}
 	if got[0].Round == nil || *got[0].Round != round {
 		t.Fatalf("round = %v, want %d", got[0].Round, round)

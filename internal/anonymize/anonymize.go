@@ -63,7 +63,7 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 			Summary:           scrubber.Scrub(output.Summary, peerID),
 			Findings:          scrubFindings(output.Findings, peerID, scrubber),
 			OverallConfidence: output.OverallConfidence,
-			Strategy:          output.Strategy,
+			Strategy:          scrubStringPtr(output.Strategy, peerID, scrubber),
 			Round:             output.Round,
 		}
 	}
