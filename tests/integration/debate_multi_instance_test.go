@@ -1,17 +1,17 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/state"
@@ -22,6 +22,24 @@ func TestDebateMultiInstance(t *testing.T) {
 	recordDir := t.TempDir()
 	installMultiDebateMockCLI(t, repoRoot, recordDir)
 
+	xdgConfigHome := t.TempDir()
+	writeIntegrationFile(t, xdgConfigHome, "cerberus/rosters.yaml", `version: 1
+rosters:
+  debate-multi:
+    reviewers:
+      - provider: codex
+        model: gpt-5.5
+        strategy: verification-first
+      - provider: codex
+        model: gpt-5.4
+        strategy: falsification-first
+      - provider: codex
+        model: gpt-5.3-codex
+        strategy: decompose
+      - provider: gemini
+        model: gemini-3.1-pro
+`)
+
 	env := &config.Env{
 		Host:       "generic",
 		Root:       repoRoot,
@@ -30,24 +48,29 @@ func TestDebateMultiInstance(t *testing.T) {
 		RunKey:     "debate-multi-instance",
 	}
 
+	binary := buildIntegrationCerberus(t, repoRoot)
+	cmd := exec.Command(binary, "spawn-code-review", "--roster", "debate-multi", "--debate", "--max-rounds", "2", "multi-instance focus")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(),
+		"CERBERUS_ROOT="+env.Root,
+		"CERBERUS_HOST="+env.Host,
+		"CERBERUS_STATE_ROOT="+env.StateRoot,
+		"CERBERUS_PROJECT_KEY="+env.ProjectKey,
+		"CERBERUS_RUN_KEY="+env.RunKey,
+		"XDG_CONFIG_HOME="+xdgConfigHome,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("spawn-code-review failed: %v\n%s", err, output)
+	}
+
 	slots := []orchestrator.ReviewerSlot{
 		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Strategy: "verification-first", InstanceIndex: 1},
 		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Strategy: "falsification-first", InstanceIndex: 2},
 		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Strategy: "decompose", InstanceIndex: 3},
 		{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", InstanceIndex: 1},
 	}
-	verdict, err := (orchestrator.Orchestrator{
-		Env:       env,
-		Consensus: aggregate.ModeMajority,
-	}).RunDebate(context.Background(), slots, []byte("Review this multi-instance change."), 2)
-	if err != nil {
-		t.Fatalf("RunDebate() error = %v", err)
-	}
-	if verdict.Verdict != state.VerdictPass {
-		t.Fatalf("verdict = %q, want pass", verdict.Verdict)
-	}
-
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	waitForResolvedGate(t, runRoot)
 	assertResolvedGate(t, runRoot)
 	assertReviewerDirs(t, runRoot, 1, 4)
 	assertReviewerDirs(t, runRoot, 2, 4)
@@ -60,6 +83,24 @@ func TestDebateMultiInstance(t *testing.T) {
 	})
 	assertDistinctRoundTwoFindings(t, runRoot, slots)
 	assertGeminiPolicyInReviewerStderr(t, runRoot, "gemini#1")
+}
+
+func waitForResolvedGate(t *testing.T, runRoot string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		gate, err := state.ReadGateState(state.GateStatePath(runRoot))
+		if err == nil && gate.Status == state.StatusResolved {
+			return
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("gate did not resolve within 5s: %v", lastErr)
+	}
+	t.Fatalf("gate did not resolve within 5s")
 }
 
 func assertResolvedGate(t *testing.T, runRoot string) {
