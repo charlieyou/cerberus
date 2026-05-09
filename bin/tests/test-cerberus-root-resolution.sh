@@ -56,6 +56,10 @@ mkdir -p "$BAD_ROOT"
 mkdir -p "$FOREIGN_CWD"
 PLUGIN_ROOT_SED="$(escape_sed_replacement "$PLUGIN_ROOT")"
 REVIEW_CODE_SKILL_DIR_SED="$(escape_sed_replacement "$PLUGIN_ROOT/skills/review-code")"
+unset CERBERUS_HOST CERBERUS_RUN_KEY CERBERUS_STATE_ROOT CERBERUS_PROJECT_KEY \
+      CERBERUS_SESSION_ID CERBERUS_TRANSCRIPT_PATH REVIEW_GATE_SESSION_KEY \
+      CLAUDE_SESSION_ID CLAUDE_TRANSCRIPT_PATH CODEX_THREAD_ID CODEX_API_KEY \
+      CODEX_HOME CODEX_SANDBOX
 
 log_test "review-gate falls back when CERBERUS_ROOT points at a project root"
 review_stdout="$TEST_DIR/review.out"
@@ -167,6 +171,29 @@ if [[ "$skill_dir_root" != "$PLUGIN_ROOT" ]]; then
     log_fail "expected cerberus-skill-env to fall back after invalid CLAUDE_SKILL_DIR, got: $skill_dir_root"
 fi
 log_pass "cerberus-skill-env survives invalid CLAUDE_SKILL_DIR"
+
+log_test "cerberus-skill-env maps Claude session into v2 run env"
+claude_env_output="$TEST_DIR/claude-skill-env.out"
+env CERBERUS_ROOT="$PLUGIN_ROOT" CLAUDE_SESSION_ID=claude-session-001 CLAUDE_TRANSCRIPT_PATH=/tmp/claude-transcript.jsonl \
+    "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n%s\n%s\n%s\n" "$CERBERUS_HOST" "$CERBERUS_SESSION_ID" "$CERBERUS_RUN_KEY" "$CERBERUS_TRANSCRIPT_PATH"' _ "$PLUGIN_ROOT" \
+    > "$claude_env_output"
+claude_host="$(sed -n '1p' "$claude_env_output")"
+claude_session="$(sed -n '2p' "$claude_env_output")"
+claude_run="$(sed -n '3p' "$claude_env_output")"
+claude_transcript="$(sed -n '4p' "$claude_env_output")"
+if [[ "$claude_host" != "claude" ]]; then
+    log_fail "expected Claude skill env to select host claude, got: $claude_host"
+fi
+if [[ "$claude_session" != "claude-session-001" ]]; then
+    log_fail "expected Claude skill env to export session id claude-session-001, got: $claude_session"
+fi
+if [[ "$claude_run" != "claude-session-001" ]]; then
+    log_fail "expected Claude skill env to use session id as run key, got: $claude_run"
+fi
+if [[ "$claude_transcript" != "/tmp/claude-transcript.jsonl" ]]; then
+    log_fail "expected Claude skill env to export transcript path, got: $claude_transcript"
+fi
+log_pass "cerberus-skill-env maps Claude session into v2 run env"
 
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
