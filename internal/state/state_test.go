@@ -126,6 +126,15 @@ func TestPathHelpers(t *testing.T) {
 	}
 }
 
+func TestRunDirDoesNotDuplicateProjectScopedStateRoot(t *testing.T) {
+	stateRoot := filepath.Join("/home/user", ".codex", "projects", "project-key", "cerberus")
+	got := RunDir(stateRoot, "project-key", "run-key")
+	want := filepath.Join(stateRoot, "run-key")
+	if got != want {
+		t.Fatalf("RunDir() = %q, want %q", got, want)
+	}
+}
+
 func TestEnsureRunDirAndWriteReviewerOutput(t *testing.T) {
 	runRoot := filepath.Join(t.TempDir(), "project-key", "run-key")
 	if err := EnsureRunDir(runRoot); err != nil {

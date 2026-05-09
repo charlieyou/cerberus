@@ -94,7 +94,7 @@ func TestCodexHookEndToEndSingleSlotSmoke(t *testing.T) {
 		t.Fatalf("ProjectKeyFromDir() error = %v", err)
 	}
 	runKey := "codex-hook-smoke"
-	payload := fmt.Sprintf(`{"session_id":%q,"workspace_root":%q}`, runKey, projectRoot)
+	payload := fmt.Sprintf(`{"session_id":%q,"transcript_path":%q,"workspace_root":%q}`, runKey, filepath.Join(t.TempDir(), "codex-hook-smoke.jsonl"), projectRoot)
 
 	runCerberusHook(t, repoRoot, stateRoot, projectKey, "codex-session-start", payload)
 	if _, err := os.Stat(filepath.Join(stateRoot, projectKey, runKey, "session.json")); err != nil {

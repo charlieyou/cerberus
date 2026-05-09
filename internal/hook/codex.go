@@ -78,12 +78,6 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 	if err != nil {
 		return nil, "", err
 	}
-	if payload.SessionID != "" {
-		resolved.SessionID = payload.SessionID
-	}
-	if payload.TranscriptPath != "" || payload.Transcript != "" {
-		resolved.TranscriptPath = firstNonEmpty(payload.TranscriptPath, payload.Transcript)
-	}
 	if payload.ProjectKey != "" {
 		resolved.ProjectKey = payload.ProjectKey
 	}
@@ -99,6 +93,17 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 	if err != nil {
 		return nil, "", err
 	}
+	codexHost := host.NewCodexHost()
+	sessionID, err := codexHost.ResolveSessionID(stdinPayload)
+	if err != nil {
+		return nil, "", err
+	}
+	resolved.SessionID = sessionID
+	transcriptPath, err := codexHost.TranscriptPath(stdinPayload)
+	if err != nil {
+		return nil, "", err
+	}
+	resolved.TranscriptPath = transcriptPath
 	if resolved.ProjectKey == "" {
 		projectKey, err := adapter.ProjectKey(&resolved)
 		if err != nil {

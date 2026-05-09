@@ -3,6 +3,7 @@ package host
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ type Adapter interface {
 	Name() string
 	StateRoot(env *config.Env) (string, error)
 	ProjectKey(env *config.Env) (string, error)
+	ResolveSessionID(payload []byte) (string, error)
+	TranscriptPath(payload []byte) (string, error)
 }
 
 type adapter struct {
@@ -28,8 +31,10 @@ func NewFromEnv(env *config.Env) (Adapter, error) {
 	}
 
 	switch env.Host {
-	case "claude", "codex", "generic":
+	case "claude", "generic":
 		return adapter{name: env.Host}, nil
+	case "codex":
+		return NewCodexHost(), nil
 	default:
 		return nil, fmt.Errorf("unsupported CERBERUS_HOST %q", env.Host)
 	}
@@ -72,6 +77,44 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 		return "", fmt.Errorf("resolve working directory: %w", err)
 	}
 	return ProjectKeyFromDir(workingDirectory)
+}
+
+func (a adapter) ResolveSessionID(payload []byte) (string, error) {
+	switch a.name {
+	case "claude":
+		var fields struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := decodePayloadFields(payload, &fields, "claude"); err != nil {
+			return "", err
+		}
+		if fields.SessionID == "" {
+			return "", fmt.Errorf("Claude session_id is required")
+		}
+		return fields.SessionID, nil
+	default:
+		return "", fmt.Errorf("%s host does not resolve session_id from hook payload", a.name)
+	}
+}
+
+func (a adapter) TranscriptPath(payload []byte) (string, error) {
+	switch a.name {
+	case "claude":
+		var fields struct {
+			TranscriptPath string `json:"transcript_path"`
+			Transcript     string `json:"transcript"`
+		}
+		if err := decodePayloadFields(payload, &fields, "claude"); err != nil {
+			return "", err
+		}
+		transcriptPath := firstNonEmpty(fields.TranscriptPath, fields.Transcript)
+		if transcriptPath == "" {
+			return "", fmt.Errorf("Claude transcript_path is required")
+		}
+		return transcriptPath, nil
+	default:
+		return "", fmt.Errorf("%s host does not resolve transcript_path from hook payload", a.name)
+	}
 }
 
 // ProjectKeyFromDir derives the stable project key for an explicit host cwd.
@@ -118,4 +161,23 @@ func (a adapter) projectStateRoot(env *config.Env, hostDir string) (string, erro
 	}
 
 	return filepath.Join(home, hostDir, "projects", projectKey, "cerberus"), nil
+}
+
+func decodePayloadFields(payload []byte, target any, hostName string) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("%s hook payload is required", hostName)
+	}
+	if err := json.Unmarshal(payload, target); err != nil {
+		return fmt.Errorf("parse %s hook payload: %w", hostName, err)
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

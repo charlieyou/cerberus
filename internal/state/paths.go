@@ -10,6 +10,9 @@ const gateStateFilename = "gate-state.json"
 
 // RunDir returns the canonical <state_root>/<project>/<run> directory.
 func RunDir(stateRoot, projectKey, run string) string {
+	if filepath.Base(stateRoot) == "cerberus" && filepath.Base(filepath.Dir(stateRoot)) == projectKey {
+		return filepath.Join(stateRoot, run)
+	}
 	return filepath.Join(stateRoot, projectKey, run)
 }
 
