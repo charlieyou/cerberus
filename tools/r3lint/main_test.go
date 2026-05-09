@@ -32,6 +32,34 @@ var _ = aggregate.ModeMajority
 	}
 }
 
+func TestRunRejectsStateImportOutsideApprovedOwnersAndTests(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "internal/cli/new_bypass.go", `package cli
+
+import "github.com/charlieyou/cerberus/internal/state"
+
+var _ = state.StatusPending
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "approved state-I/O owners or tests") {
+		t.Fatalf("run() error = %v, want state import boundary failure", err)
+	}
+}
+
+func TestRunRejectsDirectGateStateLiteralOutsideStateAndTests(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "internal/cli/bad.go", `package cli
+
+const path = "gate-state.json"
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "direct gate-state.json literal") {
+		t.Fatalf("run() error = %v, want gate-state literal failure", err)
+	}
+}
+
 func TestRunRejectsLegacyDebateSymbolsInV2SourceRoots(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "internal/cli/bad.go", `package cli
@@ -58,6 +86,12 @@ var _ = aggregate.ModeMajority
 import "github.com/charlieyou/cerberus/internal/anonymize"
 
 var _ anonymize.PeerRecord
+`)
+	writeFile(t, root, "internal/cli/status.go", `package cli
+
+import "github.com/charlieyou/cerberus/internal/state"
+
+var _ = state.StatusPending
 `)
 
 	if err := run(root); err != nil {

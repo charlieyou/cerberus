@@ -3944,33 +3944,9 @@ PROMPT
             exit 6
         fi
 
-        # --- Strategy assignment (T005 / spec R3) ---
-        # Source the debate coordinator helpers (compute_artifact_id /
-        # assign_strategies / _sha256_hex). Sourced only under --debate so
-        # the byte-parity guarantee for non-debate runs is preserved (no
-        # new env vars, no helper-side effects on the non-debate path).
-        #
-        # T005 contract (this commit): compute the canonical <artifact_id>,
-        # run assign_strategies, and export per-reviewer
-        # STRATEGY_DIRECTIVE_PATH_<REVIEWER> + STRATEGY_NAME_<REVIEWER>
-        # plus DEBATE_ARTIFACT_ID. The substitution call in build_prompt /
-        # spawn-*-review wrappers continues to use the
-        # ${REVIEW_GATE_DEBATE_STRATEGY:-verification-first} default for v1
-        # of the substitution, since per-reviewer prompt rendering is the
-        # synchronous coordinator's job.
-        #
-        # T006 contract (next task): the synchronous coordinator's spawn
-        # loop reads STRATEGY_DIRECTIVE_PATH_<REVIEWER> per-reviewer and
-        # renders the prompt per-reviewer (either by setting
-        # REVIEW_GATE_DEBATE_STRATEGY before each per-reviewer render or
-        # by introducing a marker-and-replace step on the prebuilt prompt).
-        # Until T006 lands the per-reviewer rendering is computed-but-not-
-        # consumed; the byte-parity tests (test-debate-byte-parity.sh)
-        # still assert the verification-first default bytes appear in the
-        # prompt and will be updated to per-reviewer expectations alongside
-        # T006.
-        # shellcheck source=review-gate-debate.sh
-        source "$SCRIPT_DIR/review-gate-debate.sh"
+        echo "Error: legacy bin/review-gate debate mode has been removed from the v2 source tree." >&2
+        echo "       Use bin/cerberus spawn-code-review --debate or the Go CLI debate path instead." >&2
+        exit 2
 
         # Compute the canonical <artifact_id> per review type. Debate-capable
         # review types use the input pinned by spec R3, with a
@@ -4667,7 +4643,7 @@ with open(out_path, "wb") as f: f.write(out)
                 # Degraded-below-2 (mid-debate or final-round): coordinator
                 # already wrote `gate-state.json.status="awaiting_decision"`
                 # and `consensus.verdict="requires_decision"` per spec R6
-                # (see _rdc_mark_state_degraded in review-gate-debate.sh).
+                # (legacy shell debate runtime removed in v2).
                 # Canonical $REVIEWS_DIR is left empty; partial outputs
                 # preserved under iterations/<iter>/round-N/. T012 will pin
                 # the public exit code; for T008 we surface non-zero so the

@@ -83,6 +83,10 @@ func lintGoFile(rel, path string) []string {
 			if !allowedReviewCoreImport(rel) {
 				failures = append(failures, fmt.Sprintf("%s: %s may only be imported by internal/orchestrator or tests", rel, importPath))
 			}
+		case modulePath + "internal/state":
+			if !allowedStateImport(rel) {
+				failures = append(failures, fmt.Sprintf("%s: %s may only be imported by approved state-I/O owners or tests", rel, importPath))
+			}
 		}
 	}
 	return failures
@@ -109,7 +113,7 @@ func lintV2TextBoundaries(root string) []string {
 				return nil
 			}
 			rel = filepath.ToSlash(rel)
-			if strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "internal/state/") {
 				return nil
 			}
 			data, err := os.ReadFile(path)
@@ -125,6 +129,9 @@ func lintV2TextBoundaries(root string) []string {
 				if strings.Contains(string(data), token) {
 					failures = append(failures, fmt.Sprintf("%s: legacy debate symbol %q duplicates internal Go ownership", rel, token))
 				}
+			}
+			if strings.Contains(string(data), `"gate-state.json"`) {
+				failures = append(failures, fmt.Sprintf("%s: direct gate-state.json literal outside internal/state bypasses state I/O ownership", rel))
 			}
 			return nil
 		})
@@ -143,4 +150,30 @@ func allowedReviewCoreImport(rel string) bool {
 		return true
 	}
 	return false
+}
+
+func allowedStateImport(rel string) bool {
+	if strings.HasPrefix(rel, "internal/state/") {
+		return true
+	}
+	if strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "tests/") {
+		return true
+	}
+	switch rel {
+	case "internal/cli/author_context.go",
+		"internal/cli/check.go",
+		"internal/cli/cli.go",
+		"internal/cli/resolve.go",
+		"internal/cli/status.go",
+		"internal/hook/claude.go",
+		"internal/hook/codex.go",
+		"internal/hook/poll.go",
+		"internal/orchestrator/debate.go",
+		"internal/orchestrator/orchestrator.go",
+		"internal/reviewer/spawn.go",
+		"internal/telemetry/telemetry.go":
+		return true
+	default:
+		return false
+	}
 }

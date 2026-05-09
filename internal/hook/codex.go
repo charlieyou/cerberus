@@ -208,7 +208,7 @@ func hasGateState(stateRoot, projectKey, runKey string) bool {
 }
 
 func scanCodexProjectRunKey(stateRoot, projectKey string) (string, bool) {
-	pattern := filepath.Join(state.RunDir(stateRoot, projectKey, "*"), "gate-state.json")
+	pattern := state.GateStatePath(state.RunDir(stateRoot, projectKey, "*"))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", false

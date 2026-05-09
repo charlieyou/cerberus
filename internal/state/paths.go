@@ -10,6 +10,11 @@ const gateStateFilename = "gate-state.json"
 
 const sessionCacheFilename = "active-session.json"
 
+// GateStateFilename returns the canonical gate state file name.
+func GateStateFilename() string {
+	return gateStateFilename
+}
+
 // RunDir returns the canonical <state_root>/<project>/<run> directory.
 func RunDir(stateRoot, projectKey, run string) string {
 	if filepath.Base(stateRoot) == "cerberus" && filepath.Base(filepath.Dir(stateRoot)) == projectKey {
