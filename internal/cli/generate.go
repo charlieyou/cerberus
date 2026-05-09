@@ -85,7 +85,11 @@ func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
 	case fs.NArg() > 0:
 		opts.Prompt = strings.Join(fs.Args(), " ")
 	default:
-		return generate.Options{}, usagef("one of --prompt-file, --focus, or prompt text is required")
+		defaultPrompt, ok := defaultGeneratePrompt(opts.Type)
+		if !ok {
+			return generate.Options{}, usagef("one of --prompt-file, --focus, or prompt text is required")
+		}
+		opts.Prompt = defaultPrompt
 	}
 	return opts, nil
 }
@@ -109,6 +113,17 @@ func validGenerateMode(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func defaultGeneratePrompt(generatorType string) (string, bool) {
+	switch generatorType {
+	case "architecture-review":
+		return "Review the codebase architecture for high-leverage design improvements and refactors.", true
+	case "healthcheck":
+		return "Run a broad code health check for correctness, maintainability, and implementation risks.", true
+	default:
+		return "", false
 	}
 }
 

@@ -100,6 +100,24 @@ func TestGenerateSubcommandRejectsMissingPromptInput(t *testing.T) {
 	}
 }
 
+func TestGenerateSubcommandDefaultsPromptForReviewSkills(t *testing.T) {
+	tests := []string{"architecture-review", "healthcheck"}
+	for _, generatorType := range tests {
+		t.Run(generatorType, func(t *testing.T) {
+			opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", generatorType, "--mode", "fast"}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatalf("parseGenerateFlags() error = %v", err)
+			}
+			if opts.Prompt == "" {
+				t.Fatal("Prompt is empty, want default prompt")
+			}
+			if opts.Focus != "" {
+				t.Fatalf("Focus = %q, want empty", opts.Focus)
+			}
+		})
+	}
+}
+
 func TestGenerateSubcommandRejectsOutputDirRegularFile(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "output")
 	if err := os.WriteFile(outputPath, []byte("not a directory"), 0o644); err != nil {
