@@ -3,6 +3,23 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'USAGE'
+Usage: generate <output-dir> [options]
+
+Arguments:
+  <output-dir>            Required. Directory to write draft files to
+
+Options:
+  --type <type>           Named preset: healthcheck, architecture-review, create-spec, create-plan
+  --mode <level>          Intelligence mode: fast, smart, max
+  --prompt-file <path>    Path to custom prompt file
+  --focus <text>          Focus area to append to base prompt
+  --skip-interview        For create-plan: generate autonomously
+  -h, --help              Show this help
+USAGE
+}
+
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do
     DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
@@ -11,4 +28,26 @@ while [ -L "$SOURCE" ]; do
 done
 
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+root_has_backend() {
+    local root="${1:-}"
+    [ -n "$root" ] \
+        && [[ "$root" == /* ]] \
+        && [ -x "$root/bin/cerberus" ] \
+        && [ -d "$root/prompts/generators" ]
+}
+
+SCRIPT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -n "$PLUGIN_ROOT" ] && ! root_has_backend "$PLUGIN_ROOT"; then
+    echo "[cerberus generate] warning: configured Cerberus root '$PLUGIN_ROOT' is missing backend files; using $SCRIPT_ROOT" >&2
+    PLUGIN_ROOT=""
+fi
+export CERBERUS_ROOT="${PLUGIN_ROOT:-$SCRIPT_ROOT}"
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    usage
+    exit 0
+fi
+
 exec "$SCRIPT_DIR/cerberus" generate "$@"
