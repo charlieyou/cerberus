@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,37 @@ func TestSpawnCodeReviewCreatesPendingGateObservedByHookPoll(t *testing.T) {
 	gate = readSpawnGate(t)
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status after runtime = %q, want resolved", gate.Status)
+	}
+}
+
+func TestSpawnCodeReviewRuntimeLaunchFailureResolvesPendingGate(t *testing.T) {
+	setSpawnTestEnv(t)
+	old := startReviewRuntime
+	startReviewRuntime = func(started *orchestrator.StartedRun) error {
+		return errors.New("runtime launch failed")
+	}
+	t.Cleanup(func() {
+		startReviewRuntime = old
+	})
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("spawn-code-review exit code = 0, want non-zero")
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want resolved", gate.Status)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "runtime launch failed") {
+		t.Fatalf("resolution reason = %q, want launch failure", gate.ResolutionReason)
+	}
+	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
+		t.Fatalf("PollGateState() error = %v", err)
 	}
 }
 

@@ -67,7 +67,11 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := startReviewRuntime(started); err != nil {
-		fmt.Fprintln(stderr, err)
+		if resolveErr := orchestrator.ResolveSinglePassFailure(started, err); resolveErr != nil {
+			fmt.Fprintf(stderr, "%v\nfailed to resolve gate after runtime launch error: %v\n", err, resolveErr)
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
 		return 1
 	}
 	fmt.Fprintln(stdout, "review spawned")

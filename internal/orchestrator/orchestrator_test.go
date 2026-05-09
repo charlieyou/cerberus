@@ -62,6 +62,31 @@ func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
 }
 
+func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := os.MkdirAll(filepath.Join(runRoot, "event-log.jsonl"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(event-log.jsonl) error = %v", err)
+	}
+
+	_, err := StartSinglePass(env, testParams())
+
+	if err == nil || !strings.Contains(err.Error(), "open event log") {
+		t.Fatalf("StartSinglePass() error = %v, want open event log", err)
+	}
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
+	}
+	if !strings.Contains(gate.ResolutionReason, "single-pass spawn telemetry failed") {
+		t.Fatalf("resolution reason = %q, want telemetry failure", gate.ResolutionReason)
+	}
+}
+
 func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

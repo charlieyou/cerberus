@@ -132,6 +132,8 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 			"reviewer_count": len(slots),
 		},
 	}); err != nil {
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("single-pass spawn telemetry failed: %v", err))
+		_ = state.WriteGateState(gatePath, gate)
 		return nil, err
 	}
 	params.Reviewers = slots
