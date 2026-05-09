@@ -251,6 +251,49 @@ func TestHandleCodexPromptSubmitPreservesActiveRunKeyWithoutEnvRunKey(t *testing
 	}
 }
 
+func TestHandleCodexPromptSubmitDiscoversProjectScopedCodexRunKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	env := &config.Env{
+		Host:       "codex",
+		ProjectKey: "project",
+	}
+	adapter, err := host.NewFromEnv(env)
+	if err != nil {
+		t.Fatalf("NewFromEnv() error = %v", err)
+	}
+	env.StateRoot, err = adapter.StateRoot(env)
+	if err != nil {
+		t.Fatalf("StateRoot() error = %v", err)
+	}
+	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, "active-run"))
+	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusPending}); err != nil {
+		t.Fatalf("seed active gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"codex-session-refresh","transcript_path":"/tmp/current.jsonl"}`)
+	if err := HandleCodexPromptSubmit(payload, env); err != nil {
+		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, "active-run", "session.json"))
+	if err != nil {
+		t.Fatalf("read discovered session.json: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal session.json: %v", err)
+	}
+	if got["run_key"] != "active-run" || got["session_id"] != "codex-session-refresh" {
+		t.Fatalf("session.json = %#v, want discovered active run key with refreshed Codex session id", got)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "codex-session-refresh", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("refreshed Codex session id was incorrectly used as run key; stat err = %v", err)
+	}
+}
+
 func TestHandleCodexSessionStartUsesPayloadSessionWhenEnvRunHasNoGate(t *testing.T) {
 	env := &config.Env{
 		Host:       "generic",
