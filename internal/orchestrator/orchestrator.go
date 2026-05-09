@@ -159,6 +159,18 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	}); err != nil {
 		return err
 	}
+	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventReviewRoundComplete,
+		Timestamp: endedAt,
+		Payload: map[string]any{
+			"round":           1,
+			"consensus_pct":   consensusPct(roundResults, result.Verdict),
+			"abstentions":     0,
+			"k_star_estimate": nil,
+		},
+	}); err != nil {
+		return err
+	}
 	if err := telemetry.WriteIterationTelemetry(runRoot, 1, &telemetry.IterationTelemetry{
 		Iteration:       1,
 		Rounds:          1,

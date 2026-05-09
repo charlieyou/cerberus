@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 func TestRunSinglePassTransitionsPendingToResolvedPass(t *testing.T) {
@@ -39,7 +41,12 @@ func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 	setMockPath(t)
 	wantErr := errors.New("reviewer failed")
 
-	err := RunSinglePass(context.Background(), env, testParams(), errorSpawner{err: wantErr})
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, errorSpawner{err: wantErr})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("RunSinglePass() error = %v, want %v", err, wantErr)
 	}
@@ -51,6 +58,8 @@ func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 	if gate.Verdict != nil {
 		t.Fatalf("gate verdict = %v, want nil", gate.Verdict)
 	}
+	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
 }
 
 func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
@@ -190,6 +199,36 @@ func TestRunSinglePassWritesReviewerRoundAndIterationTelemetry(t *testing.T) {
 	}
 	if got, want := runTelemetry["total_cost_usd"], 0.03; got != want {
 		t.Fatalf("run total_cost_usd = %v, want %v", got, want)
+	}
+
+	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewSpawned, 1)
+	assertEventCount(t, events, telemetry.EventReviewerStarted, 2)
+	assertEventCount(t, events, telemetry.EventReviewerCompleted, 2)
+	assertEventCount(t, events, telemetry.EventReviewRoundComplete, 1)
+	assertEventCount(t, events, telemetry.EventReviewResolved, 1)
+	for _, event := range events {
+		if event["event"] != telemetry.EventReviewerStarted && event["event"] != telemetry.EventReviewerCompleted {
+			continue
+		}
+		switch event["reviewer_id"] {
+		case "codex#1", "claude#2":
+		default:
+			t.Fatalf("reviewer event reviewer_id = %v, want codex#1 or claude#2", event["reviewer_id"])
+		}
+		if event["instance_index"] != float64(1) && event["instance_index"] != float64(2) {
+			t.Fatalf("reviewer event instance_index = %v, want 1 or 2", event["instance_index"])
+		}
+	}
+	roundEvent := findEvent(t, events, telemetry.EventReviewRoundComplete)
+	if got, want := roundEvent["round"], float64(1); got != want {
+		t.Fatalf("round_complete round = %v, want %v", got, want)
+	}
+	if got, want := roundEvent["consensus_pct"], float64(1); got != want {
+		t.Fatalf("round_complete consensus_pct = %v, want %v", got, want)
+	}
+	if got, want := roundEvent["abstentions"], float64(0); got != want {
+		t.Fatalf("round_complete abstentions = %v, want %v", got, want)
 	}
 }
 
@@ -468,6 +507,54 @@ func readRunTelemetry(t *testing.T, env *config.Env) map[string]any {
 	t.Helper()
 	path := filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "run-telemetry.json")
 	return readJSONFile(t, path)
+}
+
+func readEventLog(t *testing.T, env *config.Env) []map[string]any {
+	t.Helper()
+	path := filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "event-log.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%s) error = %v", path, err)
+	}
+	defer file.Close()
+
+	var events []map[string]any
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("Unmarshal event %q error = %v", scanner.Text(), err)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("Scan(%s) error = %v", path, err)
+	}
+	return events
+}
+
+func assertEventCount(t *testing.T, events []map[string]any, eventName string, want int) {
+	t.Helper()
+	got := 0
+	for _, event := range events {
+		if event["event"] == eventName {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("event count for %s = %d, want %d; events = %#v", eventName, got, want, events)
+	}
+}
+
+func findEvent(t *testing.T, events []map[string]any, eventName string) map[string]any {
+	t.Helper()
+	for _, event := range events {
+		if event["event"] == eventName {
+			return event
+		}
+	}
+	t.Fatalf("missing event %s in %#v", eventName, events)
+	return nil
 }
 
 func readJSONFile(t *testing.T, path string) map[string]any {
