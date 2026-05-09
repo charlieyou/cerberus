@@ -167,10 +167,40 @@ $TEST_DIR/drafts
 healthcheck
 --mode
 fast
+--
 Return exactly: telemetry draft.
 EOF
 if ! cmp -s "$expected_args" "$fake_args"; then
     log_fail "legacy generate args were not normalized as expected: $(cat "$fake_args")"
+fi
+CERBERUS_ARG_CAPTURE="$fake_args" "$fake_plugin_root/bin/generate" "$TEST_DIR/only-output-dir"
+cat > "$expected_args" <<EOF
+generate
+$TEST_DIR/only-output-dir
+--type
+healthcheck
+EOF
+if ! cmp -s "$expected_args" "$fake_args"; then
+    log_fail "output-dir-only generate args were not normalized as expected: $(cat "$fake_args")"
+fi
+CERBERUS_ARG_CAPTURE="$fake_args" "$fake_plugin_root/bin/generate" "$TEST_DIR/dash-prompt" --prompt "--review API"
+cat > "$expected_args" <<EOF
+generate
+$TEST_DIR/dash-prompt
+--type
+healthcheck
+--
+--review API
+EOF
+if ! cmp -s "$expected_args" "$fake_args"; then
+    log_fail "dash-prefixed legacy prompt args were not normalized as expected: $(cat "$fake_args")"
+fi
+CERBERUS_ARG_CAPTURE="$fake_args" "$fake_plugin_root/bin/generate"
+cat > "$expected_args" <<'EOF'
+generate
+EOF
+if ! cmp -s "$expected_args" "$fake_args"; then
+    log_fail "no-arg generate args were not forwarded as expected: $(cat "$fake_args")"
 fi
 log_pass "generate wrapper maps legacy --prompt calls to Go CLI args"
 

@@ -103,10 +103,14 @@ normalize_args() {
     done
 
     if [ "$has_type" != "true" ]; then
-        normalized=("$output_dir" "--type" "healthcheck" "${normalized[@]:1}")
+        if [ "${#normalized[@]}" -gt 1 ]; then
+            normalized=("$output_dir" "--type" "healthcheck" "${normalized[@]:1}")
+        else
+            normalized=("$output_dir" "--type" "healthcheck")
+        fi
     fi
     if [ "$prompt_set" = "true" ]; then
-        normalized+=("$prompt")
+        normalized+=("--" "$prompt")
     fi
 
     printf '%s\0' "${normalized[@]}"
@@ -119,4 +123,4 @@ if [ "$#" -gt 0 ]; then
     done < <(normalize_args "$@")
 fi
 
-exec "$SCRIPT_DIR/cerberus" generate "${CERBERUS_GENERATE_ARGS[@]}"
+exec "$SCRIPT_DIR/cerberus" generate ${CERBERUS_GENERATE_ARGS[@]+"${CERBERUS_GENERATE_ARGS[@]}"}
