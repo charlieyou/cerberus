@@ -16,6 +16,8 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "config", "gemini-readonly-policy.toml"), []byte("# policy\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(policy) error = %v", err)
 	}
+	writeGeneratePrompt(t, root, "prompts/interview-engine.md", "interview")
+	writeGeneratePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 
 	binDir := t.TempDir()
 	for _, provider := range []string{"claude", "codex", "gemini"} {
@@ -58,6 +60,17 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
 	assertNoJSONOutputFlag(t, recordDir, "codex")
 	assertNoJSONOutputFlag(t, recordDir, "gemini")
+}
+
+func writeGeneratePrompt(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
 }
 
 func writeMockProvider(t *testing.T, dir, provider string) {

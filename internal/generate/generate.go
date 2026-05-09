@@ -9,14 +9,18 @@ import (
 	"path/filepath"
 
 	"github.com/charlieyou/cerberus/internal/config"
+	"github.com/charlieyou/cerberus/internal/prompts"
 )
 
 // Options configures one generator run.
 type Options struct {
-	OutputDir  string
-	Type       string
-	Mode       string
-	PromptFile string
+	OutputDir     string
+	Type          string
+	Mode          string
+	PromptFile    string
+	Prompt        string
+	Focus         string
+	SkipInterview bool
 
 	Root      string
 	Providers []string
@@ -35,20 +39,23 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Type == "" {
 		return fmt.Errorf("type is required")
 	}
-	if opts.PromptFile == "" {
-		return fmt.Errorf("prompt file is required")
-	}
-
-	prompt, err := os.ReadFile(opts.PromptFile)
-	if err != nil {
-		return fmt.Errorf("read prompt file: %w", err)
+	prompt := []byte(opts.Prompt)
+	if len(prompt) == 0 {
+		if opts.PromptFile == "" {
+			return fmt.Errorf("prompt is required")
+		}
+		var err error
+		prompt, err = os.ReadFile(opts.PromptFile)
+		if err != nil {
+			return fmt.Errorf("read prompt file %s: %w", opts.PromptFile, err)
+		}
 	}
 	root, err := resolveRoot(opts.Root)
 	if err != nil {
 		return err
 	}
 	for _, provider := range providersFor(opts.Providers) {
-		draft, err := runProvider(ctx, root, opts, provider, prompt)
+		draft, err := runGeneratorProvider(ctx, root, opts, provider, prompt)
 		if err != nil {
 			return err
 		}
@@ -78,12 +85,12 @@ func providersFor(names []string) []provider {
 	return providers
 }
 
-func runProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) ([]byte, error) {
-	system := []byte("Cerberus generator type: " + opts.Type + ".")
-	if opts.Mode != "" {
-		system = bytes.Join([][]byte{system, []byte("Cerberus generate mode: " + opts.Mode + ".")}, []byte("\n\n"))
+func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) ([]byte, error) {
+	system, err := prompts.ComposeGeneratorWithOptionsFromRoot(root, provider.name, opts.Type, opts.Mode, opts.SkipInterview)
+	if err != nil {
+		return nil, err
 	}
-	command, err := providerCommand(ctx, root, provider, system)
+	command, err := providerCommand(ctx, root, provider, []byte(system))
 	if err != nil {
 		return nil, err
 	}

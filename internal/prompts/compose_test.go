@@ -123,6 +123,65 @@ func TestComposeKeepsLargeDiffOutOfSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestComposeGeneratorIncludesInterviewWhenEnabled(t *testing.T) {
+	root := t.TempDir()
+	writePrompt(t, root, "prompts/interview-engine.md", "interview engine")
+	writePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
+
+	system, err := ComposeGeneratorWithOptionsFromRoot(root, "claude", "create-spec", "smart", false)
+	if err != nil {
+		t.Fatalf("ComposeGeneratorFromRoot() error = %v", err)
+	}
+
+	for _, want := range []string{"Cerberus generator type: create-spec.", "Cerberus generate mode: smart.", "Cerberus provider: claude.", "interview engine", "create spec generator"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt = %q, want %q", system, want)
+		}
+	}
+}
+
+func TestComposeGeneratorSkipInterviewChangesPrompt(t *testing.T) {
+	root := t.TempDir()
+	writePrompt(t, root, "prompts/interview-engine.md", "interview engine")
+	writePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
+
+	withInterview, err := ComposeGeneratorWithOptionsFromRoot(root, "codex", "create-plan", "smart", false)
+	if err != nil {
+		t.Fatalf("ComposeGeneratorFromRoot(with interview) error = %v", err)
+	}
+	skipped, err := ComposeGeneratorWithOptionsFromRoot(root, "codex", "create-plan", "smart", true)
+	if err != nil {
+		t.Fatalf("ComposeGeneratorFromRoot(skip interview) error = %v", err)
+	}
+
+	if withInterview == skipped {
+		t.Fatalf("skip-interview prompt matched interview prompt")
+	}
+	if strings.Contains(skipped, "interview engine") {
+		t.Fatalf("skip-interview system prompt = %q, want no interview prompt", skipped)
+	}
+	if !strings.Contains(skipped, "create plan generator") {
+		t.Fatalf("skip-interview system prompt = %q, want generator prompt", skipped)
+	}
+}
+
+func TestComposeGeneratorHealthcheckDoesNotUseInterview(t *testing.T) {
+	root := t.TempDir()
+	writePrompt(t, root, "prompts/interview-engine.md", "interview engine")
+	writePrompt(t, root, "prompts/generators/healthcheck.md", "healthcheck generator")
+
+	system, err := ComposeGeneratorWithOptionsFromRoot(root, "gemini", "healthcheck", "max", false)
+	if err != nil {
+		t.Fatalf("ComposeGeneratorFromRoot() error = %v", err)
+	}
+	if strings.Contains(system, "interview engine") {
+		t.Fatalf("healthcheck system prompt = %q, want no interview prompt", system)
+	}
+	if !strings.Contains(system, "Cerberus generate mode: max.") {
+		t.Fatalf("healthcheck system prompt = %q, want mode", system)
+	}
+}
+
 func writePrompt(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, rel)
