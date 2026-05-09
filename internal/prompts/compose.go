@@ -73,7 +73,7 @@ func renderReviewerTemplate(root string, template []byte) ([]byte, error) {
 		"SPEC_CONTENT":           os.Getenv("REVIEW_GATE_SPEC_CONTENT"),
 		"ASK_CONTENT":            os.Getenv("REVIEW_GATE_ASK_CONTENT"),
 		"EPIC_CONTEXT":           os.Getenv("REVIEW_GATE_EPIC_CONTEXT"),
-		"PEER_BLOCK":             os.Getenv("PEER_BLOCK"),
+		"PEER_BLOCK":             firstNonEmpty(os.Getenv("PEER_BLOCK"), PeerBroadcastMarker),
 		"PRIOR_ROUND_SELF_BLOCK": os.Getenv("PRIOR_ROUND_SELF_BLOCK"),
 		"STRATEGY_DIRECTIVE":     "",
 	}
@@ -114,6 +114,15 @@ func optionalStrategy(root, name string) (string, error) {
 func firstEnv(names ...string) string {
 	for _, name := range names {
 		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
 			return value
 		}
 	}

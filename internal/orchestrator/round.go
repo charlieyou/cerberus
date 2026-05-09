@@ -18,13 +18,15 @@ import (
 )
 
 type roundPrompts struct {
-	System      []byte
-	User        []byte
-	Root        string
-	RunRoot     string
-	RuntimeMode string
-	Iteration   int
-	Round       int
+	System        []byte
+	User          []byte
+	PeerBroadcast []byte
+	Root          string
+	RunRoot       string
+	RuntimeMode   string
+	Iteration     int
+	Round         int
+	Consensus     aggregate.Mode
 }
 
 type roundReviewerResult struct {
@@ -32,12 +34,12 @@ type roundReviewerResult struct {
 	Row    telemetry.ReviewerRow
 }
 
-func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]roundReviewerResult, error) {
+func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]roundReviewerResult, aggregate.Result, error) {
 	if len(slots) == 0 {
-		return nil, fmt.Errorf("review round requires at least one reviewer")
+		return nil, aggregate.Result{}, fmt.Errorf("review round requires at least one reviewer")
 	}
 	if spawner == nil {
-		return nil, fmt.Errorf("reviewer spawner is nil")
+		return nil, aggregate.Result{}, fmt.Errorf("reviewer spawner is nil")
 	}
 	iteration := firstPositive(prompts.Iteration, 1)
 	round := firstPositive(prompts.Round, 1)
@@ -131,12 +133,20 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 			}
 			continue
 		}
-		return nil, result.err
+		return nil, aggregate.Result{}, result.err
 	}
 	if canceled != nil {
-		return nil, canceled
+		return nil, aggregate.Result{}, canceled
 	}
-	return outputs, nil
+	rawOutputs := make([]reviewer.RawReviewerOutput, len(outputs))
+	for i, output := range outputs {
+		rawOutputs[i] = output.Output
+	}
+	result, err := aggregate.Compute(rawOutputs, prompts.Consensus)
+	if err != nil {
+		return nil, aggregate.Result{}, err
+	}
+	return outputs, result, nil
 }
 
 func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
@@ -237,6 +247,14 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 	}, "code")
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(round.PeerBroadcast) > 0 {
+		user, err = prompts.InjectPeerBroadcast(user, round.PeerBroadcast)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		user = bytes.ReplaceAll(user, []byte(prompts.PeerBroadcastMarker), nil)
 	}
 	user = appendPrompt(user, round.User)
 	if len(round.System) == 0 {

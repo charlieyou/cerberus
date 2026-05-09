@@ -308,7 +308,7 @@ func TestRunSinglePassExplicitMissingCLIFailsBeforePendingGate(t *testing.T) {
 
 func TestRunRoundReturnsOriginalErrorBeforeCancellationNoise(t *testing.T) {
 	wantErr := errors.New("reviewer command failed")
-	_, err := runRound(context.Background(), []ReviewerSlot{
+	_, _, err := runRound(context.Background(), []ReviewerSlot{
 		{ID: "codex#1", Provider: "codex", Model: "stub"},
 		{ID: "claude#1", Provider: "claude", Model: "stub"},
 	}, noisyCancelSpawner{err: wantErr}, roundPrompts{Root: repoRoot(t)})

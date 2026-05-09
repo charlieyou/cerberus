@@ -192,20 +192,13 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	}
 
 	roundStartedAt := time.Now().UTC()
-	roundResults, err := runRound(ctx, started.Params.Reviewers, spawner, roundPrompts{
+	roundResults, result, err := runRound(ctx, started.Params.Reviewers, spawner, roundPrompts{
 		User:        started.Params.Prompt,
 		RunRoot:     started.RunRoot,
 		Root:        started.Env.Root,
 		RuntimeMode: started.Params.Mode,
+		Consensus:   started.Params.Consensus,
 	})
-	if err != nil {
-		return err
-	}
-	outputs := make([]reviewer.RawReviewerOutput, len(roundResults))
-	for i, result := range roundResults {
-		outputs[i] = result.Output
-	}
-	result, err := aggregate.Compute(outputs, started.Params.Consensus)
 	if err != nil {
 		return err
 	}

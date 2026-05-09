@@ -119,7 +119,7 @@ Diff shows: `typer.prompt(..., err=True)` used consistently.
 ```
 </example_c>
 
-${PEER_BLOCK}
+{{{{PEER_BROADCAST}}}}
 ${PRIOR_ROUND_SELF_BLOCK}
 ## Task Context
 

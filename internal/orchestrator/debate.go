@@ -2,10 +2,7 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/aggregate"
@@ -207,7 +204,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	var totalTokens telemetry.Tokens
 	var totalCostUSD float64
 	roundsCompleted := 0
-	roundPrompt := prompt
+	var peerBroadcast []byte
 
 	for round := 1; round <= maxRounds; round++ {
 		if round > 1 {
@@ -215,21 +212,45 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			if err != nil {
 				return Verdict{}, err
 			}
-			broadcast, err := writePeerBroadcast(runRoot, 1, round, records)
+			if err := state.WritePeerBroadcast(runRoot, 1, round, statePeerRecords(records)); err != nil {
+				return Verdict{}, err
+			}
+			broadcastPath := state.PeerBroadcastPath(runRoot, 1, round)
+			if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+				Event:     telemetry.EventDebatePeerBroadcastWritten,
+				Timestamp: time.Now().UTC(),
+				Payload: map[string]any{
+					"round": round,
+					"path":  broadcastPath,
+				},
+			}); err != nil {
+				return Verdict{}, err
+			}
+			peerBroadcast, err = state.ReadPeerBroadcastBytes(runRoot, 1, round)
 			if err != nil {
 				return Verdict{}, err
 			}
-			roundPrompt = promptWithPeerBroadcast(prompt, broadcast)
 		}
 
 		roundStartedAt := time.Now().UTC()
-		roundResults, err := runRound(ctx, slots, spawner, roundPrompts{
-			User:        roundPrompt,
-			RunRoot:     runRoot,
-			Root:        resolvedEnv.Root,
-			RuntimeMode: mode,
-			Iteration:   1,
-			Round:       round,
+		if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+			Event:     telemetry.EventDebateRoundStarted,
+			Timestamp: roundStartedAt,
+			Payload: map[string]any{
+				"round": round,
+			},
+		}); err != nil {
+			return Verdict{}, err
+		}
+		roundResults, result, err := runRound(ctx, slots, spawner, roundPrompts{
+			User:          prompt,
+			PeerBroadcast: peerBroadcast,
+			RunRoot:       runRoot,
+			Root:          resolvedEnv.Root,
+			RuntimeMode:   mode,
+			Iteration:     1,
+			Round:         round,
+			Consensus:     consensus,
 		})
 		if err != nil {
 			return Verdict{}, err
@@ -241,10 +262,6 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			totalTokens.Input += result.Row.Tokens.Input
 			totalTokens.Output += result.Row.Tokens.Output
 			totalCostUSD += result.Row.CostUSD
-		}
-		result, err := aggregate.Compute(outputs, consensus)
-		if err != nil {
-			return Verdict{}, err
 		}
 		final = result
 		previous = outputs
@@ -260,6 +277,17 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			KStarEstimate: nil,
 			StartedAt:     roundStartedAt,
 			EndedAt:       &endedAt,
+		}); err != nil {
+			return Verdict{}, err
+		}
+		if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+			Event:     telemetry.EventDebateRoundCompleted,
+			Timestamp: endedAt,
+			Payload: map[string]any{
+				"round":         round,
+				"verdict":       result.Verdict,
+				"consensus_pct": consensusPct(roundResults, result.Verdict),
+			},
 		}); err != nil {
 			return Verdict{}, err
 		}
@@ -331,22 +359,6 @@ func ResolveDebateFailure(started *StartedRun, cause error) error {
 	return state.WriteGateState(gatePath, gate)
 }
 
-func writePeerBroadcast(runRoot string, iteration, round int, records []anonymize.PeerRecord) ([]byte, error) {
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal peer broadcast: %w", err)
-	}
-	data = append(data, '\n')
-	path := filepath.Join(state.RoundDir(runRoot, iteration, round), "peer-broadcast.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create peer broadcast directory: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return nil, fmt.Errorf("write peer broadcast: %w", err)
-	}
-	return data, nil
-}
-
 func modelNames(slots []ReviewerSlot) []string {
 	models := make([]string, 0, len(slots))
 	for _, slot := range slots {
@@ -357,6 +369,33 @@ func modelNames(slots []ReviewerSlot) []string {
 	return models
 }
 
-func promptWithPeerBroadcast(prompt, broadcast []byte) []byte {
-	return appendPrompt(prompt, append([]byte("{{PEER_BROADCAST}}\n"), append(broadcast, []byte("{{/PEER_BROADCAST}}")...)...))
+func statePeerRecords(records []anonymize.PeerRecord) []state.PeerRecord {
+	converted := make([]state.PeerRecord, len(records))
+	for i, record := range records {
+		findings := make([]state.PeerFinding, len(record.Findings))
+		for j, finding := range record.Findings {
+			findings[j] = state.PeerFinding{
+				Title:          finding.Title,
+				Body:           finding.Body,
+				Severity:       finding.Severity,
+				Priority:       finding.Priority,
+				FilePath:       finding.FilePath,
+				LineStart:      finding.LineStart,
+				LineEnd:        finding.LineEnd,
+				Confidence:     finding.Confidence,
+				Evidence:       finding.Evidence,
+				Recommendation: finding.Recommendation,
+			}
+		}
+		converted[i] = state.PeerRecord{
+			PeerID:            record.PeerID,
+			Verdict:           record.Verdict,
+			Summary:           record.Summary,
+			Findings:          findings,
+			OverallConfidence: record.OverallConfidence,
+			Strategy:          record.Strategy,
+			Round:             record.Round,
+		}
+	}
+	return converted
 }
