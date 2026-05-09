@@ -1,0 +1,9 @@
+{
+  "findings": [],
+  "verdict": "PASS",
+  "summary": "peer context resolved my concern",
+  "overall_confidence": 0.9,
+  "strategy": "falsification-first",
+  "round": 2,
+  "peer_responses_seen": ["peer_1", "peer_2"]
+}

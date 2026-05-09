@@ -23,6 +23,8 @@ type roundPrompts struct {
 	Root        string
 	RunRoot     string
 	RuntimeMode string
+	Iteration   int
+	Round       int
 }
 
 type roundReviewerResult struct {
@@ -37,6 +39,8 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	if spawner == nil {
 		return nil, fmt.Errorf("reviewer spawner is nil")
 	}
+	iteration := firstPositive(prompts.Iteration, 1)
+	round := firstPositive(prompts.Round, 1)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -72,8 +76,8 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				User:      user,
 				Root:      prompts.Root,
 				RunRoot:   prompts.RunRoot,
-				Iteration: 1,
-				Round:     1,
+				Iteration: iteration,
+				Round:     round,
 			})
 			if err != nil {
 				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
@@ -97,7 +101,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				return
 			}
 			if prompts.RunRoot != "" {
-				if err := telemetry.WriteReviewerRow(prompts.RunRoot, 1, 1, &row); err != nil {
+				if err := telemetry.WriteReviewerRow(prompts.RunRoot, iteration, round, &row); err != nil {
 					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
 					cancel()
 					return
@@ -265,4 +269,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }

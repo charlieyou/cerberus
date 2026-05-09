@@ -1,0 +1,9 @@
+{
+  "findings": [],
+  "verdict": "NEEDS_WORK",
+  "summary": "as the codex reviewer on gpt-5.5, I need peer review before resolving",
+  "overall_confidence": 0.6,
+  "strategy": "verification-first",
+  "round": 1,
+  "peer_responses_seen": []
+}
