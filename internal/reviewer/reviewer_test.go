@@ -168,6 +168,16 @@ func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsPeerResponsesSeenArray(t *testing.T) {
+	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","peer_responses_seen":["peer-1","peer-2"]}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(got.PeerResponsesSeen) != 2 || got.PeerResponsesSeen[0] != "peer-1" || got.PeerResponsesSeen[1] != "peer-2" {
+		t.Fatalf("PeerResponsesSeen = %#v, want peer ID array", got.PeerResponsesSeen)
+	}
+}
+
 func mockPath(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "..", "tests", "mocks"))

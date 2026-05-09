@@ -156,7 +156,7 @@ func TestPersonaPathResolvedRelativeToRosterFile(t *testing.T) {
 	withFakeCLIs(t, dir)
 	writeStrategy(t, dir, "verification-first")
 
-	rosterDir := filepath.Join(dir, "config")
+	rosterDir := "config"
 	writeFile(t, filepath.Join(rosterDir, "personas", "security.md"), "security persona\n")
 	path := filepath.Join(rosterDir, "rosters.yaml")
 	writeFile(t, path, `version: 1
@@ -176,7 +176,10 @@ rosters:
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	want := filepath.Join(rosterDir, "personas", "security.md")
+	want, err := filepath.Abs(filepath.Join(rosterDir, "personas", "security.md"))
+	if err != nil {
+		t.Fatalf("Abs(persona path) error = %v", err)
+	}
 	if got := slots[0].PersonaPath; got != want {
 		t.Fatalf("PersonaPath = %q, want %q", got, want)
 	}

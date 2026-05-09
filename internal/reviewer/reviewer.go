@@ -37,7 +37,7 @@ type RawReviewerOutput struct {
 	OverallConfidence *float64     `json:"overall_confidence,omitempty"`
 	Strategy          string       `json:"strategy,omitempty"`
 	Round             *int         `json:"round,omitempty"`
-	PeerResponsesSeen *int         `json:"peer_responses_seen,omitempty"`
+	PeerResponsesSeen []string     `json:"peer_responses_seen,omitempty"`
 }
 
 type RawFinding struct {

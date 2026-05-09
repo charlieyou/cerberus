@@ -193,7 +193,11 @@ func resolveRosterRelativePath(file *RostersFile, path string) string {
 	if filepath.IsAbs(path) || file == nil || file.FilePath == "" {
 		return path
 	}
-	return filepath.Join(filepath.Dir(file.FilePath), path)
+	rosterPath, err := filepath.Abs(file.FilePath)
+	if err != nil {
+		rosterPath = file.FilePath
+	}
+	return filepath.Join(filepath.Dir(rosterPath), path)
 }
 
 func validProvider(provider string) bool {
