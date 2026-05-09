@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/prompts"
@@ -25,6 +28,7 @@ type Options struct {
 
 	Root      string
 	Providers []string
+	Stderr    io.Writer
 }
 
 type provider struct {
@@ -34,7 +38,7 @@ type provider struct {
 
 var providerRunner = runProvider
 
-// Run fans out to the default provider CLIs and writes one draft.md per provider.
+// Run fans out to the default provider CLIs and writes one output set per provider.
 func Run(ctx context.Context, opts Options) error {
 	if opts.OutputDir == "" {
 		return fmt.Errorf("output directory is required")
@@ -58,26 +62,39 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	providers := providersFor(opts.Providers)
-	errs := make(chan error, len(providers))
+	results := make(chan providerResult, len(providers))
 	var wg sync.WaitGroup
 	for _, provider := range providers {
 		provider := provider
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runGeneratorProvider(ctx, root, opts, provider, prompt); err != nil {
-				errs <- err
-			}
+			results <- runGeneratorProvider(ctx, root, opts, provider, prompt)
 		}()
 	}
 	wg.Wait()
-	close(errs)
+	close(results)
 
+	var succeeded []string
+	var failed []string
 	var joined error
-	for err := range errs {
-		joined = errors.Join(joined, err)
+	for result := range results {
+		if result.err != nil {
+			failed = append(failed, result.provider+".failed")
+			joined = errors.Join(joined, result.err)
+			continue
+		}
+		succeeded = append(succeeded, result.provider)
 	}
-	return joined
+	sort.Strings(succeeded)
+	sort.Strings(failed)
+	if len(failed) > 0 {
+		fmt.Fprintf(stderrFor(opts), "cerberus generate: %d provider%s succeeded, %d failed (%s)\n", len(succeeded), plural(len(succeeded)), len(failed), joinProviderMarkers(failed))
+	}
+	if len(failed) == len(providers) {
+		return fmt.Errorf("cerberus generate: all providers failed: %w", joined)
+	}
+	return nil
 }
 
 func providersFor(names []string) []provider {
@@ -92,26 +109,122 @@ func providersFor(names []string) []provider {
 	return providers
 }
 
-func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) error {
+type providerResult struct {
+	provider string
+	err      error
+}
+
+func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) (result providerResult) {
+	startedAt := time.Now().UTC()
+	result = providerResult{provider: provider.name}
+	stats := Stats{
+		StartedAt: startedAt,
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.err = fmt.Errorf("generator %s panic: %v", provider.name, recovered)
+			stats.ExitCode = 1
+			stats.ErrorMessage = result.err.Error()
+			endedAt := time.Now().UTC()
+			stats.EndedAt = endedAt
+			stats.TimeToFinishMs = endedAt.Sub(startedAt).Milliseconds()
+			if err := writeFailureOutput(opts.OutputDir, provider.name, stats, result.err); err != nil {
+				result.err = errors.Join(result.err, err)
+			}
+		}
+	}()
+
 	system, err := prompts.ComposeGeneratorWithOptionsFromRoot(root, provider.name, opts.Type, opts.Mode, opts.SkipInterview)
 	if err != nil {
-		return err
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, exitCodeFromError(err))
 	}
 	draft, _, err := providerRunner(ctx, root, provider.name, provider.model, system, string(prompt))
 	if err != nil {
-		return err
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, exitCodeFromError(err))
 	}
 	if len(bytes.TrimSpace(draft)) == 0 {
-		return fmt.Errorf("generator %s produced empty stdout", provider.name)
+		err := fmt.Errorf("generator %s produced empty stdout", provider.name)
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
 	}
-	outputDir := filepath.Join(opts.OutputDir, provider.name)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return fmt.Errorf("create %s draft directory: %w", provider.name, err)
+	rawJSON, parsedStats, err := ParseProviderJSON(provider.name, draft)
+	if err != nil {
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
 	}
-	if err := os.WriteFile(filepath.Join(outputDir, "draft.md"), draft, 0o644); err != nil {
-		return fmt.Errorf("write %s draft: %w", provider.name, err)
+	stats.Tokens = parsedStats.Tokens
+	stats.CostUSD = parsedStats.CostUSD
+	stats.ExitCode = 0
+	endedAt := time.Now().UTC()
+	stats.EndedAt = endedAt
+	stats.TimeToFinishMs = endedAt.Sub(startedAt).Milliseconds()
+	if err := WriteSuccess(opts.OutputDir, provider.name, draft, rawJSON); err != nil {
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
 	}
-	return nil
+	if err := WriteStats(opts.OutputDir, provider.name, stats); err != nil {
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+	}
+	return result
+}
+
+func failProvider(outputDir, provider string, startedAt time.Time, err error, exitCode int) providerResult {
+	if exitCode == 0 {
+		exitCode = 1
+	}
+	endedAt := time.Now().UTC()
+	stats := Stats{
+		TimeToFinishMs: endedAt.Sub(startedAt).Milliseconds(),
+		ExitCode:       exitCode,
+		ErrorMessage:   err.Error(),
+		StartedAt:      startedAt,
+		EndedAt:        endedAt,
+	}
+	if writeErr := writeFailureOutput(outputDir, provider, stats, err); writeErr != nil {
+		err = errors.Join(err, writeErr)
+	}
+	return providerResult{provider: provider, err: err}
+}
+
+func writeFailureOutput(outputDir, provider string, stats Stats, providerErr error) error {
+	var err error
+	if writeErr := WriteFailure(outputDir, provider, stats.ExitCode, providerErr.Error()); writeErr != nil {
+		err = errors.Join(err, writeErr)
+	}
+	if writeErr := WriteStats(outputDir, provider, stats); writeErr != nil {
+		err = errors.Join(err, writeErr)
+	}
+	return err
+}
+
+func exitCodeFromError(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+func stderrFor(opts Options) io.Writer {
+	if opts.Stderr != nil {
+		return opts.Stderr
+	}
+	return os.Stderr
+}
+
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func joinProviderMarkers(markers []string) string {
+	if len(markers) == 0 {
+		return ""
+	}
+	joined := markers[0]
+	for _, marker := range markers[1:] {
+		joined += ", " + marker
+	}
+	return joined
 }
 
 func resolveRoot(root string) (string, error) {

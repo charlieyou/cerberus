@@ -35,6 +35,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	opts.Root = config.Resolve().Root
+	opts.Stderr = stderr
 	if err := generate.Run(context.Background(), opts); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
