@@ -2,7 +2,10 @@ package hooks_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -53,6 +56,57 @@ func TestCodexHookTemplateInvokesGoHookSubcommands(t *testing.T) {
 	assertCodexHookManifest(t, "../templates/codex-hooks.json")
 }
 
+func TestCodexPluginExposesOnlySurvivingSkills(t *testing.T) {
+	data, err := os.ReadFile("../.codex-plugin/plugin.json")
+	if err != nil {
+		t.Fatalf("read codex plugin manifest: %v", err)
+	}
+	var manifest struct {
+		Skills string `json:"skills"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse codex plugin manifest: %v", err)
+	}
+	if manifest.Skills != "./skills/" {
+		t.Fatalf("codex plugin skills path = %q, want ./skills/", manifest.Skills)
+	}
+
+	root := filepath.Clean(filepath.Join("..", manifest.Skills))
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read codex skills dir: %v", err)
+	}
+	var skills []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, entry.Name(), "SKILL.md")); err == nil {
+			skills = append(skills, entry.Name())
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat skill %s: %v", entry.Name(), err)
+		}
+	}
+	want := []string{
+		"architecture-review",
+		"ask",
+		"clear-gate",
+		"create-plan",
+		"create-spec",
+		"create-tasks",
+		"healthcheck",
+		"review-code",
+		"review-plan",
+		"review-spec",
+		"review-tasks",
+		"status",
+		"verify-epic",
+	}
+	if !reflect.DeepEqual(skills, want) {
+		t.Fatalf("codex skills = %v, want %v", skills, want)
+	}
+}
+
 func assertCodexHookManifest(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -89,6 +143,34 @@ func assertCodexHookManifest(t *testing.T, path string) {
 		if strings.Contains(command, "/bin/bash") || strings.Contains(command, "codex-session-init") || strings.Contains(command, "codex-stop-hook") {
 			t.Fatalf("%s hook command = %q, must not call legacy Codex scripts", event, command)
 		}
+	}
+
+	err = filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		legacyTerms := []string{
+			"task" + "-completed-hook",
+			"teammate" + "-idle-hook",
+			"run" + "-team",
+		}
+		for _, term := range legacyTerms {
+			if strings.Contains(text, term) {
+				t.Fatalf("%s contains legacy hook wiring term %q", path, term)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan hook manifests: %v", err)
 	}
 }
 
