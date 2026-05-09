@@ -52,6 +52,7 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 
 	peerIDs := peerIDsByInstanceID(roundOutputs)
 	sorted := latestOutputsByInstanceID(roundOutputs)
+	scrubber := newScrubber(rosterModelNames)
 
 	records := make([]PeerRecord, len(sorted))
 	for i, output := range sorted {
@@ -59,8 +60,8 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 		records[i] = PeerRecord{
 			PeerID:            peerID,
 			Verdict:           output.Verdict,
-			Summary:           Scrub(output.Summary, peerID, rosterModelNames),
-			Findings:          scrubFindings(output.Findings, peerID, rosterModelNames),
+			Summary:           scrubber.Scrub(output.Summary, peerID),
+			Findings:          scrubFindings(output.Findings, peerID, scrubber),
 			OverallConfidence: output.OverallConfidence,
 			Strategy:          output.Strategy,
 			Round:             output.Round,
@@ -116,30 +117,30 @@ func roundNumber(output reviewer.RawReviewerOutput) int {
 	return *output.Round
 }
 
-func scrubFindings(findings []reviewer.RawFinding, peerID string, rosterModelNames []string) []PeerFinding {
+func scrubFindings(findings []reviewer.RawFinding, peerID string, scrubber scrubber) []PeerFinding {
 	scrubbed := make([]PeerFinding, len(findings))
 	for i, finding := range findings {
-		filePath := scrubStringPtr(finding.FilePath, peerID, rosterModelNames)
+		filePath := scrubStringPtr(finding.FilePath, peerID, scrubber)
 		scrubbed[i] = PeerFinding{
-			Title:          Scrub(finding.Title, peerID, rosterModelNames),
-			Body:           Scrub(finding.Body, peerID, rosterModelNames),
+			Title:          scrubber.Scrub(finding.Title, peerID),
+			Body:           scrubber.Scrub(finding.Body, peerID),
 			Severity:       finding.Severity,
 			Priority:       finding.Priority,
 			FilePath:       filePath,
 			LineStart:      finding.LineStart,
 			LineEnd:        finding.LineEnd,
 			Confidence:     finding.Confidence,
-			Evidence:       Scrub(finding.Evidence, peerID, rosterModelNames),
-			Recommendation: Scrub(finding.Recommendation, peerID, rosterModelNames),
+			Evidence:       scrubber.Scrub(finding.Evidence, peerID),
+			Recommendation: scrubber.Scrub(finding.Recommendation, peerID),
 		}
 	}
 	return scrubbed
 }
 
-func scrubStringPtr(value *string, peerID string, rosterModelNames []string) *string {
+func scrubStringPtr(value *string, peerID string, scrubber scrubber) *string {
 	if value == nil {
 		return nil
 	}
-	scrubbed := Scrub(*value, peerID, rosterModelNames)
+	scrubbed := scrubber.Scrub(*value, peerID)
 	return &scrubbed
 }

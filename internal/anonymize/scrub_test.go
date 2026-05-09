@@ -56,6 +56,26 @@ func TestScrubFalsifiabilityCases(t *testing.T) {
 			peerID: "peer_1",
 			want:   "peer_handler returned nil",
 		},
+		{
+			name:             "self reference does not split model name",
+			text:             "As claude-opus-4-7, I think Z",
+			peerID:           "peer_1",
+			rosterModelNames: []string{"claude-opus-4-7"},
+			want:             "As peer-model, I think Z",
+		},
+		{
+			name:   "provider before hyphen",
+			text:   "codex-cli failed in internal/codex-client.go",
+			peerID: "peer_1",
+			want:   "peer-cli failed in internal/peer-client.go",
+		},
+		{
+			name:             "overlapping roster models longest first",
+			text:             "Use gpt-5.5-turbo, not gpt-5.5",
+			peerID:           "peer_1",
+			rosterModelNames: []string{"gpt-5.5", "gpt-5.5-turbo"},
+			want:             "Use peer-model, not peer-model",
+		},
 	}
 
 	for _, tt := range tests {
