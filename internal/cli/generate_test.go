@@ -221,11 +221,11 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(generate) exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	assertGenerateRecordedModel(t, recordDir, "claude", "claude-opus-4-7")
+	assertGenerateNoRecordedModel(t, recordDir, "claude")
 	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.5")
 	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
-	assertGenerateNoJSONOutputFlag(t, recordDir, "codex")
-	assertGenerateNoJSONOutputFlag(t, recordDir, "gemini")
+	assertGenerateJSONOutputFlag(t, recordDir, "codex")
+	assertGenerateJSONOutputFlag(t, recordDir, "gemini")
 }
 
 func TestGenerateSubcommandFocusBecomesPrompt(t *testing.T) {
@@ -285,13 +285,24 @@ func assertGenerateRecordedModel(t *testing.T, recordDir, provider, want string)
 	}
 }
 
-func assertGenerateNoJSONOutputFlag(t *testing.T, recordDir, provider string) {
+func assertGenerateNoRecordedModel(t *testing.T, recordDir, provider string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
 	if err != nil {
 		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
 	}
-	if strings.Contains(string(data), "--json\n") {
-		t.Fatalf("%s args = %q, must not request JSON output for draft generation", provider, data)
+	if strings.Contains(string(data), "--model\n") {
+		t.Fatalf("%s args = %q, want no model flag", provider, data)
+	}
+}
+
+func assertGenerateJSONOutputFlag(t *testing.T, recordDir, provider string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
+	if err != nil {
+		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if !strings.Contains(string(data), "--json\n") {
+		t.Fatalf("%s args = %q, want JSON output flag", provider, data)
 	}
 }

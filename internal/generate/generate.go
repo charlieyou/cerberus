@@ -3,10 +3,11 @@ package generate
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/prompts"
@@ -31,6 +32,8 @@ type provider struct {
 	model string
 }
 
+var providerRunner = runProvider
+
 // Run fans out to the default provider CLIs and writes one draft.md per provider.
 func Run(ctx context.Context, opts Options) error {
 	if opts.OutputDir == "" {
@@ -54,23 +57,27 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	for _, provider := range providersFor(opts.Providers) {
-		draft, err := runGeneratorProvider(ctx, root, opts, provider, prompt)
-		if err != nil {
-			return err
-		}
-		if len(bytes.TrimSpace(draft)) == 0 {
-			return fmt.Errorf("generator %s produced empty stdout", provider.name)
-		}
-		outputDir := filepath.Join(opts.OutputDir, provider.name)
-		if err := os.MkdirAll(outputDir, 0o755); err != nil {
-			return fmt.Errorf("create %s draft directory: %w", provider.name, err)
-		}
-		if err := os.WriteFile(filepath.Join(outputDir, "draft.md"), draft, 0o644); err != nil {
-			return fmt.Errorf("write %s draft: %w", provider.name, err)
-		}
+	providers := providersFor(opts.Providers)
+	errs := make(chan error, len(providers))
+	var wg sync.WaitGroup
+	for _, provider := range providers {
+		provider := provider
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := runGeneratorProvider(ctx, root, opts, provider, prompt); err != nil {
+				errs <- err
+			}
+		}()
 	}
-	return nil
+	wg.Wait()
+	close(errs)
+
+	var joined error
+	for err := range errs {
+		joined = errors.Join(joined, err)
+	}
+	return joined
 }
 
 func providersFor(names []string) []provider {
@@ -85,46 +92,26 @@ func providersFor(names []string) []provider {
 	return providers
 }
 
-func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) ([]byte, error) {
+func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) error {
 	system, err := prompts.ComposeGeneratorWithOptionsFromRoot(root, provider.name, opts.Type, opts.Mode, opts.SkipInterview)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	command, err := providerCommand(ctx, root, provider, []byte(system))
+	draft, _, err := providerRunner(ctx, root, provider.name, provider.model, system, string(prompt))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	command.Stdin = bytes.NewReader(prompt)
-
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("generator %s failed: %w; stderr: %s", provider.name, err, stderr.String())
+	if len(bytes.TrimSpace(draft)) == 0 {
+		return fmt.Errorf("generator %s produced empty stdout", provider.name)
 	}
-	return stdout.Bytes(), nil
-}
-
-func providerCommand(ctx context.Context, root string, provider provider, system []byte) (*exec.Cmd, error) {
-	if bytes.Contains([]byte(provider.name), []byte{0}) || bytes.Contains([]byte(provider.model), []byte{0}) || bytes.Contains(system, []byte{0}) {
-		return nil, fmt.Errorf("generator command contains NUL byte")
+	outputDir := filepath.Join(opts.OutputDir, provider.name)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("create %s draft directory: %w", provider.name, err)
 	}
-	args := []string{}
-	switch provider.name {
-	case "claude":
-		args = []string{"--print", "--output-format", "text", "--model", provider.model, "--append-system-prompt", string(system)}
-	case "codex":
-		args = []string{"--model", provider.model, "--append-system-prompt", string(system)}
-	case "gemini":
-		policyPath := filepath.Join(root, "config", "gemini-readonly-policy.toml")
-		if _, err := os.Stat(policyPath); err != nil {
-			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
-		}
-		args = []string{"--model", provider.model, "--append-system-prompt", string(system), "--policy-file", policyPath}
-	default:
-		return nil, fmt.Errorf("unsupported generator provider %q", provider.name)
+	if err := os.WriteFile(filepath.Join(outputDir, "draft.md"), draft, 0o644); err != nil {
+		return fmt.Errorf("write %s draft: %w", provider.name, err)
 	}
-	return exec.CommandContext(ctx, provider.name, args...), nil
+	return nil
 }
 
 func resolveRoot(root string) (string, error) {

@@ -17,6 +17,25 @@ type Request struct {
 	Round     int
 }
 
+// ProviderInvocation describes one provider CLI subprocess invocation.
+type ProviderInvocation struct {
+	Label              string
+	Provider           string
+	Model              string
+	Mode               string
+	System             []byte
+	User               []byte
+	Root               string
+	ClaudeOutputFormat string
+	ClaudeModelFlag    bool
+}
+
+// ProviderOutput is the raw captured output from one provider CLI subprocess.
+type ProviderOutput struct {
+	Stdout []byte
+	Stderr []byte
+}
+
 // Response contains the canonical JSON emitted by one reviewer.
 type Response struct {
 	ID      string

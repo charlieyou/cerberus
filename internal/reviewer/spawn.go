@@ -64,15 +64,6 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 	if user == nil {
 		user = request.Prompt
 	}
-	command, err := runner.command(ctx, request, user)
-	if err != nil {
-		return Response{}, err
-	}
-	command.Stdin = bytes.NewReader(user)
-
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
 
 	runRoot := firstNonEmpty(request.RunRoot, runner.RunRoot)
 	iteration := firstPositive(request.Iteration, runner.Iteration, 1)
@@ -88,21 +79,31 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		}
 	}
 
-	runErr := command.Run()
+	output, runErr := RunProvider(ctx, ProviderInvocation{
+		Label:              "reviewer " + request.ID,
+		Provider:           request.Provider,
+		Model:              request.Model,
+		Mode:               request.Mode,
+		System:             request.System,
+		User:               user,
+		Root:               firstNonEmpty(request.Root, runner.Root),
+		ClaudeOutputFormat: "json",
+		ClaudeModelFlag:    true,
+	})
 	if reviewerDir != "" {
-		if err := os.WriteFile(filepath.Join(reviewerDir, "stdout.log"), stdout.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(reviewerDir, "stdout.log"), output.Stdout, 0o644); err != nil {
 			return Response{}, fmt.Errorf("write reviewer stdout log: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(reviewerDir, "stderr.log"), stderr.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(reviewerDir, "stderr.log"), output.Stderr, 0o644); err != nil {
 			return Response{}, fmt.Errorf("write reviewer stderr log: %w", err)
 		}
 	}
 	if runErr != nil {
-		return Response{}, fmt.Errorf("reviewer %s failed: %w; stderr: %s", request.ID, runErr, stderr.String())
+		return Response{}, runErr
 	}
 
-	tokens, costUSD := extractUsage(stdout.Bytes())
-	parsed, err := Parse(stdout.Bytes())
+	tokens, costUSD := extractUsage(output.Stdout)
+	parsed, err := Parse(output.Stdout)
 	if err != nil {
 		return Response{}, err
 	}
@@ -117,6 +118,24 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		}
 	}
 	return Response{ID: request.ID, Output: outputJSON, Parsed: parsed, Tokens: tokens, CostUSD: costUSD}, nil
+}
+
+// RunProvider invokes a supported model provider with the user prompt on stdin.
+func RunProvider(ctx context.Context, invocation ProviderInvocation) (ProviderOutput, error) {
+	command, err := command(ctx, invocation)
+	if err != nil {
+		return ProviderOutput{}, err
+	}
+	command.Stdin = bytes.NewReader(invocation.User)
+
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	if err := command.Run(); err != nil {
+		return ProviderOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("%s failed: %w; stderr: %s", firstNonEmpty(invocation.Label, invocation.Provider), err, stderr.String())
+	}
+	return ProviderOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
 }
 
 func extractUsage(stdout []byte) (Tokens, float64) {
@@ -198,35 +217,39 @@ func (payload usagePayload) costUSD() float64 {
 	return firstPositiveFloat(payload.CostUSD, payload.TotalCostUSD, payload.Cost, payload.Stats.Cost)
 }
 
-func (runner Runner) command(ctx context.Context, request Request, user []byte) (*exec.Cmd, error) {
-	system := systemPromptWithMode(request.System, request.Mode)
-	if bytes.Contains([]byte(request.Provider), []byte{0}) || bytes.Contains([]byte(request.Model), []byte{0}) || bytes.Contains(system, []byte{0}) {
+func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, error) {
+	system := systemPromptWithMode(invocation.System, invocation.Mode)
+	if bytes.Contains([]byte(invocation.Provider), []byte{0}) || bytes.Contains([]byte(invocation.Model), []byte{0}) || bytes.Contains(system, []byte{0}) {
 		return nil, fmt.Errorf("reviewer command contains NUL byte")
 	}
-	if bytes.Contains(user, []byte{0}) {
+	if bytes.Contains(invocation.User, []byte{0}) {
 		return nil, fmt.Errorf("reviewer user prompt contains NUL byte")
 	}
 
 	args := []string{}
-	switch request.Provider {
+	switch invocation.Provider {
 	case "claude":
-		args = []string{"--print", "--output-format", "json", "--model", request.Model, "--append-system-prompt", string(system)}
+		outputFormat := firstNonEmpty(invocation.ClaudeOutputFormat, "json")
+		args = []string{"--print", "--output-format", outputFormat}
+		if invocation.ClaudeModelFlag {
+			args = append(args, "--model", invocation.Model)
+		}
+		args = append(args, "--append-system-prompt", string(system))
 	case "codex":
-		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(system)}
+		args = []string{"--json", "--model", invocation.Model, "--append-system-prompt", string(system)}
 	case "gemini":
-		root := firstNonEmpty(request.Root, runner.Root)
-		if root == "" {
+		if invocation.Root == "" {
 			return nil, fmt.Errorf("CERBERUS_ROOT is required for gemini policy file")
 		}
-		policyPath := filepath.Join(root, "config", "gemini-readonly-policy.toml")
+		policyPath := filepath.Join(invocation.Root, "config", "gemini-readonly-policy.toml")
 		if _, err := os.Stat(policyPath); err != nil {
 			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
 		}
-		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(system), "--policy-file", policyPath}
+		args = []string{"--json", "--model", invocation.Model, "--append-system-prompt", string(system), "--policy-file", policyPath}
 	default:
-		return nil, fmt.Errorf("unsupported reviewer provider %q", request.Provider)
+		return nil, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
 	}
-	return exec.CommandContext(ctx, request.Provider, args...), nil
+	return exec.CommandContext(ctx, invocation.Provider, args...), nil
 }
 
 func systemPromptWithMode(system []byte, mode string) []byte {
