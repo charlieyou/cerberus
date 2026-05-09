@@ -60,6 +60,21 @@ func TestProjectKeyDerivesFromAbsoluteRoot(t *testing.T) {
 	}
 }
 
+func TestProjectKeyUsesExplicitEnvValue(t *testing.T) {
+	adapter, err := NewFromEnv(&config.Env{Host: "codex"})
+	if err != nil {
+		t.Fatalf("NewFromEnv() returned error: %v", err)
+	}
+
+	got, err := adapter.ProjectKey(&config.Env{ProjectKey: "explicit-key"})
+	if err != nil {
+		t.Fatalf("ProjectKey() returned error: %v", err)
+	}
+	if got != "explicit-key" {
+		t.Fatalf("ProjectKey() = %q, want explicit-key", got)
+	}
+}
+
 func TestStateRootForClaudeAndCodex(t *testing.T) {
 	for _, tc := range []struct {
 		host    string

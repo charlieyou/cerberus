@@ -63,6 +63,9 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 	if env == nil {
 		return "", fmt.Errorf("host env is nil")
 	}
+	if env.ProjectKey != "" {
+		return env.ProjectKey, nil
+	}
 	if env.Root == "" {
 		return "", fmt.Errorf("CERBERUS_ROOT is required to derive project key")
 	}
