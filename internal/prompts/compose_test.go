@@ -74,6 +74,24 @@ func TestComposeReadsEditedStrategyFromDisk(t *testing.T) {
 	}
 }
 
+func TestComposeRendersReviewerTemplatePlaceholders(t *testing.T) {
+	root := t.TempDir()
+	writePrompt(t, root, "prompts/strategies/confidence-anchors.md", "anchors")
+	writePrompt(t, root, "prompts/strategies/debate-output-shape.md", "shape")
+	writePrompt(t, root, "prompts/reviewers/code.md", "A ${CONFIDENCE_ANCHORS}\nB ${CONTEXT}\nC ${DIFF_CONTENT}\nD ${DEBATE_OUTPUT_SHAPE}")
+	t.Setenv("REVIEW_GATE_CONTEXT", "context body")
+	t.Setenv("REVIEW_GATE_DIFF_CONTENT", "diff body")
+
+	system, _, err := ComposeFromRoot(root, roster.RosterSlot{}, "code")
+	if err != nil {
+		t.Fatalf("ComposeFromRoot() error = %v", err)
+	}
+	want := "A anchors\nB context body\nC diff body\nD shape"
+	if string(system) != want {
+		t.Fatalf("system prompt = %q, want %q", system, want)
+	}
+}
+
 func writePrompt(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, rel)

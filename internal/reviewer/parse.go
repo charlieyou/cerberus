@@ -58,6 +58,11 @@ func validateRequiredFields(stdout []byte) error {
 			return fmt.Errorf("reviewer %s is required", key)
 		}
 	}
+	for _, key := range []string{"summary"} {
+		if bytes.Equal(bytes.TrimSpace(raw[key]), []byte("null")) {
+			return fmt.Errorf("reviewer %s is required", key)
+		}
+	}
 
 	var findings []map[string]json.RawMessage
 	if err := json.Unmarshal(raw["findings"], &findings); err != nil {
@@ -71,6 +76,11 @@ func validateRequiredFields(stdout []byte) error {
 		}
 		if bytes.Equal(bytes.TrimSpace(finding["priority"]), []byte("null")) {
 			return fmt.Errorf("reviewer findings[%d].priority is required", index)
+		}
+		for _, key := range []string{"title", "body"} {
+			if bytes.Equal(bytes.TrimSpace(finding[key]), []byte("null")) {
+				return fmt.Errorf("reviewer findings[%d].%s is required", index, key)
+			}
 		}
 	}
 	return nil

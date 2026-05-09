@@ -56,9 +56,68 @@ func ComposeFromRoot(root string, slot roster.RosterSlot, artifactType string) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("read reviewer prompt %s: %w", artifactType, err)
 	}
+	reviewerPrompt, err = renderReviewerTemplate(root, reviewerPrompt)
+	if err != nil {
+		return nil, nil, err
+	}
 	parts = append(parts, reviewerPrompt)
 
 	return bytes.Join(parts, []byte("\n\n")), nil, nil
+}
+
+func renderReviewerTemplate(root string, template []byte) ([]byte, error) {
+	replacements := map[string]string{
+		"CONTEXT":                firstEnv("REVIEW_GATE_CONTEXT", "REVIEW_GATE_AUTHOR_CONTEXT"),
+		"DIFF_CONTENT":           os.Getenv("REVIEW_GATE_DIFF_CONTENT"),
+		"PLAN_CONTENT":           os.Getenv("REVIEW_GATE_PLAN_CONTENT"),
+		"SPEC_CONTENT":           os.Getenv("REVIEW_GATE_SPEC_CONTENT"),
+		"ASK_CONTENT":            os.Getenv("REVIEW_GATE_ASK_CONTENT"),
+		"EPIC_CONTEXT":           os.Getenv("REVIEW_GATE_EPIC_CONTEXT"),
+		"PEER_BLOCK":             os.Getenv("PEER_BLOCK"),
+		"PRIOR_ROUND_SELF_BLOCK": os.Getenv("PRIOR_ROUND_SELF_BLOCK"),
+		"STRATEGY_DIRECTIVE":     "",
+	}
+	if replacements["CONTEXT"] == "" {
+		replacements["CONTEXT"] = "No additional context provided."
+	}
+
+	anchors, err := optionalStrategy(root, "confidence-anchors")
+	if err != nil {
+		return nil, err
+	}
+	replacements["CONFIDENCE_ANCHORS"] = anchors
+
+	debateShape, err := optionalStrategy(root, "debate-output-shape")
+	if err != nil {
+		return nil, err
+	}
+	replacements["DEBATE_OUTPUT_SHAPE"] = debateShape
+
+	rendered := string(template)
+	for key, value := range replacements {
+		rendered = strings.ReplaceAll(rendered, "${"+key+"}", value)
+	}
+	return []byte(rendered), nil
+}
+
+func optionalStrategy(root, name string) (string, error) {
+	data, err := readPromptFile(filepath.Join(root, strategyPromptDir, name+".md"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read strategy prompt %s: %w", name, err)
+	}
+	return string(data), nil
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func rootDir() (string, error) {

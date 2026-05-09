@@ -166,6 +166,9 @@ func TestParseRejectsMissingRequiredFields(t *testing.T) {
 		"missing finding fields":     `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
 		"missing confidence":         `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
 		"null priority":              `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null summary":               `{"findings":[],"verdict":"PASS","summary":null,"overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null title":                 `{"findings":[{"title":null,"body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null body":                  `{"findings":[{"title":"x","body":null,"priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
