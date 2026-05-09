@@ -1,6 +1,8 @@
 BIN := bin/cerberus
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
 
+.PHONY: build install test lint fixtures-refresh
+
 build: $(BIN)
 
 $(BIN): $(GO_SOURCES) go.mod go.sum
