@@ -107,6 +107,23 @@ func TestRunRoundReturnsOriginalErrorBeforeCancellationNoise(t *testing.T) {
 	}
 }
 
+func TestRunSinglePassPassesSlotStrategyAsSystemPrompt(t *testing.T) {
+	env := testEnv(t)
+	env.Root = promptRoot(t)
+	setMockPath(t)
+	spawner := systemPromptSpawner{want: "Strategy: falsification-first."}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", Strategy: "falsification-first"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+}
+
 type observingSpawner struct {
 	t   *testing.T
 	env *config.Env
@@ -145,6 +162,17 @@ func (spawner noisyCancelSpawner) Spawn(ctx context.Context, request reviewer.Re
 	return reviewer.Response{}, spawner.err
 }
 
+type systemPromptSpawner struct {
+	want string
+}
+
+func (spawner systemPromptSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if !strings.Contains(string(request.System), spawner.want) {
+		return reviewer.Response{}, fmt.Errorf("system prompt = %q, want %q", request.System, spawner.want)
+	}
+	return passResponse(request.ID)
+}
+
 func passResponse(id string) (reviewer.Response, error) {
 	confidence := 0.9
 	round := 1
@@ -162,6 +190,24 @@ func passResponse(id string) (reviewer.Response, error) {
 		return reviewer.Response{}, err
 	}
 	return reviewer.Response{ID: id, Output: output, Parsed: parsed}, nil
+}
+
+func promptRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "prompts", "strategies"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(strategies) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "prompts", "reviewers"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(reviewers) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "prompts", "strategies", "falsification-first.md"), []byte("Strategy: falsification-first."), 0o644); err != nil {
+		t.Fatalf("WriteFile(strategy) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "prompts", "reviewers", "code.md"), []byte("reviewer prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile(reviewer prompt) error = %v", err)
+	}
+	return root
 }
 
 func testEnv(t *testing.T) *config.Env {

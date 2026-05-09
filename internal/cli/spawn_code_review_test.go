@@ -122,6 +122,79 @@ func TestResolveReviewersReplacesSlot(t *testing.T) {
 	}
 }
 
+func TestResolveReviewersPreservesStrategy(t *testing.T) {
+	setRosterTestCWD(t)
+	writeStrategy(t, "falsification-first")
+
+	reviewers, _, err := resolveReviewers(spawnCodeReviewOptions{
+		roster:    "default",
+		reviewers: []string{"claude:opus:falsification-first"},
+	})
+	if err != nil {
+		t.Fatalf("resolveReviewers() error = %v", err)
+	}
+	if got, want := reviewers[1].Strategy, "falsification-first"; got != want {
+		t.Fatalf("reviewer strategy = %q, want %q", got, want)
+	}
+}
+
+func TestCodeReviewGitArgsAppliesExcludeToCommitReview(t *testing.T) {
+	args := codeReviewGitArgs(spawnCodeReviewOptions{
+		commits:  []string{"abc123"},
+		excludes: []string{"vendor/**"},
+	})
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "show --format=fuller --stat --patch --no-ext-diff abc123 -- . :(exclude)vendor/**") {
+		t.Fatalf("git args = %q, want commit review with exclude pathspec", got)
+	}
+}
+
+func TestAuthorContextAbsentPrintsEmptyOutput(t *testing.T) {
+	setSpawnTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"author-context"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("author-context exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("author-context stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestResolvePersistsReason(t *testing.T) {
+	setSpawnTestEnv(t)
+	runRoot := state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run")
+	path := state.GateStatePath(runRoot)
+	if err := state.WriteGateState(path, &state.GateState{
+		RunKey:           "run",
+		Host:             "generic",
+		ProjectKey:       "project",
+		Status:           state.StatusPending,
+		CurrentIteration: 1,
+		MaxRounds:        1,
+		RosterID:         "default",
+	}); err != nil {
+		t.Fatalf("WriteGateState() error = %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"resolve", "--reason", "flaky test"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("resolve exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate, err := state.ReadGateState(path)
+	if err != nil {
+		t.Fatalf("ReadGateState() error = %v", err)
+	}
+	if gate.ResolutionReason != "flaky test" {
+		t.Fatalf("resolution_reason = %q, want flaky test", gate.ResolutionReason)
+	}
+}
+
 func setSpawnTestEnv(t *testing.T) {
 	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -160,6 +233,17 @@ func setRosterTestCWD(t *testing.T) {
 			t.Fatalf("restore cwd %s: %v", oldwd, err)
 		}
 	})
+}
+
+func writeStrategy(t *testing.T, name string) {
+	t.Helper()
+	dir := filepath.Join("prompts", "strategies")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte("Strategy: "+name+"."), 0o644); err != nil {
+		t.Fatalf("WriteFile(strategy) error = %v", err)
+	}
 }
 
 func readSpawnGate(t *testing.T) *state.GateState {

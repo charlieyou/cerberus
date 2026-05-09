@@ -46,7 +46,7 @@ func runAuthorContext(args []string, stdout, stderr io.Writer) int {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return printNoActiveStatus(stdout, false)
+				return 0
 			}
 			fmt.Fprintln(stderr, err)
 			return 1

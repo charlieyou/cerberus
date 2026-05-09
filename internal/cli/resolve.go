@@ -17,8 +17,6 @@ func runResolve(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_ = reason
-
 	path, ok, err := gateStatePath()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -37,7 +35,7 @@ func runResolve(args []string, stdout, stderr io.Writer) int {
 	if gate.Verdict != nil {
 		verdict = *gate.Verdict
 	}
-	state.MarkResolved(gate, verdict, time.Now().UTC())
+	state.MarkResolved(gate, verdict, time.Now().UTC(), reason)
 	if err := state.WriteGateState(path, gate); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

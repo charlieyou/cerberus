@@ -171,9 +171,11 @@ func resolveReviewers(opts spawnCodeReviewOptions) ([]orchestrator.ReviewerSlot,
 	reviewers := make([]orchestrator.ReviewerSlot, len(slots))
 	for i, slot := range slots {
 		reviewers[i] = orchestrator.ReviewerSlot{
-			ID:       slot.InstanceID,
-			Provider: slot.Provider,
-			Model:    slot.Model,
+			ID:          slot.InstanceID,
+			Provider:    slot.Provider,
+			Model:       slot.Model,
+			Strategy:    slot.Strategy,
+			PersonaPath: slot.PersonaPath,
 		}
 	}
 	rosterID := opts.roster
@@ -231,6 +233,10 @@ func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
 }
 
 func codeReviewDiff(opts spawnCodeReviewOptions) (string, error) {
+	return runGit(codeReviewGitArgs(opts))
+}
+
+func codeReviewGitArgs(opts spawnCodeReviewOptions) []string {
 	args := []string{"diff", "--no-ext-diff"}
 	if opts.uncommitted {
 		args = append(args, "HEAD")
@@ -238,12 +244,20 @@ func codeReviewDiff(opts spawnCodeReviewOptions) (string, error) {
 		args = append(args, opts.base+"...HEAD")
 	} else if len(opts.commits) > 0 {
 		showArgs := append([]string{"show", "--format=fuller", "--stat", "--patch", "--no-ext-diff"}, opts.commits...)
-		return runGit(showArgs)
+		return appendExcludes(showArgs, opts.excludes)
 	}
-	for _, exclude := range opts.excludes {
+	return appendExcludes(args, opts.excludes)
+}
+
+func appendExcludes(args []string, excludes []string) []string {
+	if len(excludes) == 0 {
+		return args
+	}
+	args = append(args, "--", ".")
+	for _, exclude := range excludes {
 		args = append(args, ":(exclude)"+exclude)
 	}
-	return runGit(args)
+	return args
 }
 
 func runGit(args []string) (string, error) {

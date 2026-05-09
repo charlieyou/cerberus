@@ -32,6 +32,7 @@ type GateState struct {
 	TranscriptPath   string     `json:"transcript_path"`
 	Status           string     `json:"status"`
 	Verdict          *string    `json:"verdict"`
+	ResolutionReason string     `json:"resolution_reason,omitempty"`
 	CurrentIteration int        `json:"current_iteration"`
 	MaxRounds        int        `json:"max_rounds"`
 	Debate           bool       `json:"debate"`
@@ -78,11 +79,14 @@ func ReadGateState(path string) (*GateState, error) {
 }
 
 // MarkResolved transitions a pending gate state to resolved.
-func MarkResolved(gs *GateState, verdict string, endedAt time.Time) {
+func MarkResolved(gs *GateState, verdict string, endedAt time.Time, reasons ...string) {
 	if gs == nil {
 		return
 	}
 	gs.Status = StatusResolved
 	gs.Verdict = &verdict
 	gs.EndedAt = &endedAt
+	if len(reasons) > 0 {
+		gs.ResolutionReason = reasons[0]
+	}
 }

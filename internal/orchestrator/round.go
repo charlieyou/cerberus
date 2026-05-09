@@ -1,12 +1,15 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/charlieyou/cerberus/internal/prompts"
 	"github.com/charlieyou/cerberus/internal/reviewer"
+	"github.com/charlieyou/cerberus/internal/roster"
 )
 
 type roundPrompts struct {
@@ -37,11 +40,17 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 		go func() {
 			defer wg.Done()
 
+			system, err := systemPromptForSlot(slot, prompts)
+			if err != nil {
+				errs <- roundError{err: err}
+				cancel()
+				return
+			}
 			response, err := spawner.Spawn(ctx, reviewer.Request{
 				ID:        slot.ID,
 				Provider:  slot.Provider,
 				Model:     slot.Model,
-				System:    prompts.System,
+				System:    system,
 				User:      prompts.User,
 				Root:      prompts.Root,
 				RunRoot:   prompts.RunRoot,
@@ -85,6 +94,32 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 		return nil, canceled
 	}
 	return outputs, nil
+}
+
+func systemPromptForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, error) {
+	if slot.Strategy == "" && slot.PersonaPath == "" {
+		return round.System, nil
+	}
+	root := round.Root
+	if root == "" {
+		root = "."
+	}
+	system, _, err := prompts.ComposeFromRoot(root, roster.RosterSlot{
+		Provider:    slot.Provider,
+		Model:       slot.Model,
+		Strategy:    slot.Strategy,
+		PersonaPath: slot.PersonaPath,
+	}, "code")
+	if err != nil {
+		return nil, err
+	}
+	if len(round.System) == 0 {
+		return system, nil
+	}
+	if len(system) == 0 {
+		return round.System, nil
+	}
+	return bytes.Join([][]byte{round.System, system}, []byte("\n\n")), nil
 }
 
 type roundError struct {

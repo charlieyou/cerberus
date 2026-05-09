@@ -28,9 +28,11 @@ type Params struct {
 
 // ReviewerSlot names one resolved reviewer slot.
 type ReviewerSlot struct {
-	ID       string
-	Provider string
-	Model    string
+	ID          string
+	Provider    string
+	Model       string
+	Strategy    string
+	PersonaPath string
 }
 
 // RunSinglePass executes one review round and resolves the gate from reviewer output.
@@ -205,9 +207,11 @@ func resolveSlots(params Params) ([]ReviewerSlot, error) {
 	slots := make([]ReviewerSlot, len(resolved))
 	for i, slot := range resolved {
 		slots[i] = ReviewerSlot{
-			ID:       slot.InstanceID,
-			Provider: slot.Provider,
-			Model:    slot.Model,
+			ID:          slot.InstanceID,
+			Provider:    slot.Provider,
+			Model:       slot.Model,
+			Strategy:    slot.Strategy,
+			PersonaPath: slot.PersonaPath,
 		}
 	}
 	return slots, nil

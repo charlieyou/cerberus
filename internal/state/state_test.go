@@ -80,7 +80,7 @@ func TestMarkResolved(t *testing.T) {
 		StartedAt:        startedAt,
 	}
 
-	MarkResolved(gs, VerdictRequiresDecision, endedAt)
+	MarkResolved(gs, VerdictRequiresDecision, endedAt, "manual override")
 
 	if gs.Status != StatusResolved {
 		t.Fatalf("Status = %q, want %q", gs.Status, StatusResolved)
@@ -91,6 +91,9 @@ func TestMarkResolved(t *testing.T) {
 	if gs.EndedAt == nil || !gs.EndedAt.Equal(endedAt) {
 		t.Fatalf("EndedAt = %v, want %v", gs.EndedAt, endedAt)
 	}
+	if gs.ResolutionReason != "manual override" {
+		t.Fatalf("ResolutionReason = %q, want manual override", gs.ResolutionReason)
+	}
 
 	data, err := json.Marshal(gs)
 	if err != nil {
@@ -98,6 +101,9 @@ func TestMarkResolved(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"verdict":"requires_decision"`) {
 		t.Fatalf("serialized gate state = %s, want resolved verdict", data)
+	}
+	if !strings.Contains(string(data), `"resolution_reason":"manual override"`) {
+		t.Fatalf("serialized gate state = %s, want resolution reason", data)
 	}
 }
 
