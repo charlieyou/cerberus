@@ -106,7 +106,9 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 		}
 		resolved.StateRoot = stateRoot
 	}
-	if shouldUseCodexPayloadRunKey(&resolved, payload.SessionID) {
+	if runKey, ok := activeCodexRunKey(&resolved, payload.SessionID); ok {
+		resolved.RunKey = runKey
+	} else if payload.SessionID != "" {
 		resolved.RunKey = payload.SessionID
 	} else if resolved.RunKey == "" {
 		resolved.RunKey = resolved.SessionID
@@ -117,19 +119,45 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 	return &resolved, state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey), nil
 }
 
-func shouldUseCodexPayloadRunKey(env *config.Env, payloadSessionID string) bool {
-	if payloadSessionID == "" || env.RunKey == "" || env.RunKey == payloadSessionID {
-		return payloadSessionID != ""
-	}
+func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) {
 	if env.StateRoot == "" || env.ProjectKey == "" {
-		return true
+		return "", false
 	}
+	if hasGateState(env.StateRoot, env.ProjectKey, env.RunKey) {
+		return env.RunKey, true
+	}
+	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
+		return payloadSessionID, true
+	}
+	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
+}
 
-	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
-	if _, err := os.Stat(gatePath); err == nil {
+func hasGateState(stateRoot, projectKey, runKey string) bool {
+	if runKey == "" {
 		return false
 	}
-	return true
+	_, err := os.Stat(state.GateStatePath(state.RunDir(stateRoot, projectKey, runKey)))
+	return err == nil
+}
+
+func scanCodexProjectRunKey(stateRoot, projectKey string) (string, bool) {
+	pattern := filepath.Join(stateRoot, projectKey, "*", "gate-state.json")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", false
+	}
+
+	for _, path := range matches {
+		gate, err := state.ReadGateState(path)
+		if err != nil {
+			continue
+		}
+		runKey := filepath.Base(filepath.Dir(path))
+		if gate.Status == state.StatusPending {
+			return runKey, true
+		}
+	}
+	return "", false
 }
 
 func decodeCodexPayload(stdinPayload []byte) (codexPayload, error) {
