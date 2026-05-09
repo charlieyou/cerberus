@@ -81,6 +81,48 @@ func TestCodexSessionInitPreservesCachedRunKeyForSameSession(t *testing.T) {
 	}
 }
 
+func TestCodexSessionInitIgnoresStaleCachedRunKeyForNewSession(t *testing.T) {
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "old-session",
+		CodexSessionID: "old-session",
+		RunKey:         "old-run",
+		TranscriptPath: "/tmp/old.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	verdict := state.VerdictPass
+	if err := state.WriteGateState(state.GateStatePath(state.RunDir(env.StateRoot, "project", "old-run")), &state.GateState{
+		RunKey:         "old-run",
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "old-session",
+		TranscriptPath: "/tmp/old.jsonl",
+		Status:         state.StatusResolved,
+		Verdict:        &verdict,
+	}); err != nil {
+		t.Fatalf("seed resolved old gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"new-session","transcript_path":"/tmp/new.jsonl","project_key":"project"}`)
+	if err := HandleCodexSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleCodexSessionStart() error = %v", err)
+	}
+
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, "project"))
+	if err != nil {
+		t.Fatalf("ReadSessionCache() error = %v", err)
+	}
+	if cache.RunKey != "new-session" || cache.SessionID != "new-session" {
+		t.Fatalf("cache = %#v, want new session to ignore stale cached run key", cache)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "new-session", "session.json")); err != nil {
+		t.Fatalf("new session.json missing: %v", err)
+	}
+}
+
 func TestDecodeCodexPayloadReportsMalformedField(t *testing.T) {
 	_, err := decodeCodexPayload([]byte(`{"session_id":123}`))
 	if err == nil {
