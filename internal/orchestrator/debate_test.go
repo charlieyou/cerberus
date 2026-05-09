@@ -90,6 +90,37 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerCompleted, 2, 2)
 }
 
+func TestStartDebateTelemetryFailureResolvesGate(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := os.MkdirAll(filepath.Join(runRoot, "event-log.jsonl"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(event-log.jsonl) error = %v", err)
+	}
+
+	_, err := (Orchestrator{Env: env}).StartDebate(Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+			{ID: "claude#1", Provider: "claude", Model: "stub", InstanceIndex: 1},
+		},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "open event log") {
+		t.Fatalf("StartDebate() error = %v, want open event log", err)
+	}
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
+	}
+	if !strings.Contains(gate.ResolutionReason, "roster selected telemetry failed") {
+		t.Fatalf("resolution reason = %q, want roster telemetry failure", gate.ResolutionReason)
+	}
+}
+
 func assertReviewerEventRoundCount(t *testing.T, events []map[string]any, eventName string, round int, want int) {
 	t.Helper()
 	got := 0

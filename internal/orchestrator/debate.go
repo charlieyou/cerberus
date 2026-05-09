@@ -144,6 +144,8 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 			"debate":         true,
 		},
 	}); err != nil {
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("roster selected telemetry failed: %v", err))
+		_ = state.WriteGateState(gatePath, gate)
 		return nil, err
 	}
 	params.Reviewers = slots
