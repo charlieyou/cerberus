@@ -148,6 +148,32 @@ assert_contains "generate relative-CLAUDE_PLUGIN_ROOT fallback warning" "$(cat "
 assert_contains "generate relative-CLAUDE_PLUGIN_ROOT help" "$(cat "$relative_claude_generate_stdout")" "Usage: generate <output-dir> [options]"
 log_pass "generate relative CLAUDE_PLUGIN_ROOT override is not cwd-sensitive"
 
+log_test "generate wrapper preserves legacy prompt calls"
+fake_plugin_root="$TEST_DIR/fake-plugin"
+fake_args="$TEST_DIR/generate-args.txt"
+mkdir -p "$fake_plugin_root/bin" "$fake_plugin_root/prompts/generators"
+cp "$PLUGIN_ROOT/bin/generate" "$fake_plugin_root/bin/generate"
+cat > "$fake_plugin_root/bin/cerberus" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CERBERUS_ARG_CAPTURE"
+EOF
+chmod +x "$fake_plugin_root/bin/cerberus"
+CERBERUS_ARG_CAPTURE="$fake_args" "$fake_plugin_root/bin/generate" "$TEST_DIR/drafts" --mode fast --prompt "Return exactly: telemetry draft."
+expected_args="$TEST_DIR/generate-expected-args.txt"
+cat > "$expected_args" <<EOF
+generate
+$TEST_DIR/drafts
+--type
+healthcheck
+--mode
+fast
+Return exactly: telemetry draft.
+EOF
+if ! cmp -s "$expected_args" "$fake_args"; then
+    log_fail "legacy generate args were not normalized as expected: $(cat "$fake_args")"
+fi
+log_pass "generate wrapper maps legacy --prompt calls to Go CLI args"
+
 log_test "cerberus-skill-env corrects an invalid inherited CERBERUS_ROOT"
 resolved_root="$(CERBERUS_ROOT="$BAD_ROOT" "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n" "$CERBERUS_ROOT"' _ "$PLUGIN_ROOT")"
 if [[ "$resolved_root" != "$PLUGIN_ROOT" ]]; then

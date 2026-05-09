@@ -13,6 +13,7 @@ Arguments:
 Options:
   --type <type>           Named preset: healthcheck, architecture-review, create-spec, create-plan
   --mode <level>          Intelligence mode: fast, smart, max
+  --prompt <text>         Legacy alias for positional prompt text
   --prompt-file <path>    Path to custom prompt file
   --focus <text>          Focus area to append to base prompt
   --skip-interview        For create-plan: generate autonomously
@@ -50,4 +51,72 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     exit 0
 fi
 
-exec "$SCRIPT_DIR/cerberus" generate "$@"
+normalize_args() {
+    if [ "$#" -eq 0 ]; then
+        return
+    fi
+
+    local output_dir="$1"
+    shift
+
+    local has_type=false
+    local prompt=""
+    local prompt_set=false
+    local -a normalized=("$output_dir")
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --type)
+                has_type=true
+                normalized+=("$1")
+                shift
+                if [ "$#" -gt 0 ]; then
+                    normalized+=("$1")
+                    shift
+                fi
+                ;;
+            --type=*)
+                has_type=true
+                normalized+=("$1")
+                shift
+                ;;
+            --prompt)
+                shift
+                if [ "$#" -gt 0 ]; then
+                    prompt="$1"
+                    prompt_set=true
+                    shift
+                else
+                    normalized+=("--prompt")
+                fi
+                ;;
+            --prompt=*)
+                prompt="${1#--prompt=}"
+                prompt_set=true
+                shift
+                ;;
+            *)
+                normalized+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [ "$has_type" != "true" ]; then
+        normalized=("$output_dir" "--type" "healthcheck" "${normalized[@]:1}")
+    fi
+    if [ "$prompt_set" = "true" ]; then
+        normalized+=("$prompt")
+    fi
+
+    printf '%s\0' "${normalized[@]}"
+}
+
+declare -a CERBERUS_GENERATE_ARGS=()
+if [ "$#" -gt 0 ]; then
+    while IFS= read -r -d '' arg; do
+        CERBERUS_GENERATE_ARGS+=("$arg")
+    done < <(normalize_args "$@")
+fi
+
+exec "$SCRIPT_DIR/cerberus" generate "${CERBERUS_GENERATE_ARGS[@]}"
