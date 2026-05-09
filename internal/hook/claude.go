@@ -64,13 +64,15 @@ func resolveHookRun(stdinPayload []byte, env *config.Env) (*config.Env, string, 
 	if err != nil {
 		return nil, "", err
 	}
-	if resolved.SessionID == "" {
+	if payload.SessionID != "" {
 		resolved.SessionID = payload.SessionID
 	}
-	if resolved.TranscriptPath == "" {
+	if payload.TranscriptPath != "" || payload.Transcript != "" {
 		resolved.TranscriptPath = firstNonEmpty(payload.TranscriptPath, payload.Transcript)
 	}
-	if resolved.RunKey == "" {
+	if payload.SessionID != "" {
+		resolved.RunKey = payload.SessionID
+	} else if resolved.RunKey == "" {
 		resolved.RunKey = resolved.SessionID
 	}
 	if resolved.RunKey == "" {

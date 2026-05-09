@@ -105,3 +105,34 @@ func TestHandleClaudeSessionStartInitializesRunFromStdinPayload(t *testing.T) {
 		t.Fatalf("session.json = %#v, want run key and transcript path from stdin payload", got)
 	}
 }
+
+func TestHandleClaudeSessionStartPayloadOverridesStaleEnvRunIdentity(t *testing.T) {
+	env := &config.Env{
+		Host:           "generic",
+		StateRoot:      t.TempDir(),
+		ProjectKey:     "project",
+		RunKey:         "stale-run",
+		SessionID:      "stale-session",
+		TranscriptPath: "/tmp/stale.jsonl",
+	}
+	payload := []byte(`{"session_id":"current-session","transcript_path":"/tmp/current.jsonl"}`)
+
+	if err := HandleClaudeSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleClaudeSessionStart() error = %v", err)
+	}
+
+	currentData, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "current-session", "session.json"))
+	if err != nil {
+		t.Fatalf("read current session.json: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(currentData, &got); err != nil {
+		t.Fatalf("unmarshal current session.json: %v", err)
+	}
+	if got["run_key"] != "current-session" || got["session_id"] != "current-session" || got["transcript_path"] != "/tmp/current.jsonl" {
+		t.Fatalf("current session.json = %#v, want payload identity to override stale env", got)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "stale-run", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale env run was used; stat err = %v", err)
+	}
+}
