@@ -141,36 +141,19 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 
 func splitTrailingCommitArgs(commits []string, args []string) ([]string, string) {
 	for i, arg := range args {
-		if !looksLikeCommitRef(arg) {
+		if !isCommitRevision(arg) {
 			return append(commits, args[:i]...), strings.Join(args[i:], " ")
 		}
 	}
 	return append(commits, args...), ""
 }
 
-func looksLikeCommitRef(arg string) bool {
+func isCommitRevision(arg string) bool {
 	if arg == "" || strings.ContainsAny(arg, " \t\r\n") || strings.HasPrefix(arg, "-") {
 		return false
 	}
-	if arg == "HEAD" || strings.HasPrefix(arg, "HEAD^") || strings.HasPrefix(arg, "HEAD~") || strings.HasPrefix(arg, "HEAD:") {
-		return true
-	}
-	if isHexRef(arg) {
-		return true
-	}
-	return strings.ContainsAny(arg, "/._-@{}^~:")
-}
-
-func isHexRef(arg string) bool {
-	if len(arg) < 4 || len(arg) > 64 {
-		return false
-	}
-	for _, char := range arg {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			return false
-		}
-	}
-	return true
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", arg+"^{commit}")
+	return cmd.Run() == nil
 }
 
 func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
@@ -379,10 +362,26 @@ func appendExcludes(args []string, excludes []string) []string {
 }
 
 func excludePathspec(exclude string) string {
-	if strings.HasPrefix(exclude, ":(exclude") || strings.HasPrefix(exclude, ":!") || strings.HasPrefix(exclude, ":^") {
+	if strings.HasPrefix(exclude, ":!") || strings.HasPrefix(exclude, ":^") || hasExcludeMagic(exclude) {
 		return exclude
 	}
 	return ":(exclude)" + exclude
+}
+
+func hasExcludeMagic(pathspec string) bool {
+	if !strings.HasPrefix(pathspec, ":(") {
+		return false
+	}
+	end := strings.IndexByte(pathspec, ')')
+	if end < 0 {
+		return false
+	}
+	for _, magic := range strings.Split(pathspec[2:end], ",") {
+		if magic == "exclude" {
+			return true
+		}
+	}
+	return false
 }
 
 func runGit(args []string) (string, error) {

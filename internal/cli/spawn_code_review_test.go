@@ -134,32 +134,32 @@ func TestParseSpawnCodeReviewRejectsExplicitInvalidRuntimeFlags(t *testing.T) {
 	}
 }
 
-func TestParseSpawnCodeReviewCommitConsumesAllTrailingSHAs(t *testing.T) {
+func TestParseSpawnCodeReviewCommitConsumesAllTrailingRevisions(t *testing.T) {
 	var stderr bytes.Buffer
 
-	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "abc123", "def456"}, &stderr)
+	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "HEAD", "HEAD~0"}, &stderr)
 	if err != nil {
 		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
 	}
-	if got, want := strings.Join(opts.commits, ","), "abc123,def456"; got != want {
+	if got, want := strings.Join(opts.commits, ","), "HEAD,HEAD~0"; got != want {
 		t.Fatalf("commits = %q, want %q", got, want)
 	}
 	if opts.focus != "" {
-		t.Fatalf("focus = %q, want empty for trailing --commit SHAs", opts.focus)
+		t.Fatalf("focus = %q, want empty for trailing --commit revisions", opts.focus)
 	}
 }
 
 func TestParseSpawnCodeReviewCommitKeepsTrailingFocus(t *testing.T) {
 	var stderr bytes.Buffer
 
-	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "HEAD", "focus on error handling"}, &stderr)
+	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "HEAD", "api:", "error", "handling"}, &stderr)
 	if err != nil {
 		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
 	}
 	if got, want := strings.Join(opts.commits, ","), "HEAD"; got != want {
 		t.Fatalf("commits = %q, want %q", got, want)
 	}
-	if got, want := opts.focus, "focus on error handling"; got != want {
+	if got, want := opts.focus, "api: error handling"; got != want {
 		t.Fatalf("focus = %q, want %q", got, want)
 	}
 }
@@ -283,14 +283,14 @@ func TestCodeReviewGitArgsAppliesExcludeToCommitReview(t *testing.T) {
 func TestCodeReviewGitArgsPreservesExcludePathspecMagic(t *testing.T) {
 	args := codeReviewGitArgs(spawnCodeReviewOptions{
 		commits:  []string{"abc123"},
-		excludes: []string{":(exclude,glob)dist/**", ":!vendor/**"},
+		excludes: []string{":(exclude,glob)dist/**", ":(glob,exclude)internal/**", ":!vendor/**"},
 	})
 
 	got := strings.Join(args, " ")
-	if !strings.Contains(got, " -- . :(exclude,glob)dist/** :!vendor/**") {
+	if !strings.Contains(got, " -- . :(exclude,glob)dist/** :(glob,exclude)internal/** :!vendor/**") {
 		t.Fatalf("git args = %q, want existing exclude pathspec magic preserved", got)
 	}
-	if strings.Contains(got, ":(exclude):(exclude,glob)") || strings.Contains(got, ":(exclude):!") {
+	if strings.Contains(got, ":(exclude):(") || strings.Contains(got, ":(exclude):!") {
 		t.Fatalf("git args = %q, want no double exclude prefix", got)
 	}
 }
