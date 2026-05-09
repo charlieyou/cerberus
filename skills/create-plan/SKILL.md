@@ -90,7 +90,7 @@ You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**, e
 
 ✅ **Follow the workflow when user asks to skip without the flag** — If user says "just generate the plan" but did not pass `--skip-interview`, explain the workflow and proceed with skeleton + interview.
 
-✅ **Write generator drafts to files** — Call the generate script which writes drafts to disk; pass file paths to the synthesis subagent.
+✅ **Write generator drafts to files** — Call `cerberus generate`, which writes drafts to disk; pass file paths to the synthesis subagent.
 
 ✅ **Delegate synthesis to a subagent** — Use the Task tool for synthesis to preserve your main context for the review gate.
 
@@ -544,20 +544,20 @@ EOF
 
 Now append the Phase 3 context (skeleton + findings + user answers or autonomous decisions) to `$PROMPT_TMP`.
 
-Spawn generators with the mode flag. The generate script requires an output directory as the first argument and writes drafts to files, returning their paths:
+Spawn generators with the mode flag. The `cerberus generate` subcommand requires an output directory as the first argument and writes drafts to files, returning their paths:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-If `--skip-interview` was passed to this command, add `--skip-interview` to the `bin/generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
+If `--skip-interview` was passed to this command, add `--skip-interview` to the `cerberus generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
+export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
 ```
 
-Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by the generate script. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
+Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by `cerberus generate`. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
 - `$OUTPUT_DIR/codex/draft.md`
 - `$OUTPUT_DIR/gemini/draft.md`
 - `$OUTPUT_DIR/claude/draft.md`
@@ -574,7 +574,7 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the plan file.
 
 Draft files to read:
-[Paste the actual draft paths printed by `bin/generate`; include only existing `draft.md` files from successful generators.]
+[Paste the actual draft paths printed by `cerberus generate`; include only existing `draft.md` files from successful generators.]
 - /actual/output/dir/codex/draft.md
 - /actual/output/dir/gemini/draft.md
 - /actual/output/dir/claude/draft.md

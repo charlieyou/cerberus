@@ -66,27 +66,27 @@ Perform a **principal-engineer-level** architecture review using multiple AI mod
 
 Use the Bash tool to spawn architecture review generators. **IMPORTANT**: Set the Bash timeout to 1800000ms (30 minutes) to match the generator's internal ceiling, regardless of mode.
 
-The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+The `cerberus generate` subcommand requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode fast
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type architecture-review --focus "focus on error handling"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode max --focus "review the API layer"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode max --focus "review the API layer"
 
 # User: /architecture-review --mode fast focus on error handling
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type architecture-review --mode fast focus on error handling
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.

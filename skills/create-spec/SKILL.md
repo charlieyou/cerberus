@@ -435,7 +435,7 @@ EOF
 
 Now append the Phase 3 context (skeleton + findings + answers) to `$PROMPT_TMP`.
 
-Spawn generators with the mode flag. The generate script enforces timeouts internally:
+Spawn generators with the mode flag. The `cerberus generate` subcommand enforces timeouts internally:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
@@ -443,10 +443,10 @@ Spawn generators with the mode flag. The generate script enforces timeouts inter
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-spec-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate" "$OUTPUT_DIR" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
+export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-spec-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" generate "$OUTPUT_DIR" --type create-spec --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"
 ```
 
-Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by the generate script. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
+Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by `cerberus generate`. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
 - `$OUTPUT_DIR/codex/draft.md`
 - `$OUTPUT_DIR/gemini/draft.md`
 - `$OUTPUT_DIR/claude/draft.md`
@@ -463,7 +463,7 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the spec file.
 
 Draft files to read:
-[Paste the actual draft paths printed by `bin/generate`; include only existing `draft.md` files from successful generators.]
+[Paste the actual draft paths printed by `cerberus generate`; include only existing `draft.md` files from successful generators.]
 - /actual/output/dir/codex/draft.md
 - /actual/output/dir/gemini/draft.md
 - /actual/output/dir/claude/draft.md

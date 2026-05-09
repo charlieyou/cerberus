@@ -60,27 +60,27 @@ This command runs a multi-model healthcheck where Codex, Gemini, and Claude (if 
 
 Use the Bash tool to run the generator command. This spawns all available generators in parallel. **IMPORTANT**: Set the Bash timeout to 1800000ms (30 minutes) to match the generator's internal ceiling, regardless of mode.
 
-The generator requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
+The `cerberus generate` subcommand requires an output directory as the first argument, then accepts `--mode <level>` plus an optional focus string (either `--focus "<text>"` or a trailing free-text argument; use `--` to force focus when needed).
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/healthcheck-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "${REVIEW_DIR:-/tmp}/healthcheck-drafts" --type healthcheck $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/healthcheck-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/healthcheck-drafts" --type healthcheck $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /healthcheck --mode fast
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast
 
 # User: /healthcheck "focus on the API layer"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type healthcheck --focus "focus on the API layer"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --focus "focus on the API layer"
 
 # User: /healthcheck --mode max "review error handling"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode max --focus "review error handling"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode max --focus "review error handling"
 
 # User: /healthcheck --mode fast focus on error handling
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate "$OUTPUT_DIR" --type healthcheck --mode fast focus on error handling
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
