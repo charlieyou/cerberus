@@ -1,0 +1,42 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        host: [claude, codex, generic]
+    runs-on: ${{ matrix.os }}
+    env:
+      CERBERUS_HOST: ${{ matrix.host }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: make build
+      - run: make test
+      - run: make lint
+
+  build-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: |
+          GOOS=$([ "${{ matrix.os }}" = "macos-latest" ] && echo darwin || echo linux) \
+          GOARCH=${{ matrix.arch }} \
+          go build -ldflags="-s -w" -tags netgo -o bin/cerberus.${{ matrix.os }}.${{ matrix.arch }} ./cmd/cerberus
+      - run: |
+          # TODO(Epic G/D35): assert binary size caps for release builds.
+          test -f bin/cerberus.${{ matrix.os }}.${{ matrix.arch }}
