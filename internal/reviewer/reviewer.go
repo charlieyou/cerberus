@@ -43,6 +43,7 @@ type RawReviewerOutput struct {
 type RawFinding struct {
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Severity   *string  `json:"severity"`
 	Priority   *int     `json:"priority"`
 	FilePath   *string  `json:"file_path"`
 	LineStart  *int     `json:"line_start"`
