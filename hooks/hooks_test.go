@@ -25,6 +25,7 @@ func TestClaudeStopHookInvokesGoGatePolling(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("parse hooks.json: %v", err)
 	}
+	assertNoLegacyHookTerms(t, "hooks.json", string(data))
 
 	var commands []string
 	for _, entry := range manifest.Hooks["Stop"] {
