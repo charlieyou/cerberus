@@ -1,6 +1,7 @@
 package reviewer
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -119,29 +120,82 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 }
 
 func extractUsage(stdout []byte) (Tokens, float64) {
-	var payload struct {
-		Tokens struct {
-			Input  int `json:"input"`
-			Output int `json:"output"`
-		} `json:"tokens"`
-		Usage struct {
-			InputTokens      int `json:"input_tokens"`
-			PromptTokens     int `json:"prompt_tokens"`
-			OutputTokens     int `json:"output_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-		CostUSD      float64 `json:"cost_usd"`
-		TotalCostUSD float64 `json:"total_cost_usd"`
-	}
-	if err := json.Unmarshal(stdout, &payload); err != nil {
-		return Tokens{}, 0
+	if tokens, costUSD, ok := extractUsageObject(stdout); ok {
+		return tokens, costUSD
 	}
 
+	var total Tokens
+	var totalCostUSD float64
+	scanner := bufio.NewScanner(bytes.NewReader(stdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		tokens, costUSD, ok := extractUsageObject(line)
+		if !ok {
+			continue
+		}
+		total.Input += tokens.Input
+		total.Output += tokens.Output
+		totalCostUSD += costUSD
+	}
+	return total, totalCostUSD
+}
+
+func extractUsageObject(data []byte) (Tokens, float64, bool) {
+	var payload usagePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return Tokens{}, 0, false
+	}
+	return payload.tokens(), payload.costUSD(), true
+}
+
+type usagePayload struct {
+	Tokens usageTokens `json:"tokens"`
+	Usage  struct {
+		InputTokens      int `json:"input_tokens"`
+		PromptTokens     int `json:"prompt_tokens"`
+		OutputTokens     int `json:"output_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+	CostUSD      float64 `json:"cost_usd"`
+	Cost         float64 `json:"cost"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	Stats        struct {
+		Cost   float64               `json:"cost"`
+		Models map[string]modelUsage `json:"models"`
+	} `json:"stats"`
+}
+
+type usageTokens struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	Candidates int `json:"candidates"`
+}
+
+type modelUsage struct {
+	Tokens usageTokens `json:"tokens"`
+}
+
+func (payload usagePayload) tokens() Tokens {
 	tokens := Tokens{
 		Input:  firstPositive(payload.Tokens.Input, payload.Usage.InputTokens, payload.Usage.PromptTokens),
-		Output: firstPositive(payload.Tokens.Output, payload.Usage.OutputTokens, payload.Usage.CompletionTokens),
+		Output: firstPositive(payload.Tokens.Output, payload.Tokens.Candidates, payload.Usage.OutputTokens, payload.Usage.CompletionTokens),
 	}
-	return tokens, firstPositiveFloat(payload.CostUSD, payload.TotalCostUSD)
+	if tokens.Input > 0 || tokens.Output > 0 {
+		return tokens
+	}
+	for _, model := range payload.Stats.Models {
+		tokens.Input += model.Tokens.Input
+		tokens.Output += firstPositive(model.Tokens.Output, model.Tokens.Candidates)
+	}
+	return tokens
+}
+
+func (payload usagePayload) costUSD() float64 {
+	return firstPositiveFloat(payload.CostUSD, payload.TotalCostUSD, payload.Cost, payload.Stats.Cost)
 }
 
 func (runner Runner) command(ctx context.Context, request Request, user []byte) (*exec.Cmd, error) {
