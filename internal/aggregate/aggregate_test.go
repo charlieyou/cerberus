@@ -8,80 +8,45 @@ import (
 )
 
 func TestComputeMajority(t *testing.T) {
-	got, err := Compute([]reviewer.RawReviewerOutput{
-		output("PASS", 1),
-		output("PASS", 1),
-		output("FAIL", 1),
-	}, ModeMajority)
-	if err != nil {
-		t.Fatalf("Compute() error = %v", err)
-	}
-	if got.Verdict != VerdictPass {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictPass)
-	}
-
-	got, err = Compute([]reviewer.RawReviewerOutput{
-		output("PASS", 1),
-		output("FAIL", 1),
-		output("NEEDS_WORK", 1),
-	}, ModeMajority)
-	if err != nil {
-		t.Fatalf("Compute() error = %v", err)
-	}
-	if got.Verdict != VerdictRequiresDecision {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictRequiresDecision)
-	}
-}
-
-func TestComputeMajorityUsesConfidenceWeights(t *testing.T) {
-	got, err := Compute([]reviewer.RawReviewerOutput{
-		output("PASS", 0.9),
-		output("FAIL", 0.4),
-	}, ModeMajority)
-	if err != nil {
-		t.Fatalf("Compute() error = %v", err)
-	}
-	if got.Verdict != VerdictPass {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictPass)
-	}
-}
-
-func TestComputeMajorityDoesNotGiveNullConfidenceFullVoteWeight(t *testing.T) {
-	got, err := Compute([]reviewer.RawReviewerOutput{
-		outputWithoutConfidence("PASS"),
-		output("FAIL", 0.9),
-	}, ModeMajority)
-	if err != nil {
-		t.Fatalf("Compute() error = %v", err)
-	}
-	if got.Verdict != VerdictFail {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictFail)
-	}
-}
-
-func TestComputeMajorityHandlesUnanimousNullConfidence(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		outputs []reviewer.RawReviewerOutput
 		want    string
 	}{
 		{
-			name: "pass",
+			name: "pass strict majority",
 			outputs: []reviewer.RawReviewerOutput{
-				outputWithoutConfidence("PASS"),
-				outputWithoutConfidence("PASS"),
-				outputWithoutConfidence("PASS"),
+				output("PASS", 0.1),
+				output("PASS", 0.1),
+				output("FAIL", 1),
 			},
 			want: VerdictPass,
 		},
 		{
-			name: "fail",
+			name: "fail strict majority",
 			outputs: []reviewer.RawReviewerOutput{
-				outputWithoutConfidence("FAIL"),
-				outputWithoutConfidence("FAIL"),
-				outputWithoutConfidence("FAIL"),
+				output("PASS", 1),
+				output("FAIL", 0.1),
+				output("FAIL", 0.1),
 			},
 			want: VerdictFail,
+		},
+		{
+			name: "tie requires decision",
+			outputs: []reviewer.RawReviewerOutput{
+				output("PASS", 1),
+				output("FAIL", 1),
+			},
+			want: VerdictRequiresDecision,
+		},
+		{
+			name: "split with needs work requires decision",
+			outputs: []reviewer.RawReviewerOutput{
+				output("PASS", 1),
+				output("FAIL", 1),
+				output("NEEDS_WORK", 1),
+			},
+			want: VerdictRequiresDecision,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,11 +61,11 @@ func TestComputeMajorityHandlesUnanimousNullConfidence(t *testing.T) {
 	}
 }
 
-func TestComputeMajorityFallsBackToUnweightedVoteWhenAllConfidenceIsZero(t *testing.T) {
+func TestComputeMajorityHandlesNullConfidenceByReviewerCount(t *testing.T) {
 	got, err := Compute([]reviewer.RawReviewerOutput{
-		output("PASS", 0),
-		output("PASS", 0),
-		output("FAIL", 0),
+		outputWithoutConfidence("PASS"),
+		outputWithoutConfidence("PASS"),
+		output("FAIL", 1),
 	}, ModeMajority)
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
