@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,48 @@ func TestSpawnCodeReviewCreatesPendingGateObservedByHookPoll(t *testing.T) {
 	gate = readSpawnGate(t)
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status after runtime = %q, want resolved", gate.Status)
+	}
+}
+
+func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
+	setSpawnTestEnv(t)
+	t.Setenv("CERBERUS_MOCK_EXIT", "1")
+	started, err := orchestrator.StartSinglePass(nil, orchestrator.Params{
+		Prompt: []byte("review this"),
+		Reviewers: []orchestrator.ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
+	data, err := json.Marshal(started)
+	if err != nil {
+		t.Fatalf("Marshal(started) error = %v", err)
+	}
+	if err := os.WriteFile(requestPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(request) error = %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := runSinglePassRuntime([]string{requestPath}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("runSinglePassRuntime exit code = 0, want non-zero")
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want resolved", gate.Status)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "single-pass runtime failed") {
+		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
+	}
+	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
+		t.Fatalf("PollGateState() error = %v", err)
 	}
 }
 

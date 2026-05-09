@@ -247,6 +247,28 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	})
 }
 
+// ResolveSinglePassFailure resolves a detached review gate when the runtime
+// cannot produce a reviewer aggregate.
+func ResolveSinglePassFailure(started *StartedRun, cause error) error {
+	if started == nil {
+		return fmt.Errorf("started run is required")
+	}
+	gatePath := state.GateStatePath(started.RunRoot)
+	gate, err := state.ReadGateState(gatePath)
+	if err != nil {
+		return err
+	}
+	if gate.Status == state.StatusResolved {
+		return nil
+	}
+	reason := "single-pass runtime failed"
+	if cause != nil {
+		reason = fmt.Sprintf("%s: %v", reason, cause)
+	}
+	state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), reason)
+	return state.WriteGateState(gatePath, gate)
+}
+
 func telemetryTotals(results []roundReviewerResult) ([]telemetry.ReviewerSummary, telemetry.Tokens, float64) {
 	summary := make([]telemetry.ReviewerSummary, len(results))
 	var totalTokens telemetry.Tokens

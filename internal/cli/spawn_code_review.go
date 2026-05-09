@@ -126,7 +126,11 @@ func runSinglePassRuntime(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := orchestrator.CompleteSinglePass(context.Background(), &started, nil); err != nil {
-		fmt.Fprintln(stderr, err)
+		if resolveErr := orchestrator.ResolveSinglePassFailure(&started, err); resolveErr != nil {
+			fmt.Fprintf(stderr, "%v\nfailed to resolve gate after runtime error: %v\n", err, resolveErr)
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
 		return 1
 	}
 	_ = stdout
