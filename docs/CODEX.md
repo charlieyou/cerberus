@@ -66,10 +66,11 @@ The Cerberus shared backend resolves run state from environment
 variables and an on-disk session registry. Codex doesn't expose a
 stable session-id env var to skill shell commands, so the
 `SessionStart` and `UserPromptSubmit` hooks run
-`bin/codex-session-init` with Codex's hook JSON on stdin. That registry
-is the only source skills use for the active run key; skills do not
-invent fallback run keys because `Stop` would be unable to associate
-them with Codex's `session_id`.
+`bin/cerberus hook codex-session-start` and
+`bin/cerberus hook codex-prompt-submit` with Codex's hook JSON on
+stdin. That registry is the only source skills use for the active run
+key; skills do not invent fallback run keys because `Stop` would be
+unable to associate them with Codex's `session_id`.
 
 Set `CERBERUS_ROOT` in Codex's shell environment to the **repository
 checkout root**. Installed skills are cached
@@ -88,9 +89,14 @@ plugin_hooks = true
 The plugin manifest points `hooks` at `./hooks/codex-hooks.json`. Codex
 loads that lifecycle config from the installed plugin and substitutes
 `${PLUGIN_ROOT}` in hook commands with the installed plugin root, so the
-hooks call the bundled `bin/codex-session-init` and
-`bin/codex-stop-hook` without a separate `~/.codex/hooks.json`
-installation step.
+hooks can build and call the bundled `bin/cerberus hook
+codex-session-start`, `bin/cerberus hook codex-prompt-submit`, and
+`bin/cerberus hook codex-stop` without a separate `~/.codex/hooks.json`
+installation step. The current contract was validated with
+`codex-cli 0.130.0`: hook event JSON is delivered on stdin, Cerberus
+accepts `session_id`, `transcript_path`, `project_key`, `transcript`,
+`cwd`, `workspace_root`, `prompt`, and `stop_reason`, and unknown
+payload fields are ignored.
 
 After changing plugin files or updating Cerberus, push the change and
 run `codex plugin marketplace upgrade cerberus-local`, then reinstall
@@ -120,10 +126,8 @@ found". If you don't, check:
 - `CERBERUS_ROOT` is set in Codex's shell environment and points at the
   backend checkout root, not at `` or Codex's plugin
   cache.
-- `bin/codex-session-init` and `bin/codex-stop-hook` are executable
-  (`chmod +x`).
-- `jq` is on the `PATH` Codex's hook runner uses (not just your
-  interactive shell).
+- `bin/cerberus` exists or Codex's hook runner can find `make` and
+  Go on `PATH` to lazy-build it from the checkout.
 - `~/.cerberus/runtime/codex/<workspace-key>/active-session.json`
   exists after `SessionStart` or `UserPromptSubmit` fires.
 
@@ -131,12 +135,11 @@ found". If you don't, check:
 
 Codex's lifecycle-hook execution model runs configured commands from
 enabled plugins and hook config layers every `SessionStart`,
-`UserPromptSubmit`, and `Stop`. The Cerberus adapters
-(`bin/codex-session-init`, `bin/codex-stop-hook`) are scripts shipped
-from the installed plugin root, so the **plugin source and installed
-plugin cache are part of your trusted compute boundary** — anyone who
-can write to those directories can change what runs at every Codex
-lifecycle boundary on your machine.
+`UserPromptSubmit`, and `Stop`. The Cerberus hook manifest resolves the
+installed plugin root and invokes the Go binary from that root, so the
+**plugin source and installed plugin cache are part of your trusted
+compute boundary** — anyone who can write to those directories can
+change what runs at every Codex lifecycle boundary on your machine.
 
 Concrete consequences:
 
@@ -147,10 +150,9 @@ Concrete consequences:
   `/tmp/cerberus` is not.
 - **Audit the plugin source before installing or refreshing it.** The
   bundled hook config resolves `${PLUGIN_ROOT}` to the installed plugin
-  root, so `bin/codex-session-init` and `bin/codex-stop-hook` from that
-  plugin copy run at lifecycle boundaries. If you fork Cerberus and
-  pull from the fork, treat the fork as production code. Review changes
-  before pulling.
+  root, so `bin/cerberus hook ...` from that plugin copy runs at
+  lifecycle boundaries. If you fork Cerberus and pull from the fork,
+  treat the fork as production code. Review changes before pulling.
 - **Sandbox / read-only constraints come from the reviewer CLIs.** The
   Cerberus backend itself does not gate writes; reviewer-side
   read-only enforcement (e.g. Gemini's Policy Engine via
@@ -304,14 +306,14 @@ contains blocking findings (verdict `FAIL` or priority `P0`/`P1`), or when
 the resolved gate has an explicit `consensus_verdict == "fail"`. In every
 other path the user keeps the ability to stop.
 
-The `SessionStart` / `UserPromptSubmit` adapter
-(`bin/codex-session-init`) is **not** failure-open — it exits non-zero
-on malformed stdin or invalid project key / run key. Hook writer
-failure cannot trap the user the way a Stop failure could; the
-worst-case is that subsequent skills fail with a clear registry setup
-diagnostic. The atomic write algorithm (write to `<file>.tmp.$$`,
-validate, `mv`) ensures that a kill mid-write leaves the previous valid
-registry intact.
+The `SessionStart` / `UserPromptSubmit` hook path (`bin/cerberus hook
+codex-session-start` and `bin/cerberus hook codex-prompt-submit`) is
+**not** failure-open — it exits non-zero on malformed stdin or invalid
+project key / run key. Hook writer failure cannot trap the user the way
+a Stop failure could; the worst-case is that subsequent skills fail
+with a clear registry setup diagnostic. The atomic write algorithm
+ensures that a kill mid-write leaves the previous valid registry
+intact.
 
 ## Troubleshooting
 
@@ -372,13 +374,14 @@ a review is in flight.
 **Fix:** Trigger `UserPromptSubmit` or `SessionStart` again (typically
 by submitting another prompt or starting a fresh Codex session).
 When a Codex skill runs through a shell command, Codex also exposes
-`CODEX_THREAD_ID`; `bin/cerberus-skill-env` uses that value to refresh a
-missing or stale registry before spawning a review.
-`bin/codex-session-init` is **last-writer-wins** by design (plan
-§Atomic Write Invariants); the new registry overwrites the old. The Stop
-hook also verifies that `active-session.json.session_id` matches the
-Stop payload's `session_id` and ignores stale registries from other
-sessions. If you need to inspect or clear the registry directly:
+`CODEX_THREAD_ID`; the skill bootstrap and Go backend use Codex hook
+state to refresh a missing or stale registry before spawning a review.
+`bin/cerberus hook codex-session-start` and `bin/cerberus hook
+codex-prompt-submit` are **last-writer-wins** by design (plan §Atomic
+Write Invariants); the new registry overwrites the old. The Stop hook
+also verifies that `active-session.json.session_id` matches the Stop
+payload's `session_id` and ignores stale registries from other sessions.
+If you need to inspect or clear the registry directly:
 
 ```bash
 ls -l ~/.cerberus/runtime/codex/
@@ -429,16 +432,16 @@ reviewer wait budget).
 **Fix:** The Stop hook is failure-open and should not block longer
 than `REVIEW_GATE_MAX_WAIT_SECONDS` (default `1800`). If you observe a
 hang, send SIGTERM to the hook process — the trap will emit a single
-allow envelope and exit 0. File a bug report including the stderr log
-lines (search for `codex-stop-hook:`).
+allow envelope and exit 0. File a bug report including stderr from
+`cerberus hook codex-stop`.
 
 ## Manual Smoke Test (Phase 1 Release Gate)
 
 The agent-completable verification is covered by the Phase 0/1
-automated test suite (`bin/tests/test-host-neutral-state.sh`,
-`bin/tests/test-status-command.sh`,
-`bin/tests/test-codex-session-registry.sh`,
-`bin/tests/test-codex-stop-hook.sh`, plus the existing Claude
+automated test suite (`internal/hook/codex_test.go`,
+`tests/integration/codex_hook_skeleton_test.go`,
+`tests/integration/codex_session_init_test.go`, and
+`tests/integration/codex_stop_test.go`, plus the existing Claude
 regression suite). Before tagging the Cerberus vX+1 release the
 maintainer also runs the following manual smoke on a clean Codex
 install. None of these are automated; they're a release gate, not a
@@ -492,9 +495,9 @@ These are the testable exit criteria from the original Phase 1 plan:
 
 | Criterion | Verified by |
 |---|---|
-| Codex `SessionStart` / `UserPromptSubmit` creates or refreshes the session registry atomically | `bin/tests/test-codex-session-registry.sh` (T008) |
+| Codex `SessionStart` / `UserPromptSubmit` creates or refreshes the session registry atomically | `internal/hook/codex_test.go` + `tests/integration/codex_session_init_test.go` |
 | Codex review skills spawn reviewers and reattach across `SessionStart` / `UserPromptSubmit` / `Stop` transitions | T010 skills + manual smoke step 3-6 |
-| Codex `Stop` matrix behaves per spec for every row 1–13 | `bin/tests/test-codex-stop-hook.sh` (T009) + manual smoke step 4-5 |
+| Codex `Stop` matrix behaves per spec for every row 1–13 | `internal/hook/codex_test.go` + `tests/integration/codex_stop_test.go` + manual smoke step 4-5 |
 | `Clear Gate` resolves the intended run | T010 skills + manual smoke step 7 |
 | Claude plugin behavior remains unchanged (full Claude suite passes) | Existing `bin/tests/*.sh` (regression) |
 | `gate-state.json` records `host: "codex"` for Codex-originated runs | T004 host-metadata writer + manual smoke step 8 |
