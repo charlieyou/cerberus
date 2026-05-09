@@ -26,6 +26,7 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				ID:       provider + "#1",
 				Provider: provider,
 				Model:    "model-name",
+				Mode:     "max",
 				System:   []byte("system prompt"),
 				User:     []byte("large user prompt body"),
 			})
@@ -46,6 +47,9 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 			}
 			if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
 				t.Fatalf("argv = %q, want system prompt flag", args)
+			}
+			if !strings.Contains(args, "Cerberus review mode: max.") {
+				t.Fatalf("argv = %q, want review mode in system prompt", args)
 			}
 			if provider == "claude" && !strings.Contains(args, "--model\nmodel-name") {
 				t.Fatalf("claude argv = %q, want model flag", args)

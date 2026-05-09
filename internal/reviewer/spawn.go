@@ -118,7 +118,8 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 }
 
 func (runner Runner) command(ctx context.Context, request Request, user []byte) (*exec.Cmd, error) {
-	if bytes.Contains([]byte(request.Provider), []byte{0}) || bytes.Contains([]byte(request.Model), []byte{0}) || bytes.Contains(request.System, []byte{0}) {
+	system := systemPromptWithMode(request.System, request.Mode)
+	if bytes.Contains([]byte(request.Provider), []byte{0}) || bytes.Contains([]byte(request.Model), []byte{0}) || bytes.Contains(system, []byte{0}) {
 		return nil, fmt.Errorf("reviewer command contains NUL byte")
 	}
 	if bytes.Contains(user, []byte{0}) {
@@ -128,9 +129,9 @@ func (runner Runner) command(ctx context.Context, request Request, user []byte) 
 	args := []string{}
 	switch request.Provider {
 	case "claude":
-		args = []string{"--print", "--output-format", "json", "--model", request.Model, "--append-system-prompt", string(request.System)}
+		args = []string{"--print", "--output-format", "json", "--model", request.Model, "--append-system-prompt", string(system)}
 	case "codex":
-		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(request.System)}
+		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(system)}
 	case "gemini":
 		root := firstNonEmpty(request.Root, runner.Root)
 		if root == "" {
@@ -140,11 +141,22 @@ func (runner Runner) command(ctx context.Context, request Request, user []byte) 
 		if _, err := os.Stat(policyPath); err != nil {
 			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
 		}
-		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(request.System), "--policy-file", policyPath}
+		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(system), "--policy-file", policyPath}
 	default:
 		return nil, fmt.Errorf("unsupported reviewer provider %q", request.Provider)
 	}
 	return exec.CommandContext(ctx, request.Provider, args...), nil
+}
+
+func systemPromptWithMode(system []byte, mode string) []byte {
+	if mode == "" {
+		return system
+	}
+	directive := []byte("Cerberus review mode: " + mode + ".")
+	if len(system) == 0 {
+		return directive
+	}
+	return bytes.Join([][]byte{system, directive}, []byte("\n\n"))
 }
 
 func firstNonEmpty(values ...string) string {
