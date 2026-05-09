@@ -5,11 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/prompts"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/roster"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 type roundPrompts struct {
@@ -20,7 +25,12 @@ type roundPrompts struct {
 	RuntimeMode string
 }
 
-func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]reviewer.RawReviewerOutput, error) {
+type roundReviewerResult struct {
+	Output reviewer.RawReviewerOutput
+	Row    telemetry.ReviewerRow
+}
+
+func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]roundReviewerResult, error) {
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("review round requires at least one reviewer")
 	}
@@ -31,7 +41,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	outputs := make([]reviewer.RawReviewerOutput, len(slots))
+	outputs := make([]roundReviewerResult, len(slots))
 	errs := make(chan roundError, len(slots))
 	var wg sync.WaitGroup
 
@@ -47,6 +57,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				cancel()
 				return
 			}
+			startedAt := time.Now().UTC()
 			response, err := spawner.Spawn(ctx, reviewer.Request{
 				ID:        slot.ID,
 				Provider:  slot.Provider,
@@ -64,6 +75,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				cancel()
 				return
 			}
+			endedAt := time.Now().UTC()
 			parsed := response.Parsed
 			if parsed == nil {
 				parsed, err = reviewer.Parse(response.Output)
@@ -73,7 +85,20 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 					return
 				}
 			}
-			outputs[i] = *parsed
+			row, err := reviewerTelemetryRow(slot, i, prompts.RuntimeMode, response, parsed, startedAt, endedAt)
+			if err != nil {
+				errs <- roundError{err: err}
+				cancel()
+				return
+			}
+			if prompts.RunRoot != "" {
+				if err := telemetry.WriteReviewerRow(prompts.RunRoot, 1, 1, &row); err != nil {
+					errs <- roundError{err: err}
+					cancel()
+					return
+				}
+			}
+			outputs[i] = roundReviewerResult{Output: *parsed, Row: row}
 		}()
 	}
 
@@ -96,6 +121,56 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 		return nil, canceled
 	}
 	return outputs, nil
+}
+
+func reviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode string, response reviewer.Response, output *reviewer.RawReviewerOutput, startedAt, endedAt time.Time) (telemetry.ReviewerRow, error) {
+	verdict, err := aggregate.NormalizeVerdict(output.Verdict)
+	if err != nil {
+		return telemetry.ReviewerRow{}, err
+	}
+	instanceIndex := slot.InstanceIndex
+	if instanceIndex <= 0 {
+		instanceIndex = slotIndex + 1
+	}
+	reviewerID := firstNonEmpty(response.ID, slot.ID)
+	confidence := 0.5
+	if output.OverallConfidence != nil {
+		confidence = *output.OverallConfidence
+	}
+	round := 1
+	if output.Round != nil && *output.Round > 0 {
+		round = *output.Round
+	}
+
+	return telemetry.ReviewerRow{
+		ReviewerID:        reviewerID,
+		InstanceIndex:     instanceIndex,
+		Provider:          slot.Provider,
+		Model:             slot.Model,
+		Strategy:          slot.Strategy,
+		PersonaName:       personaName(slot.PersonaPath),
+		Mode:              firstNonEmpty(slot.Mode, runtimeMode),
+		Tokens:            telemetry.Tokens{Input: response.Tokens.Input, Output: response.Tokens.Output},
+		CostUSD:           response.CostUSD,
+		PeerID:            fmt.Sprintf("peer_%d", instanceIndex),
+		Verdict:           verdict,
+		OverallConfidence: confidence,
+		Round:             round,
+		TimeToFinishMS:    endedAt.Sub(startedAt).Milliseconds(),
+		StartedAt:         startedAt,
+		EndedAt:           &endedAt,
+	}, nil
+}
+
+func personaName(path string) *string {
+	if path == "" {
+		return nil
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if name == "" || name == "." {
+		return nil
+	}
+	return &name
 }
 
 func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, error) {

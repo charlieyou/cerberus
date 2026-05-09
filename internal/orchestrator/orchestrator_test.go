@@ -134,6 +134,65 @@ func TestRunSinglePassCLIParamsOverrideRosterDefaults(t *testing.T) {
 	}
 }
 
+func TestRunSinglePassWritesReviewerRoundAndIterationTelemetry(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := usageSpawner{}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Mode:   "smart",
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "gpt-5.4", Strategy: "falsification-first", InstanceIndex: 1},
+			{ID: "claude#2", Provider: "claude", Model: "sonnet", InstanceIndex: 2},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	row := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
+	if got, want := row["reviewer_id"], "codex#1"; got != want {
+		t.Fatalf("reviewer_id = %v, want %q", got, want)
+	}
+	if got, want := row["instance_index"], float64(1); got != want {
+		t.Fatalf("instance_index = %v, want %v", got, want)
+	}
+	if got := row["persona_name"]; got != nil {
+		t.Fatalf("persona_name = %v, want nil", got)
+	}
+	tokens := row["tokens"].(map[string]any)
+	if got, want := tokens["input"], float64(10); got != want {
+		t.Fatalf("tokens.input = %v, want %v", got, want)
+	}
+	if got, want := row["cost_usd"], 0.01; got != want {
+		t.Fatalf("cost_usd = %v, want %v", got, want)
+	}
+
+	roundTelemetry := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "round-telemetry.json"))
+	if got, want := roundTelemetry["reviewer_count"], float64(2); got != want {
+		t.Fatalf("round reviewer_count = %v, want %v", got, want)
+	}
+	if got, want := roundTelemetry["consensus_pct"], float64(1); got != want {
+		t.Fatalf("round consensus_pct = %v, want %v", got, want)
+	}
+
+	iterationTelemetry := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "iteration-telemetry.json"))
+	summary := iterationTelemetry["reviewer_summary"].([]any)
+	if len(summary) != 2 {
+		t.Fatalf("reviewer_summary length = %d, want 2", len(summary))
+	}
+	runTelemetry := readRunTelemetry(t, env)
+	totalTokens := runTelemetry["total_tokens"].(map[string]any)
+	if got, want := totalTokens["input"], float64(30); got != want {
+		t.Fatalf("run total_tokens.input = %v, want %v", got, want)
+	}
+	if got, want := runTelemetry["total_cost_usd"], 0.03; got != want {
+		t.Fatalf("run total_cost_usd = %v, want %v", got, want)
+	}
+}
+
 func TestRunSinglePassSlotModeOverridesRuntimeModeForReviewer(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
@@ -310,6 +369,24 @@ func (spawner modeSpawner) Spawn(ctx context.Context, request reviewer.Request) 
 	return passResponse(request.ID)
 }
 
+type usageSpawner struct{}
+
+func (usageSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	response, err := passResponse(request.ID)
+	if err != nil {
+		return reviewer.Response{}, err
+	}
+	switch request.ID {
+	case "codex#1":
+		response.Tokens = reviewer.Tokens{Input: 10, Output: 5}
+		response.CostUSD = 0.01
+	case "claude#2":
+		response.Tokens = reviewer.Tokens{Input: 20, Output: 7}
+		response.CostUSD = 0.02
+	}
+	return response, nil
+}
+
 func passResponse(id string) (reviewer.Response, error) {
 	confidence := 0.9
 	round := 1
@@ -390,13 +467,18 @@ func readGate(t *testing.T, env *config.Env) *state.GateState {
 func readRunTelemetry(t *testing.T, env *config.Env) map[string]any {
 	t.Helper()
 	path := filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "run-telemetry.json")
+	return readJSONFile(t, path)
+}
+
+func readJSONFile(t *testing.T, path string) map[string]any {
+	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile(run telemetry) error = %v", err)
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("Unmarshal(run telemetry) error = %v", err)
+		t.Fatalf("Unmarshal(%s) error = %v", path, err)
 	}
 	return got
 }

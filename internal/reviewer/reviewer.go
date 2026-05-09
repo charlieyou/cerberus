@@ -19,14 +19,21 @@ type Request struct {
 
 // Response contains the canonical JSON emitted by one reviewer.
 type Response struct {
-	ID     string
-	Output []byte
-	Parsed *RawReviewerOutput
+	ID      string
+	Output  []byte
+	Parsed  *RawReviewerOutput
+	Tokens  Tokens
+	CostUSD float64
 }
 
 // Spawner starts reviewer work. Prompt bytes are supplied for stdin, not argv.
 type Spawner interface {
 	Spawn(ctx context.Context, request Request) (Response, error)
+}
+
+type Tokens struct {
+	Input  int
+	Output int
 }
 
 // RawReviewerOutput is the v1 per-reviewer JSON schema. Verdict is intentionally

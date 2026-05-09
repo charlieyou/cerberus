@@ -127,7 +127,8 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 		return err
 	}
 
-	outputs, err := runRound(ctx, slots, spawner, roundPrompts{
+	roundStartedAt := time.Now().UTC()
+	roundResults, err := runRound(ctx, slots, spawner, roundPrompts{
 		User:        params.Prompt,
 		RunRoot:     runRoot,
 		Root:        resolvedEnv.Root,
@@ -136,12 +137,38 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	if err != nil {
 		return err
 	}
+	outputs := make([]reviewer.RawReviewerOutput, len(roundResults))
+	for i, result := range roundResults {
+		outputs[i] = result.Output
+	}
 	result, err := aggregate.Compute(outputs, consensus)
 	if err != nil {
 		return err
 	}
 
 	endedAt := time.Now().UTC()
+	reviewerSummary, totalTokens, totalCostUSD := telemetryTotals(roundResults)
+	if err := telemetry.WriteRoundTelemetry(runRoot, 1, 1, &telemetry.RoundTelemetry{
+		Round:         1,
+		ReviewerCount: len(roundResults),
+		ConsensusPct:  consensusPct(roundResults, result.Verdict),
+		Abstentions:   0,
+		KStarEstimate: nil,
+		StartedAt:     roundStartedAt,
+		EndedAt:       &endedAt,
+	}); err != nil {
+		return err
+	}
+	if err := telemetry.WriteIterationTelemetry(runRoot, 1, &telemetry.IterationTelemetry{
+		Iteration:       1,
+		Rounds:          1,
+		Verdict:         result.Verdict,
+		ReviewerSummary: reviewerSummary,
+		StartedAt:       startedAt,
+		EndedAt:         &endedAt,
+	}); err != nil {
+		return err
+	}
 	state.MarkResolved(gate, result.Verdict, endedAt)
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return err
@@ -164,10 +191,44 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 		Debate:       false,
 		Iterations:   1,
 		TotalRounds:  1,
+		TotalTokens:  totalTokens,
+		TotalCostUSD: totalCostUSD,
 		FinalVerdict: result.Verdict,
 		StartedAt:    startedAt,
 		EndedAt:      &endedAt,
 	})
+}
+
+func telemetryTotals(results []roundReviewerResult) ([]telemetry.ReviewerSummary, telemetry.Tokens, float64) {
+	summary := make([]telemetry.ReviewerSummary, len(results))
+	var totalTokens telemetry.Tokens
+	var totalCostUSD float64
+	for i, result := range results {
+		row := result.Row
+		summary[i] = telemetry.ReviewerSummary{
+			ReviewerID: row.ReviewerID,
+			Verdict:    row.Verdict,
+			Tokens:     row.Tokens,
+			CostUSD:    row.CostUSD,
+		}
+		totalTokens.Input += row.Tokens.Input
+		totalTokens.Output += row.Tokens.Output
+		totalCostUSD += row.CostUSD
+	}
+	return summary, totalTokens, totalCostUSD
+}
+
+func consensusPct(results []roundReviewerResult, verdict string) float64 {
+	if len(results) == 0 {
+		return 0
+	}
+	matching := 0
+	for _, result := range results {
+		if result.Row.Verdict == verdict {
+			matching++
+		}
+	}
+	return float64(matching) / float64(len(results))
 }
 
 func resolveRun(env *config.Env) (*config.Env, string, error) {

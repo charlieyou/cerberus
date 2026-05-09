@@ -100,6 +100,7 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		return Response{}, fmt.Errorf("reviewer %s failed: %w; stderr: %s", request.ID, runErr, stderr.String())
 	}
 
+	tokens, costUSD := extractUsage(stdout.Bytes())
 	parsed, err := Parse(stdout.Bytes())
 	if err != nil {
 		return Response{}, err
@@ -114,7 +115,33 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 			return Response{}, err
 		}
 	}
-	return Response{ID: request.ID, Output: outputJSON, Parsed: parsed}, nil
+	return Response{ID: request.ID, Output: outputJSON, Parsed: parsed, Tokens: tokens, CostUSD: costUSD}, nil
+}
+
+func extractUsage(stdout []byte) (Tokens, float64) {
+	var payload struct {
+		Tokens struct {
+			Input  int `json:"input"`
+			Output int `json:"output"`
+		} `json:"tokens"`
+		Usage struct {
+			InputTokens      int `json:"input_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+		CostUSD      float64 `json:"cost_usd"`
+		TotalCostUSD float64 `json:"total_cost_usd"`
+	}
+	if err := json.Unmarshal(stdout, &payload); err != nil {
+		return Tokens{}, 0
+	}
+
+	tokens := Tokens{
+		Input:  firstPositive(payload.Tokens.Input, payload.Usage.InputTokens, payload.Usage.PromptTokens),
+		Output: firstPositive(payload.Tokens.Output, payload.Usage.OutputTokens, payload.Usage.CompletionTokens),
+	}
+	return tokens, firstPositiveFloat(payload.CostUSD, payload.TotalCostUSD)
 }
 
 func (runner Runner) command(ctx context.Context, request Request, user []byte) (*exec.Cmd, error) {
@@ -169,6 +196,15 @@ func firstNonEmpty(values ...string) string {
 }
 
 func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstPositiveFloat(values ...float64) float64 {
 	for _, value := range values {
 		if value > 0 {
 			return value

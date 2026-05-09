@@ -57,6 +57,21 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 	if err := hook.PollGateState(gateStatePath(env), 100*time.Millisecond, 5*time.Second); err != nil {
 		t.Fatalf("Stop hook poll failed: %v", err)
 	}
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	for _, reviewerID := range []string{"claude#1", "codex#1", "gemini#1"} {
+		if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", reviewerID, "telemetry.json")); err != nil {
+			t.Fatalf("reviewer telemetry for %s missing: %v", reviewerID, err)
+		}
+	}
+	for _, name := range []string{
+		filepath.Join("iterations", "1", "round-1", "round-telemetry.json"),
+		filepath.Join("iterations", "1", "iteration-telemetry.json"),
+		"run-telemetry.json",
+	} {
+		if _, err := os.Stat(filepath.Join(runRoot, name)); err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+	}
 }
 
 type passReviewerStub struct {
