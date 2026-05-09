@@ -39,6 +39,11 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 		VerdictFail:             0,
 		VerdictRequiresDecision: 0,
 	}
+	counts := map[string]int{
+		VerdictPass:             0,
+		VerdictFail:             0,
+		VerdictRequiresDecision: 0,
+	}
 	var total float64
 	var blockers []FindingRef
 	allPass := true
@@ -55,6 +60,7 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 		anyRequiresDecision = anyRequiresDecision || verdict == VerdictRequiresDecision
 		weight := confidenceWeight(output.OverallConfidence)
 		weights[verdict] += weight
+		counts[verdict]++
 		total += weight
 		blockers = append(blockers, blockingFindings(index, output.Findings)...)
 	}
@@ -63,7 +69,7 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 		return Result{Verdict: VerdictFail, Blockers: blockers}, nil
 	}
 
-	return Result{Verdict: computeVerdict(weights, total, mode, allPass, anyPass, anyRequiresDecision)}, nil
+	return Result{Verdict: computeVerdict(weights, counts, total, len(outputs), mode, allPass, anyPass, anyRequiresDecision)}, nil
 }
 
 func normalizeMode(mode Mode) Mode {
@@ -79,7 +85,7 @@ func normalizeMode(mode Mode) Mode {
 
 func confidenceWeight(confidence *float64) float64 {
 	if confidence == nil {
-		return 0
+		return 0.5
 	}
 	if *confidence <= 0 {
 		return 0
@@ -87,7 +93,7 @@ func confidenceWeight(confidence *float64) float64 {
 	return *confidence
 }
 
-func computeVerdict(weights map[string]float64, total float64, mode Mode, allPass bool, anyPass bool, anyRequiresDecision bool) string {
+func computeVerdict(weights map[string]float64, counts map[string]int, total float64, count int, mode Mode, allPass bool, anyPass bool, anyRequiresDecision bool) string {
 	switch mode {
 	case ModeAll:
 		if allPass {
@@ -103,6 +109,15 @@ func computeVerdict(weights map[string]float64, total float64, mode Mode, allPas
 		}
 		return VerdictFail
 	default:
+		if total == 0 {
+			if counts[VerdictPass] > count/2 {
+				return VerdictPass
+			}
+			if counts[VerdictFail] > count/2 {
+				return VerdictFail
+			}
+			return VerdictRequiresDecision
+		}
 		if weights[VerdictPass] > total/2 {
 			return VerdictPass
 		}
