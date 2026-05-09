@@ -20,6 +20,10 @@ import (
 type Params struct {
 	Prompt    []byte
 	Reviewers []ReviewerSlot
+	Mode      string
+	MaxRounds int
+	Consensus aggregate.Mode
+	RosterID  string
 }
 
 // ReviewerSlot names one resolved reviewer slot.
@@ -61,6 +65,23 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	}
 
 	startedAt := time.Now().UTC()
+	mode := params.Mode
+	if mode == "" {
+		mode = "smart"
+	}
+	maxRounds := params.MaxRounds
+	if maxRounds <= 0 {
+		maxRounds = 1
+	}
+	rosterID := params.RosterID
+	if rosterID == "" {
+		rosterID = "default"
+	}
+	consensus := params.Consensus
+	if consensus == "" {
+		consensus = aggregate.ModeMajority
+	}
+
 	gate := &state.GateState{
 		RunKey:           resolvedEnv.RunKey,
 		Host:             resolvedEnv.Host,
@@ -70,9 +91,9 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 		Status:           state.StatusPending,
 		Verdict:          nil,
 		CurrentIteration: 1,
-		MaxRounds:        1,
+		MaxRounds:        maxRounds,
 		Debate:           false,
-		RosterID:         "default",
+		RosterID:         rosterID,
 		StartedAt:        startedAt,
 	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
@@ -97,7 +118,7 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	if err != nil {
 		return err
 	}
-	result, err := aggregate.Compute(outputs, aggregate.ModeMajority)
+	result, err := aggregate.Compute(outputs, consensus)
 	if err != nil {
 		return err
 	}
@@ -120,8 +141,8 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	return telemetry.WriteRunTelemetry(runRoot, &telemetry.RunTelemetry{
 		RunKey:       resolvedEnv.RunKey,
 		Host:         resolvedEnv.Host,
-		Mode:         "smart",
-		RosterID:     "default",
+		Mode:         mode,
+		RosterID:     rosterID,
 		Debate:       false,
 		Iterations:   1,
 		TotalRounds:  1,
