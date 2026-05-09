@@ -214,6 +214,21 @@ if [[ "$legacy_claude_transcript" != "/tmp/legacy-claude-transcript.jsonl" ]]; t
 fi
 log_pass "cerberus-skill-env maps legacy review gate session key for Claude"
 
+log_test "cerberus-skill-env prefers Claude session id over legacy review gate session key"
+mixed_claude_env_output="$TEST_DIR/claude-mixed-skill-env.out"
+env CERBERUS_ROOT="$PLUGIN_ROOT" CLAUDE_SESSION_ID=claude-session-002 REVIEW_GATE_SESSION_KEY=legacy-claude-run-002 \
+    "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n%s\n" "$CERBERUS_SESSION_ID" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT" \
+    > "$mixed_claude_env_output"
+mixed_claude_session="$(sed -n '1p' "$mixed_claude_env_output")"
+mixed_claude_run="$(sed -n '2p' "$mixed_claude_env_output")"
+if [[ "$mixed_claude_session" != "claude-session-002" ]]; then
+    log_fail "expected mixed Claude skill env to keep Claude session id, got: $mixed_claude_session"
+fi
+if [[ "$mixed_claude_run" != "claude-session-002" ]]; then
+    log_fail "expected mixed Claude skill env to align run key with Stop hook session id, got: $mixed_claude_run"
+fi
+log_pass "cerberus-skill-env prefers Claude session id over legacy review gate session key"
+
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
 extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
