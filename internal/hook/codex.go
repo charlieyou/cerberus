@@ -29,7 +29,7 @@ func HandleCodexStop(stdinPayload []byte, env *config.Env) error {
 }
 
 func handleCodexStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) error {
-	_, runRoot, err := resolveCodexHookRun(stdinPayload, env)
+	_, runRoot, err := resolveCodexHookRunWithPolicy(stdinPayload, env, activeCodexStopRunKey)
 	if err != nil {
 		return err
 	}
@@ -81,6 +81,10 @@ func sessionInit(env *config.Env, stdinPayload []byte) error {
 }
 
 func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, string, error) {
+	return resolveCodexHookRunWithPolicy(stdinPayload, env, activeCodexRunKey)
+}
+
+func resolveCodexHookRunWithPolicy(stdinPayload []byte, env *config.Env, runKeyPolicy func(*config.Env, string) (string, bool)) (*config.Env, string, error) {
 	if env == nil {
 		env = config.Resolve()
 	}
@@ -133,7 +137,7 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 		}
 		resolved.StateRoot = stateRoot
 	}
-	if runKey, ok := activeCodexRunKey(&resolved, payload.SessionID); ok {
+	if runKey, ok := runKeyPolicy(&resolved, payload.SessionID); ok {
 		resolved.RunKey = runKey
 	} else if payload.SessionID != "" {
 		resolved.RunKey = payload.SessionID
@@ -174,11 +178,26 @@ func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) 
 		if cache.SessionID == payloadSessionID && cache.RunKey != "" {
 			return cache.RunKey, true
 		}
-		if hasGateState(env.StateRoot, env.ProjectKey, cache.RunKey) {
+	}
+	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
+}
+
+func activeCodexStopRunKey(env *config.Env, payloadSessionID string) (string, bool) {
+	if env.StateRoot == "" || env.ProjectKey == "" {
+		return "", false
+	}
+	if env.RunKey == payloadSessionID && hasGateState(env.StateRoot, env.ProjectKey, env.RunKey) {
+		return env.RunKey, true
+	}
+	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
+		return payloadSessionID, true
+	}
+	if cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey)); err == nil {
+		if cache.SessionID == payloadSessionID && cache.RunKey != "" {
 			return cache.RunKey, true
 		}
 	}
-	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
+	return "", false
 }
 
 func hasGateState(stateRoot, projectKey, runKey string) bool {

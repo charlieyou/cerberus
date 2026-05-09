@@ -151,6 +151,38 @@ func TestHandleCodexStopReturnsErrorAfterMaxWait(t *testing.T) {
 	}
 }
 
+func TestHandleCodexStopIgnoresStaleCachedRunForDifferentSession(t *testing.T) {
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "session-a",
+		CodexSessionID: "session-a",
+		RunKey:         "run-a",
+		TranscriptPath: "/tmp/session-a.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	staleGatePath := filepath.Join(env.StateRoot, "project", "run-a", "gate-state.json")
+	if err := state.WriteGateState(staleGatePath, &state.GateState{Status: state.StatusPending}); err != nil {
+		t.Fatalf("seed stale pending gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
+	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	if err != nil {
+		t.Fatalf("HandleCodexStop() error = %v, want session-b to ignore stale session-a gate", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "session-b", "event-log.jsonl")); err != nil {
+		t.Fatalf("session-b allowed event missing: %v", err)
+	}
+	staleEventsPath := filepath.Join(env.StateRoot, "project", "run-a", "event-log.jsonl")
+	if _, err := os.Stat(staleEventsPath); !os.IsNotExist(err) {
+		t.Fatalf("stale run was polled; stat %s err = %v", staleEventsPath, err)
+	}
+}
+
 func TestHandleCodexStopReturnsErrorForMalformedGateState(t *testing.T) {
 	payload := readCodexFixture(t, "hook-payload-stop.json")
 	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
