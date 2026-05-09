@@ -14,6 +14,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/hook"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
@@ -71,6 +72,11 @@ func TestSpawnCodeReviewRejectsAgentsWithRoster(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--agents is mutually exclusive with --roster and --reviewer") {
 		t.Fatalf("stderr = %q, want --agents mutex error", stderr.String())
 	}
+	events := readSpawnEventLog(t)
+	event := findSpawnEvent(t, events, telemetry.EventPreflightFailed)
+	if got, want := event["stage"], "flags"; got != want {
+		t.Fatalf("preflight failed stage = %v, want %q", got, want)
+	}
 }
 
 func TestSpawnCodeReviewRejectsDebate(t *testing.T) {
@@ -84,6 +90,25 @@ func TestSpawnCodeReviewRejectsDebate(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "debate not yet implemented in Epic B; see Epic C") {
 		t.Fatalf("stderr = %q, want debate error", stderr.String())
+	}
+}
+
+func TestSpawnCodeReviewRecordsResolvePreflightFailure(t *testing.T) {
+	setSpawnTestEnv(t)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "unknown"}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("spawn-code-review exit code = 0, want non-zero")
+	}
+	events := readSpawnEventLog(t)
+	event := findSpawnEvent(t, events, telemetry.EventPreflightFailed)
+	if got, want := event["stage"], "roster"; got != want {
+		t.Fatalf("preflight failed stage = %v, want %q", got, want)
+	}
+	if !strings.Contains(event["error"].(string), `unsupported provider "unknown"`) {
+		t.Fatalf("preflight failed error = %v, want unsupported provider", event["error"])
 	}
 }
 
@@ -572,6 +597,36 @@ func readSpawnGate(t *testing.T) *state.GateState {
 
 func spawnGatePath() string {
 	return state.GateStatePath(state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run"))
+}
+
+func readSpawnEventLog(t *testing.T) []map[string]any {
+	t.Helper()
+	path := filepath.Join(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run", "event-log.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	events := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("Unmarshal event %q error = %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func findSpawnEvent(t *testing.T, events []map[string]any, eventName string) map[string]any {
+	t.Helper()
+	for _, event := range events {
+		if event["event"] == eventName {
+			return event
+		}
+	}
+	t.Fatalf("missing event %s in %#v", eventName, events)
+	return nil
 }
 
 func startRuntimeInlineForTest(t *testing.T, beforeComplete func()) {

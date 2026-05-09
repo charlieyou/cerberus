@@ -65,16 +65,17 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if env == nil {
 		env = config.Resolve()
 	}
+	resolvedEnv, runRoot, err := resolveRun(env)
+	if err != nil {
+		return nil, err
+	}
 	slots, defaults, err := resolveSlots(params)
 	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "roster", err)
 		return nil, err
 	}
 	if err := preflightExplicitSlots(slots, params.Reviewers != nil); err != nil {
-		return nil, err
-	}
-
-	resolvedEnv, runRoot, err := resolveRun(env)
-	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "reviewer", err)
 		return nil, err
 	}
 
@@ -125,6 +126,23 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 		return nil, err
 	}
 	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventRosterSelected,
+		Timestamp: startedAt,
+		Payload: map[string]any{
+			"run_key":        resolvedEnv.RunKey,
+			"host":           resolvedEnv.Host,
+			"roster_id":      rosterID,
+			"roster_name":    rosterID,
+			"reviewer_count": len(slots),
+			"providers":      providerBreakdown(slots),
+			"debate":         false,
+		},
+	}); err != nil {
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("roster selected telemetry failed: %v", err))
+		_ = state.WriteGateState(gatePath, gate)
+		return nil, err
+	}
+	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
 		Event:     telemetry.EventReviewSpawned,
 		Timestamp: startedAt,
 		Payload: map[string]any{
@@ -143,6 +161,19 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	params.Consensus = consensus
 	params.RosterID = rosterID
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
+}
+
+// RecordPreflightFailure records a pre-run validation failure when the CLI
+// rejects input before it can create a pending gate.
+func RecordPreflightFailure(env *config.Env, stage string, cause error) error {
+	if env == nil {
+		env = config.Resolve()
+	}
+	resolvedEnv, runRoot, err := resolveRun(env)
+	if err != nil {
+		return err
+	}
+	return writePreflightFailureEvent(runRoot, resolvedEnv, stage, cause)
 }
 
 // CompleteSinglePass runs reviewers for a pending gate and resolves it.
@@ -377,6 +408,36 @@ func reviewerSlotsFromRoster(slots []roster.RosterSlot) []ReviewerSlot {
 		}
 	}
 	return reviewers
+}
+
+func providerBreakdown(slots []ReviewerSlot) map[string]int {
+	providers := make(map[string]int)
+	for _, slot := range slots {
+		providers[slot.Provider]++
+	}
+	return providers
+}
+
+func writePreflightFailureEvent(runRoot string, env *config.Env, stage string, cause error) error {
+	if runRoot == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"stage": stage,
+	}
+	if env != nil {
+		payload["run_key"] = env.RunKey
+		payload["host"] = env.Host
+		payload["project_key"] = env.ProjectKey
+	}
+	if cause != nil {
+		payload["error"] = cause.Error()
+	}
+	return telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventPreflightFailed,
+		Timestamp: time.Now().UTC(),
+		Payload:   payload,
+	})
 }
 
 func preflightExplicitSlots(slots []ReviewerSlot, explicit bool) error {

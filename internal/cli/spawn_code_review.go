@@ -33,21 +33,26 @@ func (values *repeatString) Set(value string) error {
 func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseSpawnCodeReviewFlags(args, stderr)
 	if err != nil {
+		recordSpawnPreflightFailure("flags", err)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	if opts.debate {
-		fmt.Fprintln(stderr, "debate not yet implemented in Epic B; see Epic C")
+		err := errors.New("debate not yet implemented in Epic B; see Epic C")
+		recordSpawnPreflightFailure("debate", err)
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 
 	resolved, err := resolveReviewers(opts)
 	if err != nil {
+		recordSpawnPreflightFailure("roster", err)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	prompt, err := buildCodeReviewPrompt(opts)
 	if err != nil {
+		recordSpawnPreflightFailure("prompt", err)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -76,6 +81,10 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "review spawned")
 	return 0
+}
+
+func recordSpawnPreflightFailure(stage string, err error) {
+	_ = orchestrator.RecordPreflightFailure(config.Resolve(), stage, err)
 }
 
 var startReviewRuntime = startReviewRuntimeProcess

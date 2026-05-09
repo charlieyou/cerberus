@@ -124,7 +124,7 @@ func TestWriteEventConcurrentAppendsDistinctLines(t *testing.T) {
 	runRoot := t.TempDir()
 	var wg sync.WaitGroup
 
-	for _, eventName := range []string{EventReviewerStarted, EventReviewerCompleted, EventReviewerFailed} {
+	for _, eventName := range []string{EventReviewerSpawned, EventReviewerCompleted, EventReviewerFailed} {
 		wg.Add(1)
 		go func(eventName string) {
 			defer wg.Done()
@@ -148,7 +148,7 @@ func TestWriteEventConcurrentAppendsDistinctLines(t *testing.T) {
 	for _, event := range events {
 		seen[event.Event] = true
 	}
-	for _, eventName := range []string{EventReviewerStarted, EventReviewerCompleted, EventReviewerFailed} {
+	for _, eventName := range []string{EventReviewerSpawned, EventReviewerCompleted, EventReviewerFailed} {
 		if !seen[eventName] {
 			t.Fatalf("missing event %q in %#v", eventName, events)
 		}

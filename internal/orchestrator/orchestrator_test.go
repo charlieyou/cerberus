@@ -82,7 +82,7 @@ func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
 	}
-	if !strings.Contains(gate.ResolutionReason, "single-pass spawn telemetry failed") {
+	if !strings.Contains(gate.ResolutionReason, "roster selected telemetry failed") {
 		t.Fatalf("resolution reason = %q, want telemetry failure", gate.ResolutionReason)
 	}
 }
@@ -228,12 +228,20 @@ func TestRunSinglePassWritesReviewerRoundAndIterationTelemetry(t *testing.T) {
 
 	events := readEventLog(t, env)
 	assertEventCount(t, events, telemetry.EventReviewSpawned, 1)
-	assertEventCount(t, events, telemetry.EventReviewerStarted, 2)
+	assertEventCount(t, events, telemetry.EventRosterSelected, 1)
+	assertEventCount(t, events, telemetry.EventReviewerSpawned, 2)
 	assertEventCount(t, events, telemetry.EventReviewerCompleted, 2)
 	assertEventCount(t, events, telemetry.EventReviewRoundComplete, 1)
 	assertEventCount(t, events, telemetry.EventReviewResolved, 1)
+	rosterEvent := findEvent(t, events, telemetry.EventRosterSelected)
+	if got, want := rosterEvent["roster_name"], "default"; got != want {
+		t.Fatalf("roster selected roster_name = %v, want %q", got, want)
+	}
+	if got, want := rosterEvent["reviewer_count"], float64(2); got != want {
+		t.Fatalf("roster selected reviewer_count = %v, want %v", got, want)
+	}
 	for _, event := range events {
-		if event["event"] != telemetry.EventReviewerStarted && event["event"] != telemetry.EventReviewerCompleted {
+		if event["event"] != telemetry.EventReviewerSpawned && event["event"] != telemetry.EventReviewerCompleted {
 			continue
 		}
 		switch event["reviewer_id"] {
@@ -287,6 +295,14 @@ func TestRunSinglePassExplicitMissingCLIFailsBeforePendingGate(t *testing.T) {
 	}
 	if _, err := state.ReadGateState(gatePath(env)); err == nil {
 		t.Fatal("gate-state.json exists after preflight failure, want no pending gate")
+	}
+	events := readEventLog(t, env)
+	event := findEvent(t, events, telemetry.EventPreflightFailed)
+	if got, want := event["stage"], "reviewer"; got != want {
+		t.Fatalf("preflight failed stage = %v, want %q", got, want)
+	}
+	if !strings.Contains(fmt.Sprint(event["error"]), `provider CLI "claude" is not available on PATH`) {
+		t.Fatalf("preflight failed error = %v, want missing CLI", event["error"])
 	}
 }
 

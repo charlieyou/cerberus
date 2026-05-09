@@ -58,7 +58,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				return
 			}
 			startedAt := time.Now().UTC()
-			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerStarted, slot, i, startedAt, nil); err != nil {
+			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerSpawned, slot, i, startedAt, nil); err != nil {
 				errs <- roundError{err: err}
 				cancel()
 				return

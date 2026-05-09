@@ -15,7 +15,8 @@ const (
 	EventRosterSelected             = "cerberus.roster.selected"
 	EventPreflightFailed            = "cerberus.preflight.failed"
 	EventReviewSpawned              = "cerberus.review.spawned"
-	EventReviewerStarted            = "cerberus.reviewer.started"
+	EventReviewerSpawned            = "cerberus.reviewer.spawned"
+	EventReviewerStarted            = EventReviewerSpawned
 	EventReviewerCompleted          = "cerberus.reviewer.completed"
 	EventReviewerFailed             = "cerberus.reviewer.failed"
 	EventReviewRoundComplete        = "cerberus.review.round_complete"
