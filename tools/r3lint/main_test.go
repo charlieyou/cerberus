@@ -73,6 +73,32 @@ const duplicate = "_rdc_aggregate_and_promote"
 	}
 }
 
+func TestRunRejectsLegacyDebateSymbolsInBin(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "bin/renamed-helper", `#!/bin/sh
+
+_rdc_aggregate_and_promote() { :; }
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "duplicates internal Go ownership") {
+		t.Fatalf("run() error = %v, want legacy debate symbol failure in bin", err)
+	}
+}
+
+func TestRunRejectsDirectGateStateWritePatternsInBin(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "bin/review-gate", `#!/bin/sh
+
+printf '{}' > "$RUN_DIR/gate-state.json"
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "direct gate-state.json write pattern") {
+		t.Fatalf("run() error = %v, want direct gate-state write failure in bin", err)
+	}
+}
+
 func TestRunAllowsOrchestratorAndTestImports(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "internal/orchestrator/round.go", `package orchestrator

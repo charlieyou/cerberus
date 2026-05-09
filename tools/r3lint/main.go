@@ -94,7 +94,7 @@ func lintGoFile(rel, path string) []string {
 
 func lintV2TextBoundaries(root string) []string {
 	var failures []string
-	for _, dir := range []string{"cmd", "internal", "hooks", "skills", "prompts", "config", "templates"} {
+	for _, dir := range []string{"bin", "cmd", "internal", "hooks", "skills", "prompts", "config", "templates"} {
 		base := filepath.Join(root, dir)
 		if _, err := os.Stat(base); os.IsNotExist(err) {
 			continue
@@ -105,6 +105,9 @@ func lintV2TextBoundaries(root string) []string {
 				return nil
 			}
 			if entry.IsDir() {
+				if filepath.ToSlash(path) == filepath.ToSlash(filepath.Join(root, "bin", "tests")) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			rel, err := filepath.Rel(root, path)
@@ -132,6 +135,20 @@ func lintV2TextBoundaries(root string) []string {
 			}
 			if strings.Contains(string(data), `"gate-state.json"`) {
 				failures = append(failures, fmt.Sprintf("%s: direct gate-state.json literal outside internal/state bypasses state I/O ownership", rel))
+			}
+			if strings.HasPrefix(rel, "bin/") {
+				for _, token := range []string{
+					"> \"$RUN_DIR/gate-state.json\"",
+					"> \"$review_dir/gate-state.json\"",
+					"> \"$state_file\"",
+					"mv \"$tmp_state\" \"$RUN_DIR/gate-state.json\"",
+					"mv \"$tmp_state\" \"$review_dir/gate-state.json\"",
+					"mv \"$tmp_state\" \"$state_file\"",
+				} {
+					if strings.Contains(string(data), token) {
+						failures = append(failures, fmt.Sprintf("%s: direct gate-state.json write pattern %q bypasses state I/O ownership", rel, token))
+					}
+				}
 			}
 			return nil
 		})
