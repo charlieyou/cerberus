@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/charlieyou/cerberus/internal/state"
 )
 
 func TestRunCheck(t *testing.T) {
@@ -51,6 +55,40 @@ func TestRunMissingSubcommand(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "usage: cerberus") {
 		t.Fatalf("run(no args) stderr = %q, want usage", got)
+	}
+}
+
+func TestActiveRunRootFallsBackToSessionCache(t *testing.T) {
+	stateRoot := t.TempDir()
+	projectKey := "project-key"
+	cache := &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     projectKey,
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         "active-run",
+		TranscriptPath: "/tmp/codex-session.jsonl",
+		LastSeen:       time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC),
+	}
+	if err := state.WriteSessionCache(state.SessionCachePath(stateRoot, projectKey), cache); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	t.Setenv("CERBERUS_HOST", "codex")
+	t.Setenv("CERBERUS_STATE_ROOT", stateRoot)
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
+
+	got, ok, err := activeRunRoot()
+	if err != nil {
+		t.Fatalf("activeRunRoot() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("activeRunRoot() ok = false, want true")
+	}
+	want := filepath.Join(stateRoot, projectKey, "active-run")
+	if got != want {
+		t.Fatalf("activeRunRoot() = %q, want %q", got, want)
 	}
 }
 

@@ -107,10 +107,39 @@ func TestMarkResolved(t *testing.T) {
 	}
 }
 
+func TestSessionCacheRoundTrips(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	cache := &SessionCache{
+		SchemaVersion:  SchemaVersion,
+		Host:           "codex",
+		ProjectKey:     "project-key",
+		SessionID:      "session-id",
+		CodexSessionID: "session-id",
+		RunKey:         "run-key",
+		TranscriptPath: "/tmp/transcript.jsonl",
+		LastSeen:       lastSeen,
+	}
+
+	path := filepath.Join(t.TempDir(), "active-session.json")
+	if err := WriteSessionCache(path, cache); err != nil {
+		t.Fatalf("WriteSessionCache() returned error: %v", err)
+	}
+	got, err := ReadSessionCache(path)
+	if err != nil {
+		t.Fatalf("ReadSessionCache() returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, cache) {
+		t.Fatalf("ReadSessionCache() = %#v, want %#v", got, cache)
+	}
+}
+
 func TestPathHelpers(t *testing.T) {
 	runRoot := RunDir("/state-root", "project-key", "run-key")
 	if got, want := runRoot, filepath.Join("/state-root", "project-key", "run-key"); got != want {
 		t.Fatalf("RunDir() = %q, want %q", got, want)
+	}
+	if got, want := SessionCachePath("/state-root", "project-key"), filepath.Join("/state-root", "project-key", "active-session.json"); got != want {
+		t.Fatalf("SessionCachePath() = %q, want %q", got, want)
 	}
 	if got, want := GateStatePath(runRoot), filepath.Join(runRoot, "gate-state.json"); got != want {
 		t.Fatalf("GateStatePath() = %q, want %q", got, want)
@@ -132,6 +161,15 @@ func TestRunDirDoesNotDuplicateProjectScopedStateRoot(t *testing.T) {
 	want := filepath.Join(stateRoot, "run-key")
 	if got != want {
 		t.Fatalf("RunDir() = %q, want %q", got, want)
+	}
+}
+
+func TestSessionCachePathDoesNotDuplicateProjectScopedStateRoot(t *testing.T) {
+	stateRoot := filepath.Join("/home/user", ".codex", "projects", "project-key", "cerberus")
+	got := SessionCachePath(stateRoot, "project-key")
+	want := filepath.Join(stateRoot, "active-session.json")
+	if got != want {
+		t.Fatalf("SessionCachePath() = %q, want %q", got, want)
 	}
 }
 

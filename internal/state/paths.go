@@ -8,12 +8,22 @@ import (
 
 const gateStateFilename = "gate-state.json"
 
+const sessionCacheFilename = "active-session.json"
+
 // RunDir returns the canonical <state_root>/<project>/<run> directory.
 func RunDir(stateRoot, projectKey, run string) string {
 	if filepath.Base(stateRoot) == "cerberus" && filepath.Base(filepath.Dir(stateRoot)) == projectKey {
 		return filepath.Join(stateRoot, run)
 	}
 	return filepath.Join(stateRoot, projectKey, run)
+}
+
+// SessionCachePath returns the project-scoped active session cache path.
+func SessionCachePath(stateRoot, projectKey string) string {
+	if filepath.Base(stateRoot) == "cerberus" && filepath.Base(filepath.Dir(stateRoot)) == projectKey {
+		return filepath.Join(stateRoot, sessionCacheFilename)
+	}
+	return filepath.Join(stateRoot, projectKey, sessionCacheFilename)
 }
 
 // GateStatePath returns the canonical gate-state.json path under runRoot.

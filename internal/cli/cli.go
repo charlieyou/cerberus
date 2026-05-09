@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,9 +81,6 @@ func activeRunRoot() (string, bool, error) {
 	if env.RunKey == "" {
 		env.RunKey = env.SessionID
 	}
-	if env.RunKey == "" {
-		return "", false, nil
-	}
 	adapter, err := host.NewFromEnv(env)
 	if err != nil {
 		return "", false, err
@@ -95,11 +93,29 @@ func activeRunRoot() (string, bool, error) {
 		env.ProjectKey = projectKey
 	}
 	if env.StateRoot == "" {
+		if env.Host == "generic" && env.RunKey == "" {
+			return "", false, nil
+		}
 		stateRoot, err := adapter.StateRoot(env)
 		if err != nil {
 			return "", false, err
 		}
 		env.StateRoot = stateRoot
+	}
+	if env.RunKey == "" {
+		cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		env.RunKey = cache.RunKey
+		env.SessionID = cache.SessionID
+		env.TranscriptPath = cache.TranscriptPath
+	}
+	if env.RunKey == "" {
+		return "", false, nil
 	}
 	return state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), true, nil
 }

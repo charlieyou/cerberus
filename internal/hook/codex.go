@@ -37,20 +37,31 @@ func handleCodexStopWithWait(stdinPayload []byte, env *config.Env, pollInterval,
 }
 
 func HandleCodexSessionStart(stdinPayload []byte, env *config.Env) error {
-	return writeCodexSessionState(stdinPayload, env)
+	return sessionInit(env, stdinPayload)
 }
 
 func HandleCodexPromptSubmit(stdinPayload []byte, env *config.Env) error {
-	return writeCodexSessionState(stdinPayload, env)
+	return sessionInit(env, stdinPayload)
 }
 
-func writeCodexSessionState(stdinPayload []byte, env *config.Env) error {
+func sessionInit(env *config.Env, stdinPayload []byte) error {
 	resolved, runRoot, err := resolveCodexHookRun(stdinPayload, env)
 	if err != nil {
 		return err
 	}
 	if err := state.EnsureRunDir(runRoot); err != nil {
 		return err
+	}
+	if err := state.WriteSessionCache(state.SessionCachePath(resolved.StateRoot, resolved.ProjectKey), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     resolved.ProjectKey,
+		SessionID:      resolved.SessionID,
+		CodexSessionID: resolved.SessionID,
+		RunKey:         resolved.RunKey,
+		TranscriptPath: resolved.TranscriptPath,
+		LastSeen:       time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("write codex session cache: %w", err)
 	}
 
 	data, err := json.MarshalIndent(map[string]string{
@@ -158,6 +169,14 @@ func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) 
 	}
 	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
 		return payloadSessionID, true
+	}
+	if cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey)); err == nil {
+		if cache.SessionID == payloadSessionID && cache.RunKey != "" {
+			return cache.RunKey, true
+		}
+		if hasGateState(env.StateRoot, env.ProjectKey, cache.RunKey) {
+			return cache.RunKey, true
+		}
 	}
 	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
 }

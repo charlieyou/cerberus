@@ -38,7 +38,46 @@ func TestCodexHandlersAcceptFixturePayloadsAndEmitAllowedEvent(t *testing.T) {
 			if tc.name != "stop" && event["session_id"] != "codex-fixture-session" {
 				t.Fatalf("session_id = %v, want codex-fixture-session", event["session_id"])
 			}
+			if tc.name != "stop" {
+				cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, "codex-fixture-project"))
+				if err != nil {
+					t.Fatalf("ReadSessionCache() error = %v", err)
+				}
+				if cache.RunKey != "codex-fixture-session" || cache.TranscriptPath != "/tmp/cerberus/codex-fixture-session.jsonl" {
+					t.Fatalf("active-session cache = %#v, want seeded run key and transcript path", cache)
+				}
+			}
 		})
+	}
+}
+
+func TestCodexSessionInitPreservesCachedRunKeyForSameSession(t *testing.T) {
+	payload := []byte(`{"session_id":"codex-session","transcript_path":"/tmp/current.jsonl","project_key":"project"}`)
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         "existing-run",
+		TranscriptPath: "/tmp/old.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+
+	if err := HandleCodexPromptSubmit(payload, env); err != nil {
+		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
+	}
+
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, "project"))
+	if err != nil {
+		t.Fatalf("ReadSessionCache() error = %v", err)
+	}
+	if cache.RunKey != "existing-run" || cache.SessionID != "codex-session" || cache.TranscriptPath != "/tmp/current.jsonl" {
+		t.Fatalf("cache = %#v, want preserved run key with refreshed transcript", cache)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "existing-run", "session.json")); err != nil {
+		t.Fatalf("preserved run session.json missing: %v", err)
 	}
 }
 
