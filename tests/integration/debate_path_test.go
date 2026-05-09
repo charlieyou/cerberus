@@ -3,7 +3,6 @@ package integration_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,12 +16,6 @@ func TestDebatePath(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("Abs(repo root) error = %v", err)
-	}
-	binary := filepath.Join(t.TempDir(), "cerberus")
-	cmd := exec.Command("go", "build", "-o", binary, "./cmd/cerberus")
-	cmd.Dir = repoRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build failed: %v\n%s", err, output)
 	}
 	recordDir := t.TempDir()
 	installDebateMockCLI(t, repoRoot, recordDir)

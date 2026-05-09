@@ -62,7 +62,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				return
 			}
 			startedAt := time.Now().UTC()
-			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerSpawned, slot, i, startedAt, nil); err != nil {
+			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerSpawned, slot, i, round, startedAt, nil); err != nil {
 				errs <- roundError{err: err}
 				cancel()
 				return
@@ -80,7 +80,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				Round:     round,
 			})
 			if err != nil {
-				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
+				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
 				cancel()
 				return
 			}
@@ -89,25 +89,25 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 			if parsed == nil {
 				parsed, err = reviewer.Parse(response.Output)
 				if err != nil {
-					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
+					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
 					cancel()
 					return
 				}
 			}
 			row, err := reviewerTelemetryRow(slot, i, prompts.RuntimeMode, response, parsed, startedAt, endedAt)
 			if err != nil {
-				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
+				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
 				cancel()
 				return
 			}
 			if prompts.RunRoot != "" {
 				if err := telemetry.WriteReviewerRow(prompts.RunRoot, iteration, round, &row); err != nil {
-					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, err)}
+					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
 					cancel()
 					return
 				}
 			}
-			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerCompleted, slot, i, endedAt, map[string]any{
+			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerCompleted, slot, i, round, endedAt, map[string]any{
 				"verdict": row.Verdict,
 			}); err != nil {
 				errs <- roundError{err: err}
@@ -139,8 +139,8 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	return outputs, nil
 }
 
-func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, original error) error {
-	if eventErr := writeReviewerEvent(runRoot, telemetry.EventReviewerFailed, slot, slotIndex, time.Now().UTC(), map[string]any{
+func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
+	if eventErr := writeReviewerEvent(runRoot, telemetry.EventReviewerFailed, slot, slotIndex, round, time.Now().UTC(), map[string]any{
 		"error": original.Error(),
 	}); eventErr != nil {
 		return fmt.Errorf("%w; record reviewer failure event: %v", original, eventErr)
@@ -148,7 +148,7 @@ func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, 
 	return original
 }
 
-func writeReviewerEvent(runRoot string, eventName string, slot ReviewerSlot, slotIndex int, at time.Time, extra map[string]any) error {
+func writeReviewerEvent(runRoot string, eventName string, slot ReviewerSlot, slotIndex int, round int, at time.Time, extra map[string]any) error {
 	if runRoot == "" {
 		return nil
 	}
@@ -157,7 +157,7 @@ func writeReviewerEvent(runRoot string, eventName string, slot ReviewerSlot, slo
 		"instance_index": reviewerInstanceIndex(slot, slotIndex),
 		"provider":       slot.Provider,
 		"model":          slot.Model,
-		"round":          1,
+		"round":          firstPositive(round, 1),
 	}
 	for key, value := range extra {
 		payload[key] = value

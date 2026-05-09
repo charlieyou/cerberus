@@ -14,6 +14,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/anonymize"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
@@ -25,7 +26,7 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	verdict, err := (Orchestrator{
 		Env:     env,
 		Spawner: spawner,
-		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput) ([]anonymize.PeerRecord, error) {
+		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput, _ []string) ([]anonymize.PeerRecord, error) {
 			anonymizerCalls++
 			if len(outputs) != 2 {
 				t.Fatalf("anonymizer outputs length = %d, want 2", len(outputs))
@@ -74,6 +75,25 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	}
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictPass {
 		t.Fatalf("gate verdict = %v, want pass", gate.Verdict)
+	}
+
+	events := readEventLog(t, env)
+	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerSpawned, 1, 2)
+	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerSpawned, 2, 2)
+	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerCompleted, 1, 2)
+	assertReviewerEventRoundCount(t, events, telemetry.EventReviewerCompleted, 2, 2)
+}
+
+func assertReviewerEventRoundCount(t *testing.T, events []map[string]any, eventName string, round int, want int) {
+	t.Helper()
+	got := 0
+	for _, event := range events {
+		if event["event"] == eventName && event["round"] == float64(round) {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("%s round %d event count = %d, want %d; events = %#v", eventName, round, got, want, events)
 	}
 }
 
