@@ -30,6 +30,10 @@ func Compose(slot roster.RosterSlot, artifactType string) ([]byte, []byte, error
 // ComposeFromRoot is Compose with an explicit prompt root for tests and callers
 // that already resolved CERBERUS_ROOT.
 func ComposeFromRoot(root string, slot roster.RosterSlot, artifactType string) ([]byte, []byte, error) {
+	return ComposeFromRootWithReplacements(root, slot, artifactType, nil)
+}
+
+func ComposeFromRootWithReplacements(root string, slot roster.RosterSlot, artifactType string, overrides map[string]string) ([]byte, []byte, error) {
 	if artifactType == "" {
 		return nil, nil, fmt.Errorf("artifact type is required")
 	}
@@ -57,7 +61,7 @@ func ComposeFromRoot(root string, slot roster.RosterSlot, artifactType string) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("read reviewer prompt %s: %w", artifactType, err)
 	}
-	reviewerPrompt, err = renderReviewerTemplate(root, reviewerPrompt)
+	reviewerPrompt, err = renderReviewerTemplate(root, reviewerPrompt, overrides)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -65,7 +69,7 @@ func ComposeFromRoot(root string, slot roster.RosterSlot, artifactType string) (
 	return bytes.Join(parts, []byte("\n\n")), reviewerPrompt, nil
 }
 
-func renderReviewerTemplate(root string, template []byte) ([]byte, error) {
+func renderReviewerTemplate(root string, template []byte, overrides map[string]string) ([]byte, error) {
 	replacements := map[string]string{
 		"CONTEXT":                firstEnv("REVIEW_GATE_CONTEXT", "REVIEW_GATE_AUTHOR_CONTEXT"),
 		"DIFF_CONTENT":           os.Getenv("REVIEW_GATE_DIFF_CONTENT"),
@@ -79,6 +83,9 @@ func renderReviewerTemplate(root string, template []byte) ([]byte, error) {
 	}
 	if replacements["CONTEXT"] == "" {
 		replacements["CONTEXT"] = "No additional context provided."
+	}
+	for key, value := range overrides {
+		replacements[key] = value
 	}
 
 	anchors, err := optionalStrategy(root, "confidence-anchors")

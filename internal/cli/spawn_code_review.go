@@ -34,7 +34,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 }
 
 func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string) int {
-	opts, err := parseSpawnCodeReviewFlags(args, stderr)
+	opts, err := parseSpawnCodeReviewFlags(normalizeReviewArgs(args, artifactType), stderr)
 	if err != nil {
 		recordSpawnPreflightFailure("flags", err)
 		fmt.Fprintln(stderr, err)
@@ -48,7 +48,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		fmt.Fprintln(stderr, err)
 		return exitCodeForError(err, 2)
 	}
-	prompt, err := buildCodeReviewPrompt(opts)
+	prompt, err := prepareReviewPrompt(&opts)
 	if err != nil {
 		recordSpawnPreflightFailure("prompt", err)
 		fmt.Fprintln(stderr, err)
@@ -56,14 +56,16 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	}
 	if opts.debate {
 		started, err := (orchestrator.Orchestrator{Env: config.Resolve()}).StartDebate(orchestrator.Params{
-			Prompt:         prompt,
-			ArtifactType:   opts.artifactType,
-			Reviewers:      resolved.reviewers,
-			RosterDefaults: resolved.defaults,
-			Mode:           opts.mode,
-			MaxRounds:      opts.explicitMaxRounds(),
-			Consensus:      orchestrator.ConsensusMode(opts.consensus),
-			RosterID:       resolved.rosterID,
+			Prompt:          prompt,
+			ArtifactType:    opts.artifactType,
+			ArtifactContent: opts.artifactContent,
+			ContextContent:  opts.contextContent,
+			Reviewers:       resolved.reviewers,
+			RosterDefaults:  resolved.defaults,
+			Mode:            opts.mode,
+			MaxRounds:       opts.explicitMaxRounds(),
+			Consensus:       orchestrator.ConsensusMode(opts.consensus),
+			RosterID:        resolved.rosterID,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -82,14 +84,16 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	}
 
 	params := orchestrator.Params{
-		Prompt:         prompt,
-		ArtifactType:   opts.artifactType,
-		Reviewers:      resolved.reviewers,
-		RosterDefaults: resolved.defaults,
-		Mode:           opts.mode,
-		MaxRounds:      opts.explicitMaxRounds(),
-		Consensus:      orchestrator.ConsensusMode(opts.consensus),
-		RosterID:       resolved.rosterID,
+		Prompt:          prompt,
+		ArtifactType:    opts.artifactType,
+		ArtifactContent: opts.artifactContent,
+		ContextContent:  opts.contextContent,
+		Reviewers:       resolved.reviewers,
+		RosterDefaults:  resolved.defaults,
+		Mode:            opts.mode,
+		MaxRounds:       opts.explicitMaxRounds(),
+		Consensus:       orchestrator.ConsensusMode(opts.consensus),
+		RosterID:        resolved.rosterID,
 	}
 	started, err := orchestrator.StartSinglePass(config.Resolve(), params)
 	if err != nil {
@@ -106,6 +110,48 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	}
 	fmt.Fprintln(stdout, "review spawned")
 	return 0
+}
+
+func normalizeReviewArgs(args []string, artifactType string) []string {
+	if artifactType != "epic-verify" {
+		return args
+	}
+	knownValueFlags := map[string]bool{
+		"-mode": true, "--mode": true, "-max-rounds": true, "--max-rounds": true,
+		"-consensus": true, "--consensus": true, "-agents": true, "--agents": true,
+		"-roster": true, "--roster": true, "-reviewer": true, "--reviewer": true,
+		"-replace-slot": true, "--replace-slot": true, "-exclude": true, "--exclude": true,
+		"-base": true, "--base": true, "-commit": true, "--commit": true,
+		"-prompt-file": true, "--prompt-file": true, "-context-file": true, "--context-file": true,
+	}
+	knownBoolFlags := map[string]bool{"-uncommitted": true, "--uncommitted": true, "-debate": true, "--debate": true}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return args
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			return args
+		}
+		name := arg
+		if eq := strings.IndexByte(arg, '='); eq >= 0 {
+			name = arg[:eq]
+		}
+		if knownValueFlags[name] {
+			if !strings.Contains(arg, "=") {
+				i++
+			}
+			continue
+		}
+		if knownBoolFlags[name] {
+			continue
+		}
+		normalized := append([]string{}, args[:i]...)
+		normalized = append(normalized, "--")
+		normalized = append(normalized, args[i:]...)
+		return normalized
+	}
+	return args
 }
 
 func recordSpawnPreflightFailure(stage string, err error) {
@@ -223,23 +269,27 @@ func runDebateRuntime(args []string, stdout, stderr io.Writer) int {
 }
 
 type spawnCodeReviewOptions struct {
-	artifactType string
-	mode         string
-	modeSet      bool
-	maxRounds    int
-	maxRoundsSet bool
-	consensus    string
-	agents       string
-	roster       string
-	reviewers    []string
-	replaceSlot  string
-	excludes     []string
-	uncommitted  bool
-	base         string
-	commits      []string
-	debate       bool
-	focus        string
-	positionals  []string
+	artifactType    string
+	mode            string
+	modeSet         bool
+	maxRounds       int
+	maxRoundsSet    bool
+	consensus       string
+	agents          string
+	roster          string
+	reviewers       []string
+	replaceSlot     string
+	excludes        []string
+	uncommitted     bool
+	base            string
+	promptFile      string
+	contextFile     string
+	commits         []string
+	debate          bool
+	focus           string
+	positionals     []string
+	artifactContent string
+	contextContent  string
 }
 
 func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
@@ -267,6 +317,8 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	fs.Var(&excludes, "exclude", "pathspec to exclude")
 	fs.BoolVar(&opts.uncommitted, "uncommitted", false, "review uncommitted changes")
 	fs.StringVar(&opts.base, "base", "", "base ref")
+	fs.StringVar(&opts.promptFile, "prompt-file", "", "prompt file")
+	fs.StringVar(&opts.contextFile, "context-file", "", "context file")
 	fs.Var(&commits, "commit", "commit to review")
 	fs.BoolVar(&opts.debate, "debate", false, "enable debate")
 	if err := fs.Parse(args); err != nil {
@@ -477,13 +529,28 @@ func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
 }
 
 func buildReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
+	return prepareReviewPrompt(&opts)
+}
+
+func prepareReviewPrompt(opts *spawnCodeReviewOptions) ([]byte, error) {
 	switch opts.artifactType {
 	case "", "code":
-		return buildCodeReviewPromptBody(opts)
+		return buildCodeReviewPromptBody(*opts)
 	case "plan", "spec", "epic-verify":
-		return buildArtifactReviewPrompt(opts)
+		content, err := artifactReviewContent(*opts)
+		if err != nil {
+			return nil, err
+		}
+		opts.artifactContent = content
+		return nil, nil
 	case "ask":
-		return []byte("# Ask panel\n\n" + strings.TrimSpace(opts.focus) + "\n"), nil
+		content, context, err := askReviewContent(*opts)
+		if err != nil {
+			return nil, err
+		}
+		opts.artifactContent = content
+		opts.contextContent = context
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported artifact type %q", opts.artifactType)
 	}
@@ -516,25 +583,40 @@ func buildCodeReviewPromptBody(opts spawnCodeReviewOptions) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func buildArtifactReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
+func artifactReviewContent(opts spawnCodeReviewOptions) (string, error) {
 	if len(opts.positionals) == 0 {
-		return nil, fmt.Errorf("%s review requires a file path", opts.artifactType)
+		return "", fmt.Errorf("%s review requires input", opts.artifactType)
 	}
-	path := opts.positionals[0]
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s review file %s: %w", opts.artifactType, path, err)
+	input := opts.positionals[0]
+	if data, err := os.ReadFile(input); err == nil {
+		return string(data), nil
+	} else if opts.artifactType != "epic-verify" {
+		return "", fmt.Errorf("read %s review file %s: %w", opts.artifactType, input, err)
 	}
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "# %s review\n\nPath: %s\n\n", opts.artifactType, path)
-	if len(opts.positionals) > 1 {
-		fmt.Fprintf(&buf, "Focus: %s\n\n", strings.Join(opts.positionals[1:], " "))
+	return strings.Join(opts.positionals, " "), nil
+}
+
+func askReviewContent(opts spawnCodeReviewOptions) (string, string, error) {
+	content := strings.TrimSpace(opts.focus)
+	if opts.promptFile != "" {
+		data, err := os.ReadFile(opts.promptFile)
+		if err != nil {
+			return "", "", fmt.Errorf("read ask prompt file %s: %w", opts.promptFile, err)
+		}
+		content = string(data)
 	}
-	buf.Write(data)
-	if !bytes.HasSuffix(data, []byte("\n")) {
-		buf.WriteByte('\n')
+	if strings.TrimSpace(content) == "" {
+		return "", "", fmt.Errorf("ask prompt is required")
 	}
-	return buf.Bytes(), nil
+	context := ""
+	if opts.contextFile != "" {
+		data, err := os.ReadFile(opts.contextFile)
+		if err != nil {
+			return "", "", fmt.Errorf("read ask context file %s: %w", opts.contextFile, err)
+		}
+		context = string(data)
+	}
+	return content, context, nil
 }
 
 func savedAuthorContext() (string, error) {

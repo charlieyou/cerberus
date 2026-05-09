@@ -246,15 +246,17 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			return Verdict{}, err
 		}
 		roundResults, result, err := runRound(ctx, slots, spawner, roundPrompts{
-			User:          prompt,
-			ArtifactType:  started.Params.ArtifactType,
-			PeerBroadcast: peerBroadcast,
-			RunRoot:       runRoot,
-			Root:          resolvedEnv.Root,
-			RuntimeMode:   mode,
-			Iteration:     1,
-			Round:         round,
-			Consensus:     consensus,
+			User:            prompt,
+			ArtifactType:    started.Params.ArtifactType,
+			ArtifactContent: started.Params.ArtifactContent,
+			ContextContent:  started.Params.ContextContent,
+			PeerBroadcast:   peerBroadcast,
+			RunRoot:         runRoot,
+			Root:            resolvedEnv.Root,
+			RuntimeMode:     mode,
+			Iteration:       1,
+			Round:           round,
+			Consensus:       consensus,
 		})
 		if err != nil {
 			return Verdict{}, err

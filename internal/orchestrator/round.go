@@ -18,16 +18,18 @@ import (
 )
 
 type roundPrompts struct {
-	System        []byte
-	User          []byte
-	ArtifactType  string
-	PeerBroadcast []byte
-	Root          string
-	RunRoot       string
-	RuntimeMode   string
-	Iteration     int
-	Round         int
-	Consensus     aggregate.Mode
+	System          []byte
+	User            []byte
+	ArtifactType    string
+	ArtifactContent string
+	ContextContent  string
+	PeerBroadcast   []byte
+	Root            string
+	RunRoot         string
+	RuntimeMode     string
+	Iteration       int
+	Round           int
+	Consensus       aggregate.Mode
 }
 
 type roundReviewerResult struct {
@@ -243,13 +245,13 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 	if artifactType == "" {
 		artifactType = "code"
 	}
-	system, user, err := prompts.ComposeFromRoot(root, roster.RosterSlot{
+	system, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
 		Provider:    slot.Provider,
 		Model:       slot.Model,
 		Strategy:    slot.Strategy,
 		PersonaPath: slot.PersonaPath,
 		Mode:        slot.Mode,
-	}, artifactType)
+	}, artifactType, artifactReplacements(artifactType, round.ArtifactContent, round.ContextContent))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -269,6 +271,26 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 		return round.System, user, nil
 	}
 	return bytes.Join([][]byte{round.System, system}, []byte("\n\n")), user, nil
+}
+
+func artifactReplacements(artifactType, content, context string) map[string]string {
+	replacements := map[string]string{}
+	if context != "" {
+		replacements["CONTEXT"] = context
+	}
+	switch artifactType {
+	case "plan":
+		replacements["PLAN_CONTENT"] = content
+	case "spec":
+		replacements["SPEC_CONTENT"] = content
+	case "ask":
+		replacements["ASK_CONTENT"] = content
+	case "epic-verify":
+		replacements["EPIC_CONTEXT"] = content
+	case "code":
+		replacements["DIFF_CONTENT"] = content
+	}
+	return replacements
 }
 
 func appendPrompt(base, extra []byte) []byte {

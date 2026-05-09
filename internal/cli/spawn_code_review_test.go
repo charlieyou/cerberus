@@ -63,33 +63,54 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 
 func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
 	cases := []struct {
+		name       string
 		subcommand string
 		args       []string
 		wantPrompt []string
 	}{
 		{
+			name:       "plan file",
 			subcommand: "spawn-plan-review",
 			args:       []string{"--agents", "codex", writeSpawnFixture(t, "plan.md", "PLAN BODY")},
-			wantPrompt: []string{"Implementation Plan Review Guidelines", "PLAN BODY"},
+			wantPrompt: []string{"Implementation Plan Review Guidelines", "<plan>\nPLAN BODY\n</plan>"},
 		},
 		{
+			name:       "spec file",
 			subcommand: "spawn-spec-review",
 			args:       []string{"--agents", "codex", writeSpawnFixture(t, "spec.md", "SPEC BODY")},
-			wantPrompt: []string{"Feature Specification Review Guidelines", "SPEC BODY"},
+			wantPrompt: []string{"Feature Specification Review Guidelines", "<spec>\nSPEC BODY\n</spec>"},
 		},
 		{
+			name:       "ask inline",
 			subcommand: "spawn-ask",
 			args:       []string{"--agents", "codex", "codex smoke question"},
-			wantPrompt: []string{"Ask Panel Guidelines", "codex smoke question"},
+			wantPrompt: []string{"Ask Panel Guidelines", "<ask_prompt>\ncodex smoke question\n</ask_prompt>"},
 		},
 		{
+			name:       "ask prompt and context files",
+			subcommand: "spawn-ask",
+			args: []string{
+				"--agents", "codex",
+				"--prompt-file", writeSpawnFixture(t, "question.md", "FILE QUESTION"),
+				"--context-file", writeSpawnFixture(t, "context.md", "FILE CONTEXT"),
+			},
+			wantPrompt: []string{"<ask_prompt>\nFILE QUESTION\n</ask_prompt>", "<context>\nFILE CONTEXT\n</context>"},
+		},
+		{
+			name:       "epic file",
 			subcommand: "spawn-epic-verify",
 			args:       []string{"--agents", "codex", writeSpawnFixture(t, "epic.md", "EPIC BODY")},
-			wantPrompt: []string{"Epic Verification Guidelines", "EPIC BODY"},
+			wantPrompt: []string{"Epic Verification Guidelines", "<epic_context>\nEPIC BODY\n</epic_context>"},
+		},
+		{
+			name:       "epic raw criteria",
+			subcommand: "spawn-epic-verify",
+			args:       []string{"--agents", "codex", "- Users can login"},
+			wantPrompt: []string{"<epic_context>\n- Users can login\n</epic_context>"},
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.subcommand, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			setSpawnTestEnv(t)
 			startRuntimeInlineForTest(t, nil)
 			var stdout, stderr bytes.Buffer

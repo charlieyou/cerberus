@@ -21,14 +21,16 @@ type ConsensusMode = aggregate.Mode
 
 // Params contains the single-pass review inputs.
 type Params struct {
-	Prompt         []byte
-	ArtifactType   string
-	Reviewers      []ReviewerSlot
-	RosterDefaults RosterDefaults
-	Mode           string
-	MaxRounds      int
-	Consensus      ConsensusMode
-	RosterID       string
+	Prompt          []byte
+	ArtifactType    string
+	ArtifactContent string
+	ContextContent  string
+	Reviewers       []ReviewerSlot
+	RosterDefaults  RosterDefaults
+	Mode            string
+	MaxRounds       int
+	Consensus       ConsensusMode
+	RosterID        string
 }
 
 // RosterDefaults carries panel-wide defaults from rosters.yaml.
@@ -201,12 +203,14 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 
 	roundStartedAt := time.Now().UTC()
 	roundResults, result, err := runRound(ctx, started.Params.Reviewers, spawner, roundPrompts{
-		User:         started.Params.Prompt,
-		ArtifactType: started.Params.ArtifactType,
-		RunRoot:      started.RunRoot,
-		Root:         started.Env.Root,
-		RuntimeMode:  started.Params.Mode,
-		Consensus:    started.Params.Consensus,
+		User:            started.Params.Prompt,
+		ArtifactType:    started.Params.ArtifactType,
+		ArtifactContent: started.Params.ArtifactContent,
+		ContextContent:  started.Params.ContextContent,
+		RunRoot:         started.RunRoot,
+		Root:            started.Env.Root,
+		RuntimeMode:     started.Params.Mode,
+		Consensus:       started.Params.Consensus,
 	})
 	if err != nil {
 		return err
