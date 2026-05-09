@@ -16,6 +16,10 @@ const usage = `usage: cerberus <subcommand> [options]
 
 Subcommands:
   spawn-code-review  run a single-pass code review
+  spawn-plan-review  run a plan review
+  spawn-spec-review  run a spec review
+  spawn-ask          ask the review panel a question
+  spawn-epic-verify  verify an epic
   wait               wait for the active review gate to resolve
   resolve            mark the active review gate resolved
   status             report the active review gate status
@@ -40,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "spawn-code-review":
+	case "spawn-code-review", "spawn-plan-review", "spawn-spec-review", "spawn-ask", "spawn-epic-verify":
 		return runSpawnCodeReview(args[1:], stdout, stderr)
 	case "run-single-pass":
 		return runSinglePassRuntime(args[1:], stdout, stderr)

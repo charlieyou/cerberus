@@ -61,6 +61,28 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro")
 }
 
+func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
+	for _, subcommand := range []string{"spawn-plan-review", "spawn-spec-review", "spawn-ask", "spawn-epic-verify"} {
+		t.Run(subcommand, func(t *testing.T) {
+			setSpawnTestEnv(t)
+			startRuntimeInlineForTest(t, nil)
+			var stdout, stderr bytes.Buffer
+
+			code := run([]string{subcommand, "--agents", "codex", "codex smoke"}, &stdout, &stderr)
+
+			if code != 0 {
+				t.Fatalf("%s exit code = %d, want 0; stderr: %s", subcommand, code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "review spawned") {
+				t.Fatalf("%s stdout = %q, want review spawned", subcommand, stdout.String())
+			}
+			if gate := waitForSpawnGateStatus(t, state.StatusResolved); gate.Status != state.StatusResolved {
+				t.Fatalf("%s gate status = %q, want resolved", subcommand, gate.Status)
+			}
+		})
+	}
+}
+
 func TestSpawnCodeReviewRejectsAgentsWithRoster(t *testing.T) {
 	setSpawnTestEnv(t)
 	var stdout, stderr bytes.Buffer
