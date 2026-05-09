@@ -2,7 +2,6 @@ package anonymize
 
 import (
 	"regexp"
-	"strings"
 )
 
 var (
@@ -26,18 +25,6 @@ func Scrub(text string, peerID string, rosterModelNames []string) string {
 }
 
 func replaceLiteralFold(text, old, replacement string) string {
-	lowerText := strings.ToLower(text)
-	lowerOld := strings.ToLower(old)
-	var out strings.Builder
-	for {
-		index := strings.Index(lowerText, lowerOld)
-		if index < 0 {
-			out.WriteString(text)
-			return out.String()
-		}
-		out.WriteString(text[:index])
-		out.WriteString(replacement)
-		text = text[index+len(old):]
-		lowerText = lowerText[index+len(old):]
-	}
+	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(old))
+	return re.ReplaceAllString(text, replacement)
 }

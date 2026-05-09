@@ -1,6 +1,9 @@
 package anonymize
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestScrubFalsifiabilityCases(t *testing.T) {
 	tests := []struct {
@@ -67,5 +70,15 @@ func TestScrubFalsifiabilityCases(t *testing.T) {
 func TestScrubRegexesArePrecompiled(t *testing.T) {
 	if selfRefRe == nil || providerRe == nil || modelRe == nil {
 		t.Fatal("scrub regexes must be precompiled")
+	}
+}
+
+func TestScrubRosterModelReplacementPreservesUTF8BeforeMatch(t *testing.T) {
+	got := Scrub("Use Kgpt-5.5 now", "peer_1", []string{"gpt-5.5"})
+	if !utf8.ValidString(got) {
+		t.Fatalf("Scrub() returned invalid UTF-8: %q", got)
+	}
+	if want := "Use Kpeer-model now"; got != want {
+		t.Fatalf("Scrub() = %q, want %q", got, want)
 	}
 }

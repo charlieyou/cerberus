@@ -50,14 +50,12 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 		}
 	}
 
-	sorted := append([]reviewer.RawReviewerOutput(nil), roundOutputs...)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].InstanceID < sorted[j].InstanceID
-	})
+	peerIDs := peerIDsByInstanceID(roundOutputs)
+	sorted := latestOutputsByInstanceID(roundOutputs)
 
-	records := make([]PeerRecord, len(roundOutputs))
+	records := make([]PeerRecord, len(sorted))
 	for i, output := range sorted {
-		peerID := fmt.Sprintf("peer_%d", i+1)
+		peerID := peerIDs[output.InstanceID]
 		records[i] = PeerRecord{
 			PeerID:            peerID,
 			Verdict:           output.Verdict,
@@ -71,15 +69,63 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 	return records, nil
 }
 
+func peerIDsByInstanceID(outputs []reviewer.RawReviewerOutput) map[string]string {
+	instanceIDs := make([]string, 0, len(outputs))
+	seen := make(map[string]bool, len(outputs))
+	for _, output := range outputs {
+		if !seen[output.InstanceID] {
+			seen[output.InstanceID] = true
+			instanceIDs = append(instanceIDs, output.InstanceID)
+		}
+	}
+	sort.Strings(instanceIDs)
+
+	peerIDs := make(map[string]string, len(instanceIDs))
+	for i, instanceID := range instanceIDs {
+		peerIDs[instanceID] = fmt.Sprintf("peer_%d", i+1)
+	}
+	return peerIDs
+}
+
+func latestOutputsByInstanceID(outputs []reviewer.RawReviewerOutput) []reviewer.RawReviewerOutput {
+	latest := make(map[string]reviewer.RawReviewerOutput, len(outputs))
+	for _, output := range outputs {
+		current, ok := latest[output.InstanceID]
+		if !ok || roundNumber(output) >= roundNumber(current) {
+			latest[output.InstanceID] = output
+		}
+	}
+
+	instanceIDs := make([]string, 0, len(latest))
+	for instanceID := range latest {
+		instanceIDs = append(instanceIDs, instanceID)
+	}
+	sort.Strings(instanceIDs)
+
+	sorted := make([]reviewer.RawReviewerOutput, len(instanceIDs))
+	for i, instanceID := range instanceIDs {
+		sorted[i] = latest[instanceID]
+	}
+	return sorted
+}
+
+func roundNumber(output reviewer.RawReviewerOutput) int {
+	if output.Round == nil {
+		return 0
+	}
+	return *output.Round
+}
+
 func scrubFindings(findings []reviewer.RawFinding, peerID string, rosterModelNames []string) []PeerFinding {
 	scrubbed := make([]PeerFinding, len(findings))
 	for i, finding := range findings {
+		filePath := scrubStringPtr(finding.FilePath, peerID, rosterModelNames)
 		scrubbed[i] = PeerFinding{
 			Title:          Scrub(finding.Title, peerID, rosterModelNames),
 			Body:           Scrub(finding.Body, peerID, rosterModelNames),
 			Severity:       finding.Severity,
 			Priority:       finding.Priority,
-			FilePath:       finding.FilePath,
+			FilePath:       filePath,
 			LineStart:      finding.LineStart,
 			LineEnd:        finding.LineEnd,
 			Confidence:     finding.Confidence,
@@ -88,4 +134,12 @@ func scrubFindings(findings []reviewer.RawFinding, peerID string, rosterModelNam
 		}
 	}
 	return scrubbed
+}
+
+func scrubStringPtr(value *string, peerID string, rosterModelNames []string) *string {
+	if value == nil {
+		return nil
+	}
+	scrubbed := Scrub(*value, peerID, rosterModelNames)
+	return &scrubbed
 }

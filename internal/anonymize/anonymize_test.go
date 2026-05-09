@@ -58,6 +58,9 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	if got[0].Findings[0].Evidence != "peer evidence uses peer-model" || got[0].Findings[0].Recommendation != "ask peer to fix" {
 		t.Fatalf("finding free text not scrubbed: %#v", got[0].Findings[0])
 	}
+	if got[0].Findings[0].FilePath == nil || *got[0].Findings[0].FilePath != "internal/peer/client.go" {
+		t.Fatalf("finding file path = %v, want scrubbed provider path", got[0].Findings[0].FilePath)
+	}
 
 	shuffled := []reviewer.RawReviewerOutput{outputs[3], outputs[0], outputs[2], outputs[1]}
 	again, err := AnonymizePeerBroadcast(shuffled, models)
@@ -66,6 +69,37 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	}
 	if !reflect.DeepEqual(got, again) {
 		t.Fatalf("shuffled output changed:\n got: %#v\nwant: %#v", again, got)
+	}
+}
+
+func TestAnonymizePeerBroadcastKeepsPeerIDsStableForAccumulatedRounds(t *testing.T) {
+	confidence := 0.81
+	severity := "high"
+	priority := 1
+	lineStart := 12
+	lineEnd := 13
+	strategy := "verification-first"
+	roundOne := 1
+	roundTwo := 2
+	outputs := []reviewer.RawReviewerOutput{
+		rawOutput("claude#1", "NEEDS_WORK", "as claude, round one", confidence, strategy, roundOne, severity, priority, lineStart, lineEnd),
+		rawOutput("codex#1", "NEEDS_WORK", "as codex, round one", confidence, strategy, roundOne, severity, priority, lineStart, lineEnd),
+		rawOutput("claude#1", "PASS", "as claude, round two", confidence, strategy, roundTwo, severity, priority, lineStart, lineEnd),
+		rawOutput("codex#1", "PASS", "as codex, round two", confidence, strategy, roundTwo, severity, priority, lineStart, lineEnd),
+	}
+
+	got, err := AnonymizePeerBroadcast(outputs, nil)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast() error = %v", err)
+	}
+	if gotIDs := peerIDs(got); !reflect.DeepEqual(gotIDs, []string{"peer_1", "peer_2"}) {
+		t.Fatalf("peer IDs = %v, want stable unique IDs", gotIDs)
+	}
+	if got[0].Summary != "as peer_1, round two" || got[1].Summary != "as peer_2, round two" {
+		t.Fatalf("summaries = %q, %q; want latest round with stable peer IDs", got[0].Summary, got[1].Summary)
+	}
+	if got[0].Round == nil || *got[0].Round != roundTwo || got[1].Round == nil || *got[1].Round != roundTwo {
+		t.Fatalf("rounds = %v, %v; want latest round", got[0].Round, got[1].Round)
 	}
 }
 
@@ -87,6 +121,7 @@ func TestAnonymizePeerBroadcastRejectsMissingInstanceID(t *testing.T) {
 }
 
 func rawOutput(instanceID, verdict, summary string, confidence float64, strategy string, round int, severity string, priority int, lineStart int, lineEnd int) reviewer.RawReviewerOutput {
+	filePath := "internal/claude/client.go"
 	return reviewer.RawReviewerOutput{
 		InstanceID:        instanceID,
 		Verdict:           verdict,
@@ -101,6 +136,7 @@ func rawOutput(instanceID, verdict, summary string, confidence float64, strategy
 				Body:           "Gemini body",
 				Severity:       &severity,
 				Priority:       &priority,
+				FilePath:       &filePath,
 				LineStart:      &lineStart,
 				LineEnd:        &lineEnd,
 				Confidence:     &confidence,
