@@ -15,7 +15,7 @@ Cerberus v1 is ~17K lines of Bash across 14 scripts under `bin/`. The runtime wo
 
 - **Multi-instance / multi-version reviewers** are not expressible: `bin/review-gate-models.sh` resolves one `{CLAUDE,CODEX,GEMINI}_MODEL_EFFECTIVE` per panel and assumes 1-of-each.
 - **Debate is bolted on, not first-class.** `--debate` hands off to `review-gate-debate.sh` (3,183 lines) which duplicates state-machine and aggregation code from `review-gate-lib.sh`.
-- **Codex CLI is a phase-1 adapter.** `/cerberus:run-team` and parts of `bin/cerberus-task-completed-hook` are Claude-only because Codex lacks the Claude Agent / TaskCompleted / TeammateIdle APIs.
+- **Codex CLI is a phase-1 adapter.** Team automation from v1 is removed rather than adapted because Codex lacks the Claude Agent / TaskCompleted / TeammateIdle APIs.
 - **Bash portability tax.** BSD vs GNU `mktemp`/`date`, jq piping for every JSON read, manual `nohup setsid`, three implementations of `iso8601_to_epoch`. ~15-25% of bash is duplicated/portability code.
 - **Test coverage gaps:** no test for multi-instance same-model rosters, no test for cross-model rosters, no test for Codex inside a debate panel.
 
@@ -300,7 +300,7 @@ On-disk prompt content (strategy and persona) MUST be read at run time so users 
 - [ ] R1–R10 all verifiable
 - [ ] Zero `bin/*.sh` files in the v2 plugin tree (S3)
 - [ ] CI matrix (Claude × Codex × generic, darwin × linux) green (R6)
-- [ ] Codex smoke test: all 13 surviving skills runnable (R4, S1)
+- [x] Codex smoke test: all 13 surviving skills runnable (R4, S1)
 - [ ] Multi-instance roster smoke tests (`codex×3` different models; `claude×2` different strategies) (R2, R5, S2)
 - [ ] Debate smoke test covers mixed-provider and same-provider multi-instance panels (R3, R9)
 - [ ] 1-reviewer plus `--debate` refuses at preflight (D7)

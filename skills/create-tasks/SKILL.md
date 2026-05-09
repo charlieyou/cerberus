@@ -1,8 +1,8 @@
 ---
 name: create-tasks
 disable-model-invocation: true
-description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear), agent-team tasks (--agent-team), or TODO.md
-argument-hint: '[--beads | --linear [project] | --agent-team] [--linear-team <team>] [--from-plan <path/to/plan.md>]'
+description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear), or TODO.md
+argument-hint: '[--beads | --linear [project]] [--linear-team <team>] [--from-plan <path/to/plan.md>]'
 ---
 
 ## Host-Neutral Execution
@@ -53,7 +53,7 @@ Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
 
 # Create Tasks (Plan → Execution Artifacts)
 
-Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear`), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
+Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear`), or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
 > **Downstream**: Output is validated by `/review-tasks` for local/Beads artifacts, or by applying the same validation checks before creating Linear issues.
@@ -62,7 +62,7 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 
 ### Outcome
 
-Generate a validated execution task graph from a stable plan and write it to the requested target (`TODO.md`, Beads, Linear, or agent-team tasks).
+Generate a validated execution task graph from a stable plan and write it to the requested target (`TODO.md`, Beads, or Linear).
 
 ### What good means
 
@@ -82,7 +82,7 @@ Generate a validated execution task graph from a stable plan and write it to the
 
 ### Verification
 
-Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, project/issue/dependency re-listing for Linear, and parser-contract checks for agent-team tasks.
+Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, and project/issue/dependency re-listing for Linear.
 
 ### Final response
 
@@ -103,9 +103,8 @@ Return the Phase 7 summary: output location or tracker target, task count, phase
 | (default) | `TODO.md` in plan directory | Quick projects, no issue tracker |
 | `--beads` | Beads issues with dependencies | Multi-agent parallelization, tracked work |
 | `--linear [project]` | Linear issues in an existing or newly confirmed Linear project | Teams coordinating work in Linear |
-| `--agent-team` | `*-team-tasks.md` next to the plan | Autonomous implementer/reviewer team loop via `/cerberus:run-team` |
 
-Output modes are mutually exclusive. If more than one of `--beads`, `--linear`, or `--agent-team` is supplied, abort before generating output.
+Output modes are mutually exclusive. If more than one of `--beads` or `--linear` is supplied, abort before generating output.
 
 Linear mode details:
 - `--linear` enables Linear output. With no project value, derive the project name from the plan title.
@@ -752,31 +751,6 @@ Use the available Linear integration (MCP tools, CLI, or API client configured i
    - Re-list the target project issues and confirm every generated task ID maps to exactly one Linear issue.
    - Confirm all generated dependencies are represented as Linear blocking relations or explicit dependency links in descriptions.
    - Confirm the project URL/ID, issue count, updated issue count, and created issue count for Phase 7.
-
-#### If `--agent-team` flag is set:
-
-Generate a `*-team-tasks.md` file in the same directory as the plan, using the plan filename prefix so multiple plans do not collide. Examples:
-- `docs/auth-system-plan.md` → `docs/auth-system-team-tasks.md`
-- `~/.claude/plans/search-plan.md` → `~/.claude/plans/search-team-tasks.md`
-
-Use `templates/team-tasks-template.md` as the canonical schema. This format is intentionally Markdown with a YAML frontmatter block and a fenced `meta` block under each task heading so `/cerberus:run-team` can parse it cleanly.
-
-**Team task format requirements:**
-- Header frontmatter includes `plan`, `spec` (or `N/A`), and `generated`.
-- The Task Summary table's `Tasks` column lists task IDs for each execution phase, not just counts, so `/cerberus:run-team` can recover phase membership if needed.
-- Each task heading is exactly `## T### — <subject>`.
-- The first fenced block immediately under each task heading is always ```meta.
-- The `meta` block includes `phase`, `files`, `depends`, `acceptance`, and `plan_link`.
-- `phase` must match the task's execution phase label from the Task Summary table, such as `Setup`, `Foundation`, `System Wiring`, `US1: Login`, or `Polish`.
-- `depends` is always an explicit list, even when empty: `depends: []`.
-- The task body after the `meta` fence contains the full task spec from Phase 4, equivalent to the default TODO.md collapsible task detail content.
-
-**Parser contract:** Task bodies may contain additional fenced code blocks. The runner treats only the first fenced block immediately under the `## T###` heading as metadata; body parsing continues from after that first fence until the next `## ` heading at column 0 or EOF. Do not place narrative text between a task heading and its `meta` block.
-
-**Output path handling:**
-- If the target file already exists, ask whether to overwrite it before writing.
-- Include all source document links, sizing notes, dependencies, verification steps, and acceptance criteria from the validated Phase 4 task specs.
-- Report the output path and total task count in Phase 7.
 
 #### If no output flag is set (default):
 

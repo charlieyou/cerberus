@@ -20,28 +20,6 @@
           }
         ]
       }
-    ],
-    "TaskCompleted": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerberus-task-completed-hook",
-            "timeout": 2100
-          }
-        ]
-      }
-    ],
-    "TeammateIdle": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerberus-teammate-idle-hook",
-            "timeout": 10
-          }
-        ]
-      }
     ]
   }
 }

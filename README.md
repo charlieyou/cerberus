@@ -13,7 +13,7 @@ Cerberus runs as a plugin/skill set in any of the following host environments. T
 | Host | Status | Adapter | Docs |
 |------|--------|---------|------|
 | Claude Code | Supported (default) | `bin/review-gate-hook.sh`, `bin/claude-session-init` | This README |
-| Codex CLI | Phase 1 (release-ready, pending manual smoke) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/<skill>/SKILL.md` | [`docs/CODEX.md`](docs/CODEX.md) |
+| Codex CLI | Phase 1 (release-ready, Codex skill smoke covered) | `bin/codex-session-init`, `bin/codex-stop-hook`, `skills/<skill>/SKILL.md` | [`docs/CODEX.md`](docs/CODEX.md) |
 | `generic` (CI / scripted) | Supported | None — `CERBERUS_HOST=generic` exercises the neutral path | This README |
 
 Existing Claude users do not need to change anything: the legacy `CLAUDE_*` env vars and `~/.claude/projects/...` state paths remain byte-for-byte identical.
