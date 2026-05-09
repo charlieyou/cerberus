@@ -56,6 +56,8 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 	assertRecordedModel(t, recordDir, "claude", "claude-opus-4-7")
 	assertRecordedModel(t, recordDir, "codex", "gpt-5.5")
 	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
+	assertNoJSONOutputFlag(t, recordDir, "codex")
+	assertNoJSONOutputFlag(t, recordDir, "gemini")
 }
 
 func writeMockProvider(t *testing.T, dir, provider string) {
@@ -78,5 +80,16 @@ func assertRecordedModel(t *testing.T, recordDir, provider, want string) {
 	}
 	if strings.Contains(string(data), "--model\nmock\n") {
 		t.Fatalf("%s args = %q, must not use mock model", provider, data)
+	}
+}
+
+func assertNoJSONOutputFlag(t *testing.T, recordDir, provider string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
+	if err != nil {
+		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if strings.Contains(string(data), "--json\n") {
+		t.Fatalf("%s args = %q, must not request JSON output for draft generation", provider, data)
 	}
 }

@@ -114,6 +114,8 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 	assertGenerateRecordedModel(t, recordDir, "claude", "claude-opus-4-7")
 	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.5")
 	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
+	assertGenerateNoJSONOutputFlag(t, recordDir, "codex")
+	assertGenerateNoJSONOutputFlag(t, recordDir, "gemini")
 }
 
 func writeGenerateCLIMockProvider(t *testing.T, dir, provider string) {
@@ -136,5 +138,16 @@ func assertGenerateRecordedModel(t *testing.T, recordDir, provider, want string)
 	}
 	if strings.Contains(string(data), "--model\nmock\n") {
 		t.Fatalf("%s args = %q, must not use mock model", provider, data)
+	}
+}
+
+func assertGenerateNoJSONOutputFlag(t *testing.T, recordDir, provider string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
+	if err != nil {
+		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if strings.Contains(string(data), "--json\n") {
+		t.Fatalf("%s args = %q, must not request JSON output for draft generation", provider, data)
 	}
 }

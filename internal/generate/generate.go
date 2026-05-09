@@ -107,13 +107,13 @@ func providerCommand(ctx context.Context, root string, provider provider, system
 	case "claude":
 		args = []string{"--print", "--output-format", "text", "--model", provider.model, "--append-system-prompt", string(system)}
 	case "codex":
-		args = []string{"--json", "--model", provider.model, "--append-system-prompt", string(system)}
+		args = []string{"--model", provider.model, "--append-system-prompt", string(system)}
 	case "gemini":
 		policyPath := filepath.Join(root, "config", "gemini-readonly-policy.toml")
 		if _, err := os.Stat(policyPath); err != nil {
 			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
 		}
-		args = []string{"--json", "--model", provider.model, "--append-system-prompt", string(system), "--policy-file", policyPath}
+		args = []string{"--model", provider.model, "--append-system-prompt", string(system), "--policy-file", policyPath}
 	default:
 		return nil, fmt.Errorf("unsupported generator provider %q", provider.name)
 	}
