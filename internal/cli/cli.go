@@ -22,6 +22,7 @@ Subcommands:
   artifact-path      print the run artifact path
   author-context     set or clear reviewer author context
   hook               run a host hook subcommand
+  generate           generate multi-model drafts
 `
 
 // Run dispatches the cerberus CLI and returns a process exit code.
@@ -54,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runAuthorContext(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "generate":
+		return runGenerate(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown subcommand %q\n", args[0])
 		printUsage(stderr)

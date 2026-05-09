@@ -12,4 +12,8 @@ fi
 if [ "${CERBERUS_MOCK_EMPTY_STDOUT:-}" = "1" ]; then
   exit 0
 fi
+if [ -n "${CERBERUS_FIXTURE_DIR:-}" ]; then
+  cat "$CERBERUS_FIXTURE_DIR/$provider-create-spec.md"
+  exit 0
+fi
 printf '{"findings":[],"verdict":"PASS","summary":"mock pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}\n'
