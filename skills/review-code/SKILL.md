@@ -89,7 +89,7 @@ Note: `--commit` generates a single net diff by applying the listed commits onto
 
 Use the Bash tool to spawn the code review.
 
-Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--consensus` (majority/all/any), `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus an optional focus string (either `--focus "<text>"` or trailing free-text; use `--` to force focus when needed).
+Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--consensus` (majority/all/any), `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus optional trailing free-text as a focus string (use `--` to force focus when needed).
 
 **Consensus modes:**
 - `majority` (default): At least 2 reviewers PASS, or all valid reviewers PASS
@@ -113,11 +113,11 @@ if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_
 
 # User: /review-code "focus on security"
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --focus "focus on security"
+"$CERBERUS_ROOT/bin/cerberus" spawn-code-review focus on security
 
 # User: /review-code --base main "check error handling"
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --base main --focus "check error handling"
+"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --base main check error handling
 
 # User: /review-code --exclude 'dist/**' --exclude '**/*.snap'
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
