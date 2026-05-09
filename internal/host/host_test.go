@@ -3,6 +3,7 @@ package host
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,8 +30,22 @@ func TestNewFromEnvRejectsUnknownHost(t *testing.T) {
 	}
 }
 
-func TestProjectKeyDerivesFromAbsoluteRoot(t *testing.T) {
-	env := &config.Env{Host: "claude", Root: filepath.Join("relative", "repo")}
+func TestProjectKeyDerivesFromWorkspaceRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("os.Chdir() returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	env := &config.Env{Host: "claude", Root: filepath.Join(t.TempDir(), "plugin-root")}
 	adapter, err := NewFromEnv(env)
 	if err != nil {
 		t.Fatalf("NewFromEnv() returned error: %v", err)
@@ -45,7 +60,11 @@ func TestProjectKeyDerivesFromAbsoluteRoot(t *testing.T) {
 		t.Fatalf("ProjectKey() returned error on second call: %v", err)
 	}
 
-	absRoot, err := filepath.Abs(env.Root)
+	currentRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() returned error: %v", err)
+	}
+	absRoot, err := filepath.Abs(currentRoot)
 	if err != nil {
 		t.Fatalf("filepath.Abs() returned error: %v", err)
 	}

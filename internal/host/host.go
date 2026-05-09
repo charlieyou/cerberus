@@ -66,16 +66,18 @@ func (a adapter) ProjectKey(env *config.Env) (string, error) {
 	if env.ProjectKey != "" {
 		return env.ProjectKey, nil
 	}
-	if env.Root == "" {
-		return "", fmt.Errorf("CERBERUS_ROOT is required to derive project key")
-	}
 
-	absRoot, err := filepath.Abs(env.Root)
+	workspaceRoot, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("resolve absolute CERBERUS_ROOT: %w", err)
+		return "", fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	sum := sha256.Sum256([]byte(absRoot))
+	absWorkspaceRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute workspace root: %w", err)
+	}
+
+	sum := sha256.Sum256([]byte(absWorkspaceRoot))
 	return hex.EncodeToString(sum[:])[:16], nil
 }
 
