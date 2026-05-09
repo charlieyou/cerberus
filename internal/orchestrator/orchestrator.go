@@ -2,10 +2,17 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"os"
+	"time"
 
+	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/config"
+	"github.com/charlieyou/cerberus/internal/host"
 	"github.com/charlieyou/cerberus/internal/reviewer"
+	"github.com/charlieyou/cerberus/internal/roster"
+	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 // Params contains the single-pass review inputs.
@@ -22,6 +29,161 @@ type ReviewerSlot struct {
 }
 
 // RunSinglePass executes one review round and resolves the gate from reviewer output.
-func RunSinglePass(_ context.Context, _ *config.Env, _ Params, _ reviewer.Spawner) error {
-	return errors.New("not implemented")
+func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner reviewer.Spawner) error {
+	if env == nil {
+		env = config.Resolve()
+	}
+	resolvedEnv, runRoot, err := resolveRun(env)
+	if err != nil {
+		return err
+	}
+	if spawner == nil {
+		spawner = reviewer.Runner{
+			Root:      resolvedEnv.Root,
+			RunRoot:   runRoot,
+			Iteration: 1,
+			Round:     1,
+		}
+	}
+
+	slots, err := resolveSlots(params)
+	if err != nil {
+		return err
+	}
+
+	gatePath := state.GateStatePath(runRoot)
+	if existing, err := state.ReadGateState(gatePath); err == nil && existing.Status == state.StatusPending {
+		fmt.Fprintf(os.Stderr, "warning: gate-state.json is already pending at %s; starting another review may overwrite active state\n", gatePath)
+	}
+
+	startedAt := time.Now().UTC()
+	gate := &state.GateState{
+		RunKey:           resolvedEnv.RunKey,
+		Host:             resolvedEnv.Host,
+		ProjectKey:       resolvedEnv.ProjectKey,
+		SessionID:        resolvedEnv.SessionID,
+		TranscriptPath:   resolvedEnv.TranscriptPath,
+		Status:           state.StatusPending,
+		Verdict:          nil,
+		CurrentIteration: 1,
+		MaxRounds:        1,
+		Debate:           false,
+		RosterID:         "default",
+		StartedAt:        startedAt,
+	}
+	if err := state.WriteGateState(gatePath, gate); err != nil {
+		return err
+	}
+	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventReviewSpawned,
+		Timestamp: startedAt,
+		Payload: map[string]any{
+			"run_key":        resolvedEnv.RunKey,
+			"reviewer_count": len(slots),
+		},
+	}); err != nil {
+		return err
+	}
+
+	outputs, err := runRound(ctx, slots, spawner, roundPrompts{
+		User:    params.Prompt,
+		RunRoot: runRoot,
+		Root:    resolvedEnv.Root,
+	})
+	if err != nil {
+		return err
+	}
+	result, err := aggregate.Compute(outputs, aggregate.ModeMajority)
+	if err != nil {
+		return err
+	}
+
+	endedAt := time.Now().UTC()
+	state.MarkResolved(gate, result.Verdict, endedAt)
+	if err := state.WriteGateState(gatePath, gate); err != nil {
+		return err
+	}
+	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     telemetry.EventReviewResolved,
+		Timestamp: endedAt,
+		Payload: map[string]any{
+			"run_key": resolvedEnv.RunKey,
+			"verdict": result.Verdict,
+		},
+	}); err != nil {
+		return err
+	}
+	return telemetry.WriteRunTelemetry(runRoot, &telemetry.RunTelemetry{
+		RunKey:       resolvedEnv.RunKey,
+		Host:         resolvedEnv.Host,
+		Mode:         "smart",
+		RosterID:     "default",
+		Debate:       false,
+		Iterations:   1,
+		TotalRounds:  1,
+		FinalVerdict: result.Verdict,
+		StartedAt:    startedAt,
+		EndedAt:      &endedAt,
+	})
+}
+
+func resolveRun(env *config.Env) (*config.Env, string, error) {
+	resolved := *env
+	if resolved.Host == "" {
+		resolved.Host = "generic"
+	}
+	if resolved.RunKey == "" {
+		resolved.RunKey = resolved.SessionID
+	}
+	if resolved.RunKey == "" {
+		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or CERBERUS_SESSION_ID is required")
+	}
+
+	adapter, err := host.NewFromEnv(&resolved)
+	if err != nil {
+		return nil, "", err
+	}
+	if resolved.ProjectKey == "" {
+		projectKey, err := adapter.ProjectKey(&resolved)
+		if err != nil {
+			return nil, "", err
+		}
+		resolved.ProjectKey = projectKey
+	}
+	if resolved.StateRoot == "" {
+		stateRoot, err := adapter.StateRoot(&resolved)
+		if err != nil {
+			return nil, "", err
+		}
+		resolved.StateRoot = stateRoot
+	}
+	runRoot := state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey)
+	if err := state.EnsureRunDir(runRoot); err != nil {
+		return nil, "", err
+	}
+	return &resolved, runRoot, nil
+}
+
+func resolveSlots(params Params) ([]ReviewerSlot, error) {
+	if len(params.Reviewers) > 0 {
+		return params.Reviewers, nil
+	}
+
+	file, err := roster.LoadRosters("")
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := roster.Resolve(file, "", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	slots := make([]ReviewerSlot, len(resolved))
+	for i, slot := range resolved {
+		slots[i] = ReviewerSlot{
+			ID:       slot.InstanceID,
+			Provider: slot.Provider,
+			Model:    slot.Model,
+		}
+	}
+	return slots, nil
 }
