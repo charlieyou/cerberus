@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/generate"
 )
 
@@ -16,6 +17,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: cerberus generate <output-dir> --type <create-plan|create-spec|healthcheck|architecture-review> --mode <mode> --prompt-file <path>")
 		return 2
 	}
+	opts.Root = config.Resolve().Root
 	if err := generate.Run(context.Background(), opts); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

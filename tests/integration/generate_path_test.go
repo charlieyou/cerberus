@@ -29,8 +29,9 @@ func TestGeneratePath(t *testing.T) {
 	fixtureDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
 
 	cmd := exec.Command(binary, "generate", outputDir, "--type", "create-spec", "--mode", "smart", "--prompt-file", promptFile)
-	cmd.Dir = repoRoot
+	cmd.Dir = t.TempDir()
 	cmd.Env = append(os.Environ(),
+		"CERBERUS_ROOT="+repoRoot,
 		"CERBERUS_FIXTURE_DIR="+fixtureDir,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
 		"PATH="+filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"),

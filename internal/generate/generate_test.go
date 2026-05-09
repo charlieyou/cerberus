@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,8 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 		writeMockProvider(t, binDir, provider)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	recordDir := t.TempDir()
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", recordDir)
 
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
 	if err := os.WriteFile(promptFile, []byte("fixture prompt"), 0o644); err != nil {
@@ -50,13 +53,30 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", path, got, want)
 		}
 	}
+	assertRecordedModel(t, recordDir, "claude", "claude-opus-4-7")
+	assertRecordedModel(t, recordDir, "codex", "gpt-5.5")
+	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
 }
 
 func writeMockProvider(t *testing.T, dir, provider string) {
 	t.Helper()
 	path := filepath.Join(dir, provider)
-	body := "#!/bin/sh\ncat >/dev/null\nprintf '# " + provider + " draft\\n'\n"
+	body := "#!/bin/sh\nset -eu\ncat >/dev/null\nprintf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nprintf '# " + provider + " draft\\n'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+func assertRecordedModel(t *testing.T, recordDir, provider, want string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
+	if err != nil {
+		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if !strings.Contains(string(data), "--model\n"+want+"\n") {
+		t.Fatalf("%s args = %q, want model %q", provider, data, want)
+	}
+	if strings.Contains(string(data), "--model\nmock\n") {
+		t.Fatalf("%s args = %q, must not use mock model", provider, data)
 	}
 }

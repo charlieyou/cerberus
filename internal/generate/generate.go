@@ -7,13 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-)
 
-var defaultProviders = []provider{
-	{name: "claude", model: "mock"},
-	{name: "codex", model: "mock"},
-	{name: "gemini", model: "mock"},
-}
+	"github.com/charlieyou/cerberus/internal/config"
+)
 
 // Options configures one generator run.
 type Options struct {
@@ -72,11 +68,12 @@ func Run(ctx context.Context, opts Options) error {
 
 func providersFor(names []string) []provider {
 	if len(names) == 0 {
-		return defaultProviders
+		names = []string{"claude", "codex", "gemini"}
 	}
 	providers := make([]provider, 0, len(names))
 	for _, name := range names {
-		providers = append(providers, provider{name: name, model: "mock"})
+		model, _ := config.DefaultModelForProvider(name)
+		providers = append(providers, provider{name: name, model: model})
 	}
 	return providers
 }
