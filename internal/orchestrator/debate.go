@@ -31,11 +31,51 @@ type Orchestrator struct {
 // RunDebate executes a multi-round debate review on the same orchestrator path
 // as single-pass review, inserting an anonymized peer broadcast between rounds.
 func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, prompt []byte, maxRounds int) (Verdict, error) {
+	started, err := o.StartDebate(Params{
+		Prompt:    prompt,
+		Reviewers: slots,
+		Mode:      o.Mode,
+		MaxRounds: maxRounds,
+		Consensus: o.Consensus,
+		RosterID:  o.RosterID,
+	})
+	if err != nil {
+		return Verdict{}, err
+	}
+	return o.CompleteDebate(ctx, started)
+}
+
+// StartDebate creates the pending gate for a detached debate runtime.
+func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
+	if params.Mode == "" {
+		params.Mode = params.RosterDefaults.Mode
+	}
+	if params.Mode == "" {
+		params.Mode = "smart"
+	}
+	if params.MaxRounds <= 0 {
+		params.MaxRounds = params.RosterDefaults.MaxRounds
+	}
+	if params.MaxRounds <= 0 {
+		params.MaxRounds = 3
+	}
+	if params.Consensus == "" {
+		params.Consensus = aggregate.ModeMajority
+	}
+	if params.RosterID == "" {
+		params.RosterID = "default"
+	}
+	return o.startDebate(params)
+}
+
+func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
+	slots := params.Reviewers
+	maxRounds := params.MaxRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	if len(slots) < 2 {
-		return Verdict{}, fmt.Errorf("debate requires at least two reviewers")
+		return nil, fmt.Errorf("debate requires at least two reviewers")
 	}
 
 	env := o.Env
@@ -44,23 +84,32 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 	}
 	resolvedEnv, runRoot, err := resolveRun(env)
 	if err != nil {
-		return Verdict{}, err
+		return nil, err
 	}
 	if err := preflightExplicitSlots(slots, true); err != nil {
 		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "reviewer", err)
-		return Verdict{}, err
+		return nil, err
 	}
 
 	startedAt := time.Now().UTC()
-	consensus := o.Consensus
+	consensus := params.Consensus
+	if o.Consensus != "" {
+		consensus = o.Consensus
+	}
 	if consensus == "" {
 		consensus = aggregate.ModeMajority
 	}
-	mode := o.Mode
+	mode := params.Mode
+	if o.Mode != "" {
+		mode = o.Mode
+	}
 	if mode == "" {
 		mode = "smart"
 	}
 	rosterID := o.RosterID
+	if rosterID == "" {
+		rosterID = params.RosterID
+	}
 	if rosterID == "" {
 		rosterID = "default"
 	}
@@ -80,7 +129,7 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 	}
 	gatePath := state.GateStatePath(runRoot)
 	if err := state.WriteGateState(gatePath, gate); err != nil {
-		return Verdict{}, err
+		return nil, err
 	}
 	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
 		Event:     telemetry.EventRosterSelected,
@@ -95,7 +144,37 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 			"debate":         true,
 		},
 	}); err != nil {
-		return Verdict{}, err
+		return nil, err
+	}
+	params.Reviewers = slots
+	params.Mode = mode
+	params.MaxRounds = maxRounds
+	params.Consensus = consensus
+	params.RosterID = rosterID
+	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
+}
+
+// CompleteDebate runs reviewers for a pending debate gate and resolves it.
+func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (Verdict, error) {
+	if started == nil {
+		return Verdict{}, fmt.Errorf("started run is required")
+	}
+	resolvedEnv := &started.Env
+	runRoot := started.RunRoot
+	slots := started.Params.Reviewers
+	prompt := started.Params.Prompt
+	maxRounds := started.Params.MaxRounds
+	consensus := started.Params.Consensus
+	if consensus == "" {
+		consensus = aggregate.ModeMajority
+	}
+	mode := started.Params.Mode
+	if mode == "" {
+		mode = "smart"
+	}
+	rosterID := started.Params.RosterID
+	if rosterID == "" {
+		rosterID = "default"
 	}
 
 	spawner := o.Spawner
@@ -177,6 +256,12 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 
 	endedAt := time.Now().UTC()
 	reviewerSummary, _, _ := telemetryTotals(finalRoundResults)
+	gatePath := state.GateStatePath(runRoot)
+	gate, err := state.ReadGateState(gatePath)
+	if err != nil {
+		return Verdict{}, err
+	}
+	startedAt := gate.StartedAt
 	if err := telemetry.WriteIterationTelemetry(runRoot, 1, &telemetry.IterationTelemetry{
 		Iteration:       1,
 		Rounds:          roundsCompleted,
@@ -185,10 +270,6 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 		StartedAt:       startedAt,
 		EndedAt:         &endedAt,
 	}); err != nil {
-		return Verdict{}, err
-	}
-	gate, err = state.ReadGateState(gatePath)
-	if err != nil {
 		return Verdict{}, err
 	}
 	state.MarkResolved(gate, final.Verdict, endedAt)
@@ -212,6 +293,28 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 		return Verdict{}, err
 	}
 	return final, nil
+}
+
+// ResolveDebateFailure resolves a detached debate gate when the runtime cannot
+// produce a reviewer aggregate.
+func ResolveDebateFailure(started *StartedRun, cause error) error {
+	if started == nil {
+		return fmt.Errorf("started run is required")
+	}
+	gatePath := state.GateStatePath(started.RunRoot)
+	gate, err := state.ReadGateState(gatePath)
+	if err != nil {
+		return err
+	}
+	if gate.Status == state.StatusResolved {
+		return nil
+	}
+	reason := "debate runtime failed"
+	if cause != nil {
+		reason = fmt.Sprintf("%s: %v", reason, cause)
+	}
+	state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), reason)
+	return state.WriteGateState(gatePath, gate)
 }
 
 func writePeerBroadcast(runRoot string, iteration, round int, records []anonymize.PeerRecord) ([]byte, error) {

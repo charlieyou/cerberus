@@ -43,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSpawnCodeReview(args[1:], stdout, stderr)
 	case "run-single-pass":
 		return runSinglePassRuntime(args[1:], stdout, stderr)
+	case "run-debate":
+		return runDebateRuntime(args[1:], stdout, stderr)
 	case "wait":
 		return runWait(args[1:], stdout, stderr)
 	case "resolve":

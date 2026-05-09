@@ -51,14 +51,25 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if opts.debate {
-		_, err := (orchestrator.Orchestrator{
-			Env:       config.Resolve(),
-			Consensus: aggregate.Mode(opts.consensus),
-			Mode:      opts.mode,
-			RosterID:  resolved.rosterID,
-		}).RunDebate(context.Background(), resolved.reviewers, prompt, opts.maxRounds)
+		started, err := (orchestrator.Orchestrator{Env: config.Resolve()}).StartDebate(orchestrator.Params{
+			Prompt:         prompt,
+			Reviewers:      resolved.reviewers,
+			RosterDefaults: resolved.defaults,
+			Mode:           opts.mode,
+			MaxRounds:      opts.explicitMaxRounds(),
+			Consensus:      aggregate.Mode(opts.consensus),
+			RosterID:       resolved.rosterID,
+		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := startDebateRuntime(started); err != nil {
+			if resolveErr := orchestrator.ResolveDebateFailure(started, err); resolveErr != nil {
+				fmt.Fprintf(stderr, "%v\nfailed to resolve gate after debate runtime launch error: %v\n", err, resolveErr)
+			} else {
+				fmt.Fprintln(stderr, err)
+			}
 			return 1
 		}
 		fmt.Fprintln(stdout, "review spawned")
@@ -70,7 +81,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		Reviewers:      resolved.reviewers,
 		RosterDefaults: resolved.defaults,
 		Mode:           opts.mode,
-		MaxRounds:      opts.maxRounds,
+		MaxRounds:      opts.explicitMaxRounds(),
 		Consensus:      aggregate.Mode(opts.consensus),
 		RosterID:       resolved.rosterID,
 	}
@@ -106,37 +117,47 @@ func exitCodeForError(err error, fallback int) int {
 }
 
 var startReviewRuntime = startReviewRuntimeProcess
+var startDebateRuntime = startDebateRuntimeProcess
 
 func startReviewRuntimeProcess(started *orchestrator.StartedRun) error {
 	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
+	return startRuntimeProcess(started, requestPath, "run-single-pass", "single-pass")
+}
+
+func startDebateRuntimeProcess(started *orchestrator.StartedRun) error {
+	requestPath := filepath.Join(started.RunRoot, "debate-request.json")
+	return startRuntimeProcess(started, requestPath, "run-debate", "debate")
+}
+
+func startRuntimeProcess(started *orchestrator.StartedRun, requestPath, subcommand, logPrefix string) error {
 	data, err := json.MarshalIndent(started, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal single-pass request: %w", err)
+		return fmt.Errorf("marshal %s request: %w", logPrefix, err)
 	}
 	data = append(data, '\n')
 	if err := os.WriteFile(requestPath, data, 0o644); err != nil {
-		return fmt.Errorf("write single-pass request: %w", err)
+		return fmt.Errorf("write %s request: %w", logPrefix, err)
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	cmd := exec.Command(exe, "run-single-pass", requestPath)
-	stdout, err := os.OpenFile(filepath.Join(started.RunRoot, "single-pass.stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	cmd := exec.Command(exe, subcommand, requestPath)
+	stdout, err := os.OpenFile(filepath.Join(started.RunRoot, logPrefix+".stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("open single-pass stdout log: %w", err)
+		return fmt.Errorf("open %s stdout log: %w", logPrefix, err)
 	}
 	defer stdout.Close()
-	stderr, err := os.OpenFile(filepath.Join(started.RunRoot, "single-pass.stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	stderr, err := os.OpenFile(filepath.Join(started.RunRoot, logPrefix+".stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("open single-pass stderr log: %w", err)
+		return fmt.Errorf("open %s stderr log: %w", logPrefix, err)
 	}
 	defer stderr.Close()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start single-pass runtime: %w", err)
+		return fmt.Errorf("start %s runtime: %w", logPrefix, err)
 	}
 	return cmd.Process.Release()
 }
@@ -168,6 +189,33 @@ func runSinglePassRuntime(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runDebateRuntime(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: cerberus run-debate <request-path>")
+		return 2
+	}
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var started orchestrator.StartedRun
+	if err := json.Unmarshal(data, &started); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if _, err := (orchestrator.Orchestrator{}).CompleteDebate(context.Background(), &started); err != nil {
+		if resolveErr := orchestrator.ResolveDebateFailure(&started, err); resolveErr != nil {
+			fmt.Fprintf(stderr, "%v\nfailed to resolve gate after debate runtime error: %v\n", err, resolveErr)
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	_ = stdout
+	return 0
+}
+
 type spawnCodeReviewOptions struct {
 	mode         string
 	modeSet      bool
@@ -184,6 +232,13 @@ type spawnCodeReviewOptions struct {
 	commits      []string
 	debate       bool
 	focus        string
+}
+
+func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
+	if opts.maxRoundsSet {
+		return opts.maxRounds
+	}
+	return 0
 }
 
 func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReviewOptions, error) {

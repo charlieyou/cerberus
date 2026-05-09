@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,6 +135,7 @@ func TestSpawnCodeReviewDebateRejectsDegradedDefaultToOneReviewer(t *testing.T) 
 
 func TestSpawnCodeReviewDebateTwoReviewersDefaultMaxRounds(t *testing.T) {
 	setSpawnTestEnv(t)
+	startDebateRuntimeCaptureForTest(t)
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate"}, &stdout, &stderr)
@@ -148,10 +150,14 @@ func TestSpawnCodeReviewDebateTwoReviewersDefaultMaxRounds(t *testing.T) {
 	if gate.MaxRounds != 3 {
 		t.Fatalf("gate max_rounds = %d, want 3", gate.MaxRounds)
 	}
+	if gate.Status != state.StatusPending {
+		t.Fatalf("gate status = %q, want pending before detached runtime completes", gate.Status)
+	}
 }
 
 func TestSpawnCodeReviewDebateMaxRoundsOverride(t *testing.T) {
 	setSpawnTestEnv(t)
+	startDebateRuntimeCaptureForTest(t)
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate", "--max-rounds", "5"}, &stdout, &stderr)
@@ -165,6 +171,84 @@ func TestSpawnCodeReviewDebateMaxRoundsOverride(t *testing.T) {
 	}
 	if gate.MaxRounds != 5 {
 		t.Fatalf("gate max_rounds = %d, want 5", gate.MaxRounds)
+	}
+}
+
+func TestSpawnCodeReviewDebateUsesRosterDefaultsWhenFlagsOmitted(t *testing.T) {
+	setSpawnTestEnv(t)
+	started := startDebateRuntimeCaptureForTest(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".cerberus"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
+	}
+	rosters := []byte(`version: 1
+defaults:
+  mode: max
+  max_rounds: 5
+rosters:
+  default:
+    reviewers:
+      - provider: codex
+        model: gpt
+      - provider: claude
+        model: opus
+`)
+	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "rosters.yaml"), rosters, 0o644); err != nil {
+		t.Fatalf("WriteFile(rosters.yaml) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%s) error = %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd %s: %v", oldwd, err)
+		}
+	})
+	initEmptyGitRepo(t, dir)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--debate"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review --debate exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if (*started).Params.Mode != "max" {
+		t.Fatalf("started debate mode = %q, want max", (*started).Params.Mode)
+	}
+	if (*started).Params.MaxRounds != 5 {
+		t.Fatalf("started debate max_rounds = %d, want 5", (*started).Params.MaxRounds)
+	}
+}
+
+func TestSpawnCodeReviewDebateRuntimeLaunchFailureResolvesPendingGate(t *testing.T) {
+	setSpawnTestEnv(t)
+	old := startDebateRuntime
+	startDebateRuntime = func(started *orchestrator.StartedRun) error {
+		return errors.New("debate launch failed")
+	}
+	t.Cleanup(func() {
+		startDebateRuntime = old
+	})
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate"}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("spawn-code-review exit code = 0, want non-zero")
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want resolved", gate.Status)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "debate launch failed") {
+		t.Fatalf("resolution reason = %q, want launch failure", gate.ResolutionReason)
 	}
 }
 
@@ -295,6 +379,49 @@ func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
 		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
 	}
 	if !strings.Contains(gate.ResolutionReason, "single-pass runtime failed") {
+		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
+	}
+	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
+		t.Fatalf("PollGateState() error = %v", err)
+	}
+}
+
+func TestDebateRuntimeFailureResolvesPendingGate(t *testing.T) {
+	setSpawnTestEnv(t)
+	t.Setenv("CERBERUS_MOCK_EXIT", "1")
+	started, err := (orchestrator.Orchestrator{}).StartDebate(orchestrator.Params{
+		Prompt: []byte("review this"),
+		Reviewers: []orchestrator.ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+			{ID: "claude#1", Provider: "claude", Model: "stub", InstanceIndex: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartDebate() error = %v", err)
+	}
+	requestPath := filepath.Join(started.RunRoot, "debate-request.json")
+	data, err := json.Marshal(started)
+	if err != nil {
+		t.Fatalf("Marshal(started) error = %v", err)
+	}
+	if err := os.WriteFile(requestPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(request) error = %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := runDebateRuntime([]string{requestPath}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("runDebateRuntime exit code = 0, want non-zero")
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want resolved", gate.Status)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "debate runtime failed") {
 		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
 	}
 	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
@@ -635,6 +762,34 @@ func onlyCodexCLIOnPath(t *testing.T) {
 	t.Setenv("PATH", bin)
 }
 
+func initEmptyGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test User"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "README.md"},
+		{"commit", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+}
+
 func captureProcessStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	original := os.Stderr
@@ -752,6 +907,20 @@ func startRuntimeInlineForTest(t *testing.T, beforeComplete func()) {
 	t.Cleanup(func() {
 		startReviewRuntime = old
 	})
+}
+
+func startDebateRuntimeCaptureForTest(t *testing.T) **orchestrator.StartedRun {
+	t.Helper()
+	old := startDebateRuntime
+	var captured *orchestrator.StartedRun
+	startDebateRuntime = func(started *orchestrator.StartedRun) error {
+		captured = started
+		return nil
+	}
+	t.Cleanup(func() {
+		startDebateRuntime = old
+	})
+	return &captured
 }
 
 func waitForSpawnGateStatus(t *testing.T, want string) *state.GateState {
