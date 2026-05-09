@@ -62,6 +62,9 @@ func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
 	if params.RosterID == "" {
 		params.RosterID = "default"
 	}
+	if params.ArtifactType == "" {
+		params.ArtifactType = "code"
+	}
 	return o.startDebate(params)
 }
 
@@ -244,6 +247,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 		}
 		roundResults, result, err := runRound(ctx, slots, spawner, roundPrompts{
 			User:          prompt,
+			ArtifactType:  started.Params.ArtifactType,
 			PeerBroadcast: peerBroadcast,
 			RunRoot:       runRoot,
 			Root:          resolvedEnv.Root,

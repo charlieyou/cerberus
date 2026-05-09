@@ -30,12 +30,17 @@ func (values *repeatString) Set(value string) error {
 }
 
 func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
+	return runSpawnReview(args, stdout, stderr, "code")
+}
+
+func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string) int {
 	opts, err := parseSpawnCodeReviewFlags(args, stderr)
 	if err != nil {
 		recordSpawnPreflightFailure("flags", err)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	opts.artifactType = artifactType
 
 	resolved, err := resolveReviewers(opts)
 	if err != nil {
@@ -52,6 +57,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 	if opts.debate {
 		started, err := (orchestrator.Orchestrator{Env: config.Resolve()}).StartDebate(orchestrator.Params{
 			Prompt:         prompt,
+			ArtifactType:   opts.artifactType,
 			Reviewers:      resolved.reviewers,
 			RosterDefaults: resolved.defaults,
 			Mode:           opts.mode,
@@ -77,6 +83,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 
 	params := orchestrator.Params{
 		Prompt:         prompt,
+		ArtifactType:   opts.artifactType,
 		Reviewers:      resolved.reviewers,
 		RosterDefaults: resolved.defaults,
 		Mode:           opts.mode,
@@ -216,6 +223,7 @@ func runDebateRuntime(args []string, stdout, stderr io.Writer) int {
 }
 
 type spawnCodeReviewOptions struct {
+	artifactType string
 	mode         string
 	modeSet      bool
 	maxRounds    int
@@ -231,6 +239,7 @@ type spawnCodeReviewOptions struct {
 	commits      []string
 	debate       bool
 	focus        string
+	positionals  []string
 }
 
 func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
@@ -284,6 +293,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	if len(opts.commits) > 0 {
 		opts.commits, opts.focus = splitTrailingCommitArgs(opts.commits, fs.Args())
 	} else {
+		opts.positionals = fs.Args()
 		opts.focus = strings.Join(fs.Args(), " ")
 	}
 	if err := validateSpawnCodeReviewOptions(opts); err != nil {
@@ -463,6 +473,23 @@ func reviewersFromAgents(agents string) ([]orchestrator.ReviewerSlot, string, er
 }
 
 func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
+	return buildReviewPrompt(opts)
+}
+
+func buildReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
+	switch opts.artifactType {
+	case "", "code":
+		return buildCodeReviewPromptBody(opts)
+	case "plan", "spec", "epic-verify":
+		return buildArtifactReviewPrompt(opts)
+	case "ask":
+		return []byte("# Ask panel\n\n" + strings.TrimSpace(opts.focus) + "\n"), nil
+	default:
+		return nil, fmt.Errorf("unsupported artifact type %q", opts.artifactType)
+	}
+}
+
+func buildCodeReviewPromptBody(opts spawnCodeReviewOptions) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "# Code review")
 	context, err := savedAuthorContext()
@@ -486,6 +513,27 @@ func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
 		diff = "(no diff output)"
 	}
 	fmt.Fprintf(&buf, "\n```diff\n%s\n```\n", diff)
+	return buf.Bytes(), nil
+}
+
+func buildArtifactReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
+	if len(opts.positionals) == 0 {
+		return nil, fmt.Errorf("%s review requires a file path", opts.artifactType)
+	}
+	path := opts.positionals[0]
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s review file %s: %w", opts.artifactType, path, err)
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# %s review\n\nPath: %s\n\n", opts.artifactType, path)
+	if len(opts.positionals) > 1 {
+		fmt.Fprintf(&buf, "Focus: %s\n\n", strings.Join(opts.positionals[1:], " "))
+	}
+	buf.Write(data)
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		buf.WriteByte('\n')
+	}
 	return buf.Bytes(), nil
 }
 

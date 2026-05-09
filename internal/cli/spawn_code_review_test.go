@@ -62,22 +62,55 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 }
 
 func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
-	for _, subcommand := range []string{"spawn-plan-review", "spawn-spec-review", "spawn-ask", "spawn-epic-verify"} {
-		t.Run(subcommand, func(t *testing.T) {
+	cases := []struct {
+		subcommand string
+		args       []string
+		wantPrompt []string
+	}{
+		{
+			subcommand: "spawn-plan-review",
+			args:       []string{"--agents", "codex", writeSpawnFixture(t, "plan.md", "PLAN BODY")},
+			wantPrompt: []string{"Implementation Plan Review Guidelines", "PLAN BODY"},
+		},
+		{
+			subcommand: "spawn-spec-review",
+			args:       []string{"--agents", "codex", writeSpawnFixture(t, "spec.md", "SPEC BODY")},
+			wantPrompt: []string{"Feature Specification Review Guidelines", "SPEC BODY"},
+		},
+		{
+			subcommand: "spawn-ask",
+			args:       []string{"--agents", "codex", "codex smoke question"},
+			wantPrompt: []string{"Ask Panel Guidelines", "codex smoke question"},
+		},
+		{
+			subcommand: "spawn-epic-verify",
+			args:       []string{"--agents", "codex", writeSpawnFixture(t, "epic.md", "EPIC BODY")},
+			wantPrompt: []string{"Epic Verification Guidelines", "EPIC BODY"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.subcommand, func(t *testing.T) {
 			setSpawnTestEnv(t)
 			startRuntimeInlineForTest(t, nil)
 			var stdout, stderr bytes.Buffer
+			args := append([]string{tc.subcommand}, tc.args...)
 
-			code := run([]string{subcommand, "--agents", "codex", "codex smoke"}, &stdout, &stderr)
+			code := run(args, &stdout, &stderr)
 
 			if code != 0 {
-				t.Fatalf("%s exit code = %d, want 0; stderr: %s", subcommand, code, stderr.String())
+				t.Fatalf("%s exit code = %d, want 0; stderr: %s", tc.subcommand, code, stderr.String())
 			}
 			if !strings.Contains(stdout.String(), "review spawned") {
-				t.Fatalf("%s stdout = %q, want review spawned", subcommand, stdout.String())
+				t.Fatalf("%s stdout = %q, want review spawned", tc.subcommand, stdout.String())
 			}
 			if gate := waitForSpawnGateStatus(t, state.StatusResolved); gate.Status != state.StatusResolved {
-				t.Fatalf("%s gate status = %q, want resolved", subcommand, gate.Status)
+				t.Fatalf("%s gate status = %q, want resolved", tc.subcommand, gate.Status)
+			}
+			prompt := readSpawnReviewerPrompt(t, "codex#1")
+			for _, want := range tc.wantPrompt {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("%s reviewer prompt missing %q:\n%s", tc.subcommand, want, prompt)
+				}
 			}
 		})
 	}
@@ -901,6 +934,25 @@ func readSpawnEventLog(t *testing.T) []map[string]any {
 		events = append(events, event)
 	}
 	return events
+}
+
+func readSpawnReviewerPrompt(t *testing.T, reviewerID string) string {
+	t.Helper()
+	path := filepath.Join(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run", "iterations", "1", "round-1", "reviewers", reviewerID, "prompt.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	return string(data)
+}
+
+func writeSpawnFixture(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+	return path
 }
 
 func findSpawnEvent(t *testing.T, events []map[string]any, eventName string) map[string]any {

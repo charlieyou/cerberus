@@ -44,8 +44,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "spawn-code-review", "spawn-plan-review", "spawn-spec-review", "spawn-ask", "spawn-epic-verify":
+	case "spawn-code-review":
 		return runSpawnCodeReview(args[1:], stdout, stderr)
+	case "spawn-plan-review":
+		return runSpawnReview(args[1:], stdout, stderr, "plan")
+	case "spawn-spec-review":
+		return runSpawnReview(args[1:], stdout, stderr, "spec")
+	case "spawn-ask":
+		return runSpawnReview(args[1:], stdout, stderr, "ask")
+	case "spawn-epic-verify":
+		return runSpawnReview(args[1:], stdout, stderr, "epic-verify")
 	case "run-single-pass":
 		return runSinglePassRuntime(args[1:], stdout, stderr)
 	case "run-debate":

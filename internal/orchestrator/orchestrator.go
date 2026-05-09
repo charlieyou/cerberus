@@ -22,6 +22,7 @@ type ConsensusMode = aggregate.Mode
 // Params contains the single-pass review inputs.
 type Params struct {
 	Prompt         []byte
+	ArtifactType   string
 	Reviewers      []ReviewerSlot
 	RosterDefaults RosterDefaults
 	Mode           string
@@ -110,6 +111,10 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if consensus == "" {
 		consensus = aggregate.ModeMajority
 	}
+	artifactType := params.ArtifactType
+	if artifactType == "" {
+		artifactType = "code"
+	}
 
 	gate := &state.GateState{
 		RunKey:           resolvedEnv.RunKey,
@@ -163,6 +168,7 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	params.MaxRounds = maxRounds
 	params.Consensus = consensus
 	params.RosterID = rosterID
+	params.ArtifactType = artifactType
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
 }
 
@@ -195,11 +201,12 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 
 	roundStartedAt := time.Now().UTC()
 	roundResults, result, err := runRound(ctx, started.Params.Reviewers, spawner, roundPrompts{
-		User:        started.Params.Prompt,
-		RunRoot:     started.RunRoot,
-		Root:        started.Env.Root,
-		RuntimeMode: started.Params.Mode,
-		Consensus:   started.Params.Consensus,
+		User:         started.Params.Prompt,
+		ArtifactType: started.Params.ArtifactType,
+		RunRoot:      started.RunRoot,
+		Root:         started.Env.Root,
+		RuntimeMode:  started.Params.Mode,
+		Consensus:    started.Params.Consensus,
 	})
 	if err != nil {
 		return err

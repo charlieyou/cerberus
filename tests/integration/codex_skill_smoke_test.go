@@ -173,6 +173,19 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 	if err := os.WriteFile(epicFile, []byte("# Codex Smoke Epic\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", epicFile, err)
 	}
+	docsDir := filepath.Join(projectRoot, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", docsDir, err)
+	}
+	for name, content := range map[string]string{
+		"codex-smoke-plan.md": "# Codex Smoke Plan\n",
+		"codex-smoke-spec.md": "# Codex Smoke Spec\n",
+	} {
+		path := filepath.Join(docsDir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
 	reviewDir := filepath.Join(smokeDir, "review")
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s) error = %v", reviewDir, err)

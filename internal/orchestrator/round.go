@@ -20,6 +20,7 @@ import (
 type roundPrompts struct {
 	System        []byte
 	User          []byte
+	ArtifactType  string
 	PeerBroadcast []byte
 	Root          string
 	RunRoot       string
@@ -238,13 +239,17 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 	if root == "" {
 		root = "."
 	}
+	artifactType := round.ArtifactType
+	if artifactType == "" {
+		artifactType = "code"
+	}
 	system, user, err := prompts.ComposeFromRoot(root, roster.RosterSlot{
 		Provider:    slot.Provider,
 		Model:       slot.Model,
 		Strategy:    slot.Strategy,
 		PersonaPath: slot.PersonaPath,
 		Mode:        slot.Mode,
-	}, "code")
+	}, artifactType)
 	if err != nil {
 		return nil, nil, err
 	}
