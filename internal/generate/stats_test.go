@@ -21,6 +21,22 @@ func TestStatsParseProviderJSONCodexEnvelope(t *testing.T) {
 	assertParsedStats(t, stats, 50, 20, 0.002)
 }
 
+func TestStatsParseProviderJSONCodexJSONL(t *testing.T) {
+	stdout := []byte(`{"type":"turn.started"}
+{"type":"turn.completed","usage":{"input_tokens":1200,"output_tokens":400}}
+{"type":"turn.completed","usage":{"input_tokens":300,"output_tokens":50},"cost_usd":0.002}
+`)
+
+	raw, stats, err := ParseProviderJSON("codex", stdout)
+	if err != nil {
+		t.Fatalf("ParseProviderJSON() error = %v", err)
+	}
+	if string(raw) != string(stdout[:len(stdout)-1]) {
+		t.Fatalf("raw = %q, want trimmed JSONL stdout", raw)
+	}
+	assertParsedStats(t, stats, 1500, 450, 0.002)
+}
+
 func TestStatsParseProviderJSONGeminiEnvelope(t *testing.T) {
 	_, stats, err := ParseProviderJSON("gemini", []byte(`{"stats":{"cost":0.003,"models":{"gemini-3.1-pro":{"tokens":{"input":70,"candidates":25}}}}}`))
 	if err != nil {

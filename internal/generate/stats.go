@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"time"
@@ -23,8 +24,11 @@ type Stats struct {
 
 func ParseProviderJSON(provider string, stdout []byte) ([]byte, Stats, error) {
 	trimmed := bytes.TrimSpace(stdout)
-	if len(trimmed) == 0 || !json.Valid(trimmed) {
+	if len(trimmed) == 0 {
 		return nil, Stats{}, nil
+	}
+	if !json.Valid(trimmed) {
+		return parseProviderJSONLines(provider, trimmed)
 	}
 
 	var payload providerJSONPayload
@@ -43,6 +47,32 @@ func ParseProviderJSON(provider string, stdout []byte) ([]byte, Stats, error) {
 	return append([]byte(nil), trimmed...), stats, nil
 }
 
+func parseProviderJSONLines(provider string, stdout []byte) ([]byte, Stats, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(stdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	stats := Stats{}
+	parsed := false
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var payload providerJSONPayload
+		if err := json.Unmarshal(line, &payload); err != nil {
+			return nil, Stats{}, nil
+		}
+		parsed = true
+		stats.add(payload.stats(provider))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, Stats{}, err
+	}
+	if !parsed {
+		return nil, Stats{}, nil
+	}
+	return append([]byte(nil), stdout...), stats, nil
+}
+
 type providerJSONPayload struct {
 	Tokens tokenPayload `json:"tokens"`
 	Usage  struct {
@@ -58,6 +88,18 @@ type providerJSONPayload struct {
 		Cost   *float64                `json:"cost"`
 		Models map[string]modelPayload `json:"models"`
 	} `json:"stats"`
+}
+
+func (payload providerJSONPayload) stats(provider string) Stats {
+	stats := Stats{}
+	tokens := payload.tokenStats(provider)
+	if tokens.Input > 0 || tokens.Output > 0 {
+		stats.Tokens = &tokens
+	}
+	if costUSD, ok := payload.costUSD(); ok {
+		stats.CostUSD = &costUSD
+	}
+	return stats
 }
 
 type tokenPayload struct {
@@ -103,4 +145,21 @@ func firstPositive(values ...int) int {
 		}
 	}
 	return 0
+}
+
+func (stats *Stats) add(next Stats) {
+	if next.Tokens != nil {
+		if stats.Tokens == nil {
+			stats.Tokens = &TokenStats{}
+		}
+		stats.Tokens.Input += next.Tokens.Input
+		stats.Tokens.Output += next.Tokens.Output
+	}
+	if next.CostUSD != nil {
+		if stats.CostUSD == nil {
+			cost := 0.0
+			stats.CostUSD = &cost
+		}
+		*stats.CostUSD += *next.CostUSD
+	}
 }

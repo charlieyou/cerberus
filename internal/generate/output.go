@@ -19,6 +19,11 @@ func WriteSuccess(outputDir, provider string, stdout []byte, rawJSON []byte) err
 		if err := os.WriteFile(filepath.Join(providerDir, "raw.json"), rawJSON, 0o644); err != nil {
 			return fmt.Errorf("write %s raw JSON: %w", provider, err)
 		}
+	} else if err := removeIfExists(filepath.Join(providerDir, "raw.json")); err != nil {
+		return fmt.Errorf("remove stale %s raw JSON: %w", provider, err)
+	}
+	if err := removeIfExists(filepath.Join(outputDir, provider+".failed")); err != nil {
+		return fmt.Errorf("remove stale %s failure marker: %w", provider, err)
 	}
 	return nil
 }
@@ -30,6 +35,13 @@ func WriteFailure(outputDir, provider string, exitCode int, errMsg string) error
 	}
 	if err := os.WriteFile(filepath.Join(outputDir, provider+".failed"), []byte(errMsg), 0o644); err != nil {
 		return fmt.Errorf("write %s failure marker: %w", provider, err)
+	}
+	return nil
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

@@ -57,6 +57,32 @@ func TestOutputWriteSuccessOmitsRawJSONForMarkdown(t *testing.T) {
 	}
 }
 
+func TestOutputWriteSuccessClearsStaleArtifacts(t *testing.T) {
+	outputDir := t.TempDir()
+	providerDir := filepath.Join(outputDir, "codex")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "codex.failed"), []byte("old failure"), 0o644); err != nil {
+		t.Fatalf("WriteFile(failed) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(providerDir, "raw.json"), []byte(`{"old":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+
+	if err := WriteSuccess(outputDir, "codex", []byte("# fresh\n"), nil); err != nil {
+		t.Fatalf("WriteSuccess() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, "codex.failed")); !os.IsNotExist(err) {
+		t.Fatalf("codex.failed stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(providerDir, "raw.json")); !os.IsNotExist(err) {
+		t.Fatalf("raw.json stat err = %v, want not exist", err)
+	}
+	assertFileContent(t, filepath.Join(providerDir, "draft.md"), "# fresh\n")
+}
+
 func TestOutputWriteFailureWritesParentMarkerAndStats(t *testing.T) {
 	outputDir := t.TempDir()
 
