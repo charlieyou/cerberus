@@ -131,6 +131,23 @@ func assertReviewerDirs(t *testing.T, runRoot string, round int, want int) {
 		if !entry.IsDir() {
 			t.Fatalf("%s is not a reviewer directory", filepath.Join(dir, entry.Name()))
 		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name(), "telemetry.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s telemetry) error = %v", entry.Name(), err)
+		}
+		var row struct {
+			ReviewerID string `json:"reviewer_id"`
+			Round      int    `json:"round"`
+		}
+		if err := json.Unmarshal(data, &row); err != nil {
+			t.Fatalf("Unmarshal(%s telemetry) error = %v", entry.Name(), err)
+		}
+		if row.ReviewerID != entry.Name() {
+			t.Fatalf("%s telemetry reviewer_id = %q, want %q", entry.Name(), row.ReviewerID, entry.Name())
+		}
+		if row.Round != round {
+			t.Fatalf("%s telemetry round = %d, want %d", entry.Name(), row.Round, round)
+		}
 	}
 }
 
