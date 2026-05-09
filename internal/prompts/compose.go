@@ -16,8 +16,9 @@ const (
 )
 
 // Compose reads the on-disk persona, strategy, and reviewer prompt for a slot.
-// The returned system prompt is persona -> strategy -> reviewer prompt joined
-// with blank-line separators. User prompt composition is owned by callers.
+// The returned system prompt is persona -> strategy joined with blank-line
+// separators. The rendered reviewer prompt is returned as the user prompt so
+// artifact content is delivered to reviewers via stdin.
 func Compose(slot roster.RosterSlot, artifactType string) ([]byte, []byte, error) {
 	root, err := rootDir()
 	if err != nil {
@@ -60,9 +61,8 @@ func ComposeFromRoot(root string, slot roster.RosterSlot, artifactType string) (
 	if err != nil {
 		return nil, nil, err
 	}
-	parts = append(parts, reviewerPrompt)
 
-	return bytes.Join(parts, []byte("\n\n")), nil, nil
+	return bytes.Join(parts, []byte("\n\n")), reviewerPrompt, nil
 }
 
 func renderReviewerTemplate(root string, template []byte) ([]byte, error) {
