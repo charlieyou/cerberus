@@ -11,3 +11,16 @@ if ! make -q -C "$root" build >/dev/null 2>&1; then
     end=$(date +%s)
     echo "cerberus: build complete in $((end-start))s" >&2
 fi
+# --- shared resolver above; per-caller exec below (allowed to diverge) ---
+
+Skill SKILL.md form:
+
+```sh
+exec "$bin" "$@"
+```
+
+Hook form:
+
+```sh
+exec "$bin" hook <name>
+```
