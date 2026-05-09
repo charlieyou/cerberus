@@ -12,7 +12,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
-func TestDebatePath(t *testing.T) {
+func TestDebateAnonymization(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("Abs(repo root) error = %v", err)
@@ -48,6 +48,11 @@ func TestDebatePath(t *testing.T) {
 		prompt := string(data)
 		if strings.Contains(prompt, "{{{{PEER_BROADCAST}}}}") || !strings.Contains(prompt, "peer_1") || !strings.Contains(prompt, "peer_2") {
 			t.Fatalf("round-2 prompt %s = %q, want peer broadcast substitution", name, prompt)
+		}
+		for _, leaked := range []string{"claude", "codex", "gemini", "claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"} {
+			if strings.Contains(strings.ToLower(prompt), leaked) {
+				t.Fatalf("round-2 prompt %s leaked %q:\n%s", name, leaked, prompt)
+			}
 		}
 	}
 

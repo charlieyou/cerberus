@@ -44,6 +44,82 @@ func TestCodexDefaultRosterDegradesToCodexOnlyAndRuns(t *testing.T) {
 	waitForIntegrationFile(t, filepath.Join(stateRoot, "codex-degrade", "codex-only", "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
 }
 
+func TestDefaultRosterDegradesMissingGeminiToTwoSlots(t *testing.T) {
+	repoRoot := integrationRepoRoot(t)
+	binary := buildIntegrationCerberus(t, repoRoot)
+	projectRoot := initIntegrationGitRepo(t)
+	stateRoot := t.TempDir()
+	reviewerBin := claudeCodexReviewerPath(t)
+
+	cmd := exec.Command(binary, "spawn-code-review", "default panel without gemini")
+	cmd.Dir = projectRoot
+	cmd.Env = append(os.Environ(),
+		"CERBERUS_HOST=generic",
+		"CERBERUS_ROOT="+repoRoot,
+		"CERBERUS_STATE_ROOT="+stateRoot,
+		"CERBERUS_PROJECT_KEY=default-degrade",
+		"CERBERUS_RUN_KEY=missing-gemini",
+		"PATH="+reviewerBin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("spawn-code-review failed: %v\n%s", err, output)
+	}
+	out := string(output)
+	assertIntegrationWarningCount(t, out, "gemini", 1)
+	if strings.Contains(out, `warning: default panel CLI "claude"`) || strings.Contains(out, `warning: default panel CLI "codex"`) {
+		t.Fatalf("output = %q, want only gemini degradation warning", out)
+	}
+	runRoot := filepath.Join(stateRoot, "default-degrade", "missing-gemini")
+	waitForIntegrationFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "claude#1", "telemetry.json"))
+	waitForIntegrationFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
+	if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "gemini#1", "telemetry.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gemini telemetry stat err = %v, want not exist", err)
+	}
+}
+
+func TestYAMLRosterNamedDefaultRejectsMissingGemini(t *testing.T) {
+	repoRoot := integrationRepoRoot(t)
+	binary := buildIntegrationCerberus(t, repoRoot)
+	projectRoot := initIntegrationGitRepo(t)
+	stateRoot := t.TempDir()
+	reviewerBin := claudeCodexReviewerPath(t)
+	xdgConfigHome := t.TempDir()
+	writeIntegrationFile(t, xdgConfigHome, "cerberus/rosters.yaml", `version: 1
+rosters:
+  default:
+    reviewers:
+      - provider: claude
+        model: claude-opus-4-7
+      - provider: codex
+        model: gpt-5.5
+      - provider: gemini
+        model: gemini-3.1-pro
+`)
+
+	cmd := exec.Command(binary, "spawn-code-review", "yaml default requires gemini")
+	cmd.Dir = projectRoot
+	cmd.Env = append(os.Environ(),
+		"CERBERUS_HOST=generic",
+		"CERBERUS_ROOT="+repoRoot,
+		"CERBERUS_STATE_ROOT="+stateRoot,
+		"CERBERUS_PROJECT_KEY=default-degrade",
+		"CERBERUS_RUN_KEY=yaml-default-missing-gemini",
+		"PATH="+reviewerBin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin",
+		"XDG_CONFIG_HOME="+xdgConfigHome,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("spawn-code-review succeeded, want YAML default missing-CLI rejection\n%s", output)
+	}
+	out := string(output)
+	if !strings.Contains(out, `roster "default" slot 3`) || !strings.Contains(out, `provider CLI "gemini" is not available on PATH`) {
+		t.Fatalf("output = %q, want strict YAML default missing gemini error", out)
+	}
+}
+
 func TestCodexDefaultRosterDegradationRefusesEmptyAndDebateOneReviewer(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	binary := buildIntegrationCerberus(t, repoRoot)
@@ -124,6 +200,27 @@ printf '{"findings":[],"verdict":"PASS","summary":"mock codex pass","overall_con
 	}
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("WriteFile(codex) error = %v", err)
+	}
+	return bin
+}
+
+func claudeCodexReviewerPath(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "bin")
+	script := `#!/bin/sh
+while IFS= read -r _line; do
+  :
+done
+printf '{"findings":[],"verdict":"PASS","summary":"mock pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}\n'
+`
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", bin, err)
+	}
+	for _, provider := range []string{"claude", "codex"} {
+		path := filepath.Join(bin, provider)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", provider, err)
+		}
 	}
 	return bin
 }

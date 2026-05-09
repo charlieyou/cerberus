@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,6 +86,81 @@ rosters:
 	assertGeminiPolicyInReviewerStderr(t, runRoot, "gemini#1")
 }
 
+func TestDebateClaudeStrategiesProduceDivergentFindings(t *testing.T) {
+	repoRoot := integrationRepoRoot(t)
+	recordDir := t.TempDir()
+	installMultiDebateMockCLI(t, repoRoot, recordDir)
+
+	env := &config.Env{
+		Host:       "generic",
+		Root:       repoRoot,
+		StateRoot:  t.TempDir(),
+		ProjectKey: "integration-project",
+		RunKey:     "debate-claude-strategies",
+	}
+	slots := []orchestrator.ReviewerSlot{
+		{ID: "claude#1", Provider: "claude", Model: "claude-opus-4-7", Strategy: "verification-first", InstanceIndex: 1},
+		{ID: "claude#2", Provider: "claude", Model: "claude-sonnet-4-5", Strategy: "falsification-first", InstanceIndex: 2},
+	}
+
+	verdict, err := (orchestrator.Orchestrator{
+		Env: env,
+	}).RunDebate(context.Background(), slots, []byte("Review same-provider strategy divergence."), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v", err)
+	}
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want pass", verdict.Verdict)
+	}
+
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	assertResolvedGate(t, runRoot)
+	assertReviewerDirs(t, runRoot, 1, 2)
+	assertReviewerDirs(t, runRoot, 2, 2)
+	assertNoProviderLeak(t, filepath.Join(runRoot, "iterations", "1", "round-2", "peer-broadcast.json"))
+	assertDistinctRoundTwoFindings(t, runRoot, slots)
+}
+
+func TestDebateCodexThreeInstancesSpawnDistinctIDs(t *testing.T) {
+	repoRoot := integrationRepoRoot(t)
+	recordDir := t.TempDir()
+	installMultiDebateMockCLI(t, repoRoot, recordDir)
+
+	env := &config.Env{
+		Host:       "generic",
+		Root:       repoRoot,
+		StateRoot:  t.TempDir(),
+		ProjectKey: "integration-project",
+		RunKey:     "debate-codex-three",
+	}
+	slots := []orchestrator.ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Strategy: "verification-first", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Strategy: "falsification-first", InstanceIndex: 2},
+		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Strategy: "decompose", InstanceIndex: 3},
+	}
+
+	verdict, err := (orchestrator.Orchestrator{
+		Env: env,
+	}).RunDebate(context.Background(), slots, []byte("Review codex multi-instance roster."), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v", err)
+	}
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want pass", verdict.Verdict)
+	}
+
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	assertResolvedGate(t, runRoot)
+	assertReviewerDirs(t, runRoot, 1, 3)
+	assertReviewerDirs(t, runRoot, 2, 3)
+	assertRunTelemetryTotals(t, runRoot, 2)
+	for _, reviewerID := range []string{"codex#1", "codex#2", "codex#3"} {
+		if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", reviewerID, "telemetry.json")); err != nil {
+			t.Fatalf("%s telemetry missing: %v", reviewerID, err)
+		}
+	}
+}
+
 func waitForResolvedGate(t *testing.T, runRoot string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -157,7 +233,7 @@ func assertNoProviderLeak(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
-	leakRe := regexp.MustCompile(`(?i)claude|codex|gemini|gpt-5\.5|gpt-5\.4|gpt-5\.3-codex|claude-opus|gemini-3\.1-pro`)
+	leakRe := regexp.MustCompile(`(?i)claude|codex|gemini|gpt-5\.5|gpt-5\.4|gpt-5\.3-codex|claude-opus|claude-sonnet|gemini-3\.1-pro`)
 	if match := leakRe.Find(data); len(match) > 0 {
 		t.Fatalf("%s leaked %q:\n%s", path, match, data)
 	}
@@ -225,8 +301,29 @@ func assertDistinctRoundTwoFindings(t *testing.T, runRoot string, slots []orches
 		}
 		titles[title] = true
 	}
-	if len(titles) != 4 {
-		t.Fatalf("distinct finding count = %d, want 4", len(titles))
+	if len(titles) != len(slots) {
+		t.Fatalf("distinct finding count = %d, want %d", len(titles), len(slots))
+	}
+}
+
+func assertRunTelemetryTotals(t *testing.T, runRoot string, wantRounds int) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runRoot, "run-telemetry.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(run telemetry) error = %v", err)
+	}
+	var row struct {
+		TotalRounds  int    `json:"total_rounds"`
+		FinalVerdict string `json:"final_verdict"`
+	}
+	if err := json.Unmarshal(data, &row); err != nil {
+		t.Fatalf("Unmarshal(run telemetry) error = %v", err)
+	}
+	if row.TotalRounds != wantRounds {
+		t.Fatalf("total_rounds = %d, want %d", row.TotalRounds, wantRounds)
+	}
+	if row.FinalVerdict != state.VerdictPass {
+		t.Fatalf("final_verdict = %q, want pass", row.FinalVerdict)
 	}
 }
 
@@ -289,6 +386,8 @@ printf 'mock %s argv: %s\n' "$provider" "$*" >&2
 rm -f "$stdin_file"
 
 case "$provider:$model" in
+  claude:claude-opus-4-7) fixture="round-$round-claude1.json" ;;
+  claude:claude-sonnet-4-5) fixture="round-$round-claude2.json" ;;
   codex:gpt-5.5) fixture="round-$round-codex1.json" ;;
   codex:gpt-5.4) fixture="round-$round-codex2.json" ;;
   codex:gpt-5.3-codex) fixture="round-$round-codex3.json" ;;
@@ -297,7 +396,7 @@ case "$provider:$model" in
 esac
 cat "$fixture_dir/$fixture"
 `
-	for _, provider := range []string{"codex", "gemini"} {
+	for _, provider := range []string{"claude", "codex", "gemini"} {
 		path := filepath.Join(binDir, provider)
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			t.Fatalf("WriteFile(mock %s) error = %v", provider, err)

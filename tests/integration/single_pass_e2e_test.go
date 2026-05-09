@@ -62,9 +62,7 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 	}
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	for _, reviewerID := range []string{"claude#1", "codex#1", "gemini#1"} {
-		if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", reviewerID, "telemetry.json")); err != nil {
-			t.Fatalf("reviewer telemetry for %s missing: %v", reviewerID, err)
-		}
+		assertReviewerTelemetryID(t, runRoot, reviewerID)
 	}
 	for _, name := range []string{
 		filepath.Join("iterations", "1", "round-1", "round-telemetry.json"),
@@ -74,6 +72,40 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(runRoot, name)); err != nil {
 			t.Fatalf("%s missing: %v", name, err)
 		}
+	}
+}
+
+func TestSinglePassCLIWaitResolveStatusWithDefaultPanel(t *testing.T) {
+	repoRoot := integrationRepoRoot(t)
+	binary := buildIntegrationCerberus(t, repoRoot)
+	stateRoot := t.TempDir()
+	projectRoot := initIntegrationGitRepo(t)
+	env := []string{
+		"CERBERUS_HOST=generic",
+		"CERBERUS_ROOT=" + repoRoot,
+		"CERBERUS_STATE_ROOT=" + stateRoot,
+		"CERBERUS_PROJECT_KEY=single-pass-cli",
+		"CERBERUS_RUN_KEY=default-panel",
+		"PATH=" + integrationMockPath(t, repoRoot) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+
+	runIntegrationCommand(t, projectRoot, env, binary, "spawn-code-review", "Review this small default-panel change.")
+	waitOutput := runIntegrationCommand(t, projectRoot, env, binary, "wait", "--timeout", "5", "--poll-interval", "1")
+	if !strings.Contains(waitOutput, "status: resolved") || !strings.Contains(waitOutput, "verdict: pass") {
+		t.Fatalf("wait output = %q, want resolved pass status", waitOutput)
+	}
+	resolveOutput := runIntegrationCommand(t, projectRoot, env, binary, "resolve", "--reason", "integration confirms resolved gate remains resolvable")
+	if !strings.Contains(resolveOutput, "resolved") {
+		t.Fatalf("resolve output = %q, want resolved", resolveOutput)
+	}
+	statusOutput := runIntegrationCommand(t, projectRoot, env, binary, "status")
+	if !strings.Contains(statusOutput, "status: resolved") || !strings.Contains(statusOutput, "verdict: pass") {
+		t.Fatalf("status output = %q, want resolved pass status", statusOutput)
+	}
+
+	runRoot := filepath.Join(stateRoot, "single-pass-cli", "default-panel")
+	for _, reviewerID := range []string{"claude#1", "codex#1", "gemini#1"} {
+		assertReviewerTelemetryID(t, runRoot, reviewerID)
 	}
 }
 
@@ -145,6 +177,35 @@ func runCerberusHook(t *testing.T, repoRoot, stateRoot, projectKey, subcommand, 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("cerberus hook %s failed: %v\n%s", subcommand, err, output)
+	}
+}
+
+func runIntegrationCommand(t *testing.T, dir string, env []string, binary string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cerberus %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
+}
+
+func assertReviewerTelemetryID(t *testing.T, runRoot, reviewerID string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", reviewerID, "telemetry.json"))
+	if err != nil {
+		t.Fatalf("reviewer telemetry for %s missing: %v", reviewerID, err)
+	}
+	var row struct {
+		ReviewerID string `json:"reviewer_id"`
+	}
+	if err := json.Unmarshal(data, &row); err != nil {
+		t.Fatalf("Unmarshal(%s telemetry) error = %v", reviewerID, err)
+	}
+	if row.ReviewerID != reviewerID {
+		t.Fatalf("%s telemetry reviewer_id = %q, want %q", reviewerID, row.ReviewerID, reviewerID)
 	}
 }
 
