@@ -2,6 +2,12 @@ package config
 
 import "os"
 
+const (
+	DefaultClaudeModel = "claude-opus-4-7"
+	DefaultCodexModel  = "gpt-5.5"
+	DefaultGeminiModel = "gemini-3.1-pro"
+)
+
 // Env contains the Cerberus environment contract consumed by v2 commands.
 type Env struct {
 	Root           string
@@ -28,5 +34,19 @@ func Resolve() *Env {
 		StateRoot:      os.Getenv("CERBERUS_STATE_ROOT"),
 		ProjectKey:     os.Getenv("CERBERUS_PROJECT_KEY"),
 		TranscriptPath: os.Getenv("CERBERUS_TRANSCRIPT_PATH"),
+	}
+}
+
+// DefaultModelForProvider returns the built-in model for a supported provider.
+func DefaultModelForProvider(provider string) (string, bool) {
+	switch provider {
+	case "claude":
+		return DefaultClaudeModel, true
+	case "codex":
+		return DefaultCodexModel, true
+	case "gemini":
+		return DefaultGeminiModel, true
+	default:
+		return "", false
 	}
 }

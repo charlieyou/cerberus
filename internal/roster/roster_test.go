@@ -44,6 +44,7 @@ func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "gemini#1"})
+	assertSlotModels(t, slots, []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"})
 }
 
 func TestNamedRosterWithoutFileErrors(t *testing.T) {
@@ -346,6 +347,18 @@ func assertInstanceIDs(t *testing.T, slots []RosterSlot, want []string) {
 	for i := range slots {
 		if slots[i].InstanceID != want[i] {
 			t.Fatalf("slot %d InstanceID = %q, want %q", i, slots[i].InstanceID, want[i])
+		}
+	}
+}
+
+func assertSlotModels(t *testing.T, slots []RosterSlot, want []string) {
+	t.Helper()
+	if len(slots) != len(want) {
+		t.Fatalf("len(slots) = %d, want %d", len(slots), len(want))
+	}
+	for i := range slots {
+		if slots[i].Model != want[i] {
+			t.Fatalf("slot %d Model = %q, want %q", i, slots[i].Model, want[i])
 		}
 	}
 }

@@ -76,3 +76,24 @@ func TestResolveDoesNotReadReviewGateRootAlias(t *testing.T) {
 		t.Fatalf("Root = %q, want empty", env.Root)
 	}
 }
+
+func TestDefaultModelForProvider(t *testing.T) {
+	tests := map[string]string{
+		"claude": "claude-opus-4-7",
+		"codex":  "gpt-5.5",
+		"gemini": "gemini-3.1-pro",
+	}
+	for provider, want := range tests {
+		got, ok := DefaultModelForProvider(provider)
+		if !ok {
+			t.Fatalf("DefaultModelForProvider(%q) ok = false, want true", provider)
+		}
+		if got != want {
+			t.Fatalf("DefaultModelForProvider(%q) = %q, want %q", provider, got, want)
+		}
+	}
+
+	if got, ok := DefaultModelForProvider("unknown"); ok || got != "" {
+		t.Fatalf("DefaultModelForProvider(unknown) = %q/%v, want empty/false", got, ok)
+	}
+}

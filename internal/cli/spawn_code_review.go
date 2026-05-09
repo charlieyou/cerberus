@@ -255,10 +255,11 @@ func reviewersFromAgents(agents string) ([]orchestrator.ReviewerSlot, string, er
 			return nil, "", fmt.Errorf("--agents contains unsupported provider %q", provider)
 		}
 		counts[provider]++
+		model, _ := config.DefaultModelForProvider(provider)
 		reviewers = append(reviewers, orchestrator.ReviewerSlot{
 			ID:       fmt.Sprintf("%s#%d", provider, counts[provider]),
 			Provider: provider,
-			Model:    provider,
+			Model:    model,
 		})
 	}
 	if len(reviewers) == 0 {

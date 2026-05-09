@@ -7,15 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charlieyou/cerberus/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
 const defaultRosterName = "default"
 
 var builtInDefaultSlots = []RosterSlot{
-	{Provider: "claude", Model: "claude"},
-	{Provider: "codex", Model: "codex"},
-	{Provider: "gemini", Model: "gemini"},
+	{Provider: "claude", Model: config.DefaultClaudeModel},
+	{Provider: "codex", Model: config.DefaultCodexModel},
+	{Provider: "gemini", Model: config.DefaultGeminiModel},
 }
 
 // LoadRosters loads the first applicable rosters.yaml. If path is empty, the

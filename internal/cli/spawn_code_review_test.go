@@ -26,6 +26,29 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	if gate.RosterID != "agents" {
 		t.Fatalf("gate roster_id = %q, want agents", gate.RosterID)
 	}
+	assertRecordedModel(t, "claude", "claude-opus-4-7")
+	assertRecordedModel(t, "codex", "gpt-5.5")
+	assertRecordedModel(t, "gemini", "gemini-3.1-pro")
+}
+
+func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
+	setSpawnTestEnv(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--consensus", "majority"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate := readSpawnGate(t)
+	if gate.RosterID != "default" {
+		t.Fatalf("gate roster_id = %q, want default", gate.RosterID)
+	}
+	assertRecordedModel(t, "claude", "claude-opus-4-7")
+	assertRecordedModel(t, "codex", "gpt-5.5")
+	assertRecordedModel(t, "gemini", "gemini-3.1-pro")
 }
 
 func TestSpawnCodeReviewRejectsAgentsWithRoster(t *testing.T) {
@@ -373,4 +396,18 @@ func readSpawnGate(t *testing.T) *state.GateState {
 		t.Fatalf("ReadGateState() error = %v", err)
 	}
 	return gate
+}
+
+func assertRecordedModel(t *testing.T, provider, want string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(os.Getenv("CERBERUS_MOCK_RECORD_DIR"), provider+".args"))
+	if err != nil {
+		t.Fatalf("ReadFile(%s.args) error = %v", provider, err)
+	}
+	if !strings.Contains(string(data), "--model\n"+want+"\n") {
+		t.Fatalf("%s args = %q, want model %q", provider, string(data), want)
+	}
+	if strings.Contains(string(data), "--model\n"+provider+"\n") {
+		t.Fatalf("%s args = %q, must not use provider name as model", provider, string(data))
+	}
 }
