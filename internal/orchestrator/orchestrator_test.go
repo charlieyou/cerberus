@@ -101,7 +101,7 @@ func TestRunRoundReturnsOriginalErrorBeforeCancellationNoise(t *testing.T) {
 	_, err := runRound(context.Background(), []ReviewerSlot{
 		{ID: "codex#1", Provider: "codex", Model: "stub"},
 		{ID: "claude#1", Provider: "claude", Model: "stub"},
-	}, noisyCancelSpawner{err: wantErr}, roundPrompts{})
+	}, noisyCancelSpawner{err: wantErr}, roundPrompts{Root: repoRoot(t)})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("runRound() error = %v, want original error %v", err, wantErr)
 	}
@@ -112,6 +112,46 @@ func TestRunSinglePassPassesSlotStrategyAsSystemPrompt(t *testing.T) {
 	env.Root = promptRoot(t)
 	setMockPath(t)
 	spawner := systemPromptSpawner{want: "Strategy: falsification-first."}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", Strategy: "falsification-first"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+}
+
+func TestRunSinglePassIncludesReviewerTemplateForDefaultSlot(t *testing.T) {
+	env := testEnv(t)
+	env.Root = promptRoot(t)
+	setMockPath(t)
+	spawner := promptContentSpawner{
+		wantUser:   "reviewer prompt\n\nreview this",
+		wantSystem: "",
+	}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+}
+
+func TestRunSinglePassIncludesReviewerTemplateWithStrategy(t *testing.T) {
+	env := testEnv(t)
+	env.Root = promptRoot(t)
+	setMockPath(t)
+	spawner := promptContentSpawner{
+		wantSystem: "Strategy: falsification-first.",
+		wantUser:   "reviewer prompt\n\nreview this",
+	}
 
 	err := RunSinglePass(context.Background(), env, Params{
 		Prompt: []byte("review this"),
@@ -173,6 +213,21 @@ func (spawner systemPromptSpawner) Spawn(ctx context.Context, request reviewer.R
 	return passResponse(request.ID)
 }
 
+type promptContentSpawner struct {
+	wantSystem string
+	wantUser   string
+}
+
+func (spawner promptContentSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if !strings.Contains(string(request.System), spawner.wantSystem) {
+		return reviewer.Response{}, fmt.Errorf("system prompt = %q, want %q", request.System, spawner.wantSystem)
+	}
+	if got := string(request.User); got != spawner.wantUser {
+		return reviewer.Response{}, fmt.Errorf("user prompt = %q, want %q", got, spawner.wantUser)
+	}
+	return passResponse(request.ID)
+}
+
 func passResponse(id string) (reviewer.Response, error) {
 	confidence := 0.9
 	round := 1
@@ -214,10 +269,20 @@ func testEnv(t *testing.T) *config.Env {
 	t.Helper()
 	return &config.Env{
 		Host:       "generic",
+		Root:       repoRoot(t),
 		StateRoot:  t.TempDir(),
 		ProjectKey: "project",
 		RunKey:     "run",
 	}
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs(repo root) error = %v", err)
+	}
+	return root
 }
 
 func testParams() Params {

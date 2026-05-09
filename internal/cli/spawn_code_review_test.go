@@ -150,6 +150,26 @@ func TestCodeReviewGitArgsAppliesExcludeToCommitReview(t *testing.T) {
 	}
 }
 
+func TestBuildCodeReviewPromptIncludesSavedAuthorContext(t *testing.T) {
+	setSpawnTestEnv(t)
+	runRoot := state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), "project", "run")
+	if err := state.EnsureRunDir(runRoot); err != nil {
+		t.Fatalf("EnsureRunDir() error = %v", err)
+	}
+	context := []byte("{\"text\":\"Resolved flaky test concern.\",\"updated_at\":\"2026-05-09T00:00:00Z\"}\n")
+	if err := os.WriteFile(filepath.Join(runRoot, "author-context.json"), context, 0o644); err != nil {
+		t.Fatalf("WriteFile(author-context.json) error = %v", err)
+	}
+
+	prompt, err := buildCodeReviewPrompt(spawnCodeReviewOptions{})
+	if err != nil {
+		t.Fatalf("buildCodeReviewPrompt() error = %v", err)
+	}
+	if !strings.Contains(string(prompt), "Author context:\nResolved flaky test concern.") {
+		t.Fatalf("prompt = %q, want saved author context", prompt)
+	}
+}
+
 func TestAuthorContextAbsentPrintsEmptyOutput(t *testing.T) {
 	setSpawnTestEnv(t)
 	var stdout, stderr bytes.Buffer

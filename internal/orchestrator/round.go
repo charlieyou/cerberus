@@ -40,7 +40,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 		go func() {
 			defer wg.Done()
 
-			system, err := systemPromptForSlot(slot, prompts)
+			system, user, err := promptsForSlot(slot, prompts)
 			if err != nil {
 				errs <- roundError{err: err}
 				cancel()
@@ -51,7 +51,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				Provider:  slot.Provider,
 				Model:     slot.Model,
 				System:    system,
-				User:      prompts.User,
+				User:      user,
 				Root:      prompts.Root,
 				RunRoot:   prompts.RunRoot,
 				Iteration: 1,
@@ -96,30 +96,38 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	return outputs, nil
 }
 
-func systemPromptForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, error) {
-	if slot.Strategy == "" && slot.PersonaPath == "" {
-		return round.System, nil
-	}
+func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, error) {
 	root := round.Root
 	if root == "" {
 		root = "."
 	}
-	system, _, err := prompts.ComposeFromRoot(root, roster.RosterSlot{
+	system, user, err := prompts.ComposeFromRoot(root, roster.RosterSlot{
 		Provider:    slot.Provider,
 		Model:       slot.Model,
 		Strategy:    slot.Strategy,
 		PersonaPath: slot.PersonaPath,
 	}, "code")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	user = appendPrompt(user, round.User)
 	if len(round.System) == 0 {
-		return system, nil
+		return system, user, nil
 	}
 	if len(system) == 0 {
-		return round.System, nil
+		return round.System, user, nil
 	}
-	return bytes.Join([][]byte{round.System, system}, []byte("\n\n")), nil
+	return bytes.Join([][]byte{round.System, system}, []byte("\n\n")), user, nil
+}
+
+func appendPrompt(base, extra []byte) []byte {
+	if len(base) == 0 {
+		return extra
+	}
+	if len(extra) == 0 {
+		return base
+	}
+	return bytes.Join([][]byte{base, extra}, []byte("\n\n"))
 }
 
 type roundError struct {

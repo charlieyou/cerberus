@@ -26,6 +26,7 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 	ctx := context.Background()
 	env := &config.Env{
 		Host:       "claude",
+		Root:       repoRoot,
 		StateRoot:  t.TempDir(),
 		ProjectKey: "integration-project",
 		RunKey:     "single-pass-review",

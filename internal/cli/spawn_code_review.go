@@ -3,10 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charlieyou/cerberus/internal/aggregate"
@@ -215,6 +219,13 @@ func reviewersFromAgents(agents string) ([]orchestrator.ReviewerSlot, string, er
 func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "# Code review")
+	context, err := savedAuthorContext()
+	if err != nil {
+		return nil, err
+	}
+	if context != "" {
+		fmt.Fprintf(&buf, "\nAuthor context:\n%s\n", context)
+	}
 	if opts.focus != "" {
 		fmt.Fprintf(&buf, "\nFocus: %s\n", opts.focus)
 	}
@@ -230,6 +241,27 @@ func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {
 	}
 	fmt.Fprintf(&buf, "\n```diff\n%s\n```\n", diff)
 	return buf.Bytes(), nil
+}
+
+func savedAuthorContext() (string, error) {
+	runRoot, ok, err := activeRunRoot()
+	if err != nil || !ok {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(runRoot, "author-context.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	var context struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &context); err != nil {
+		return "", fmt.Errorf("parse author context: %w", err)
+	}
+	return context.Text, nil
 }
 
 func codeReviewDiff(opts spawnCodeReviewOptions) (string, error) {
