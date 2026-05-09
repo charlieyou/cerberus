@@ -150,6 +150,38 @@ func TestCLIReviewerAppends(t *testing.T) {
 	assertInstanceIDs(t, slots, []string{"codex#1", "codex#2"})
 }
 
+func TestPersonaPathResolvedRelativeToRosterFile(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	withFakeCLIs(t, dir)
+	writeStrategy(t, dir, "verification-first")
+
+	rosterDir := filepath.Join(dir, "config")
+	writeFile(t, filepath.Join(rosterDir, "personas", "security.md"), "security persona\n")
+	path := filepath.Join(rosterDir, "rosters.yaml")
+	writeFile(t, path, `version: 1
+rosters:
+  default:
+    reviewers:
+      - provider: codex
+        model: gpt-5.5
+        persona: ./personas/security.md
+`)
+	file, err := LoadRosters(path)
+	if err != nil {
+		t.Fatalf("LoadRosters() error = %v", err)
+	}
+
+	slots, err := Resolve(file, "default", nil, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := filepath.Join(rosterDir, "personas", "security.md")
+	if got := slots[0].PersonaPath; got != want {
+		t.Fatalf("PersonaPath = %q, want %q", got, want)
+	}
+}
+
 func TestReplaceSlotReplacesReviewer(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)

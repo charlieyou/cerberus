@@ -132,6 +132,7 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 			return nil, preflightError(filePath(file), rosterName, 0, "no roster named %q", rosterName)
 		}
 		slots = cloneSlots(selected.Reviewers)
+		normalizePersonaPaths(file, slots)
 	}
 
 	if err := validateSlots(file, rosterName, slots); err != nil {
@@ -216,6 +217,14 @@ func cloneSlots(slots []RosterSlot) []RosterSlot {
 		cloned[i].InstanceIndex = 0
 	}
 	return cloned
+}
+
+func normalizePersonaPaths(file *RostersFile, slots []RosterSlot) {
+	for i := range slots {
+		if slots[i].PersonaPath != "" {
+			slots[i].PersonaPath = resolveRosterRelativePath(file, slots[i].PersonaPath)
+		}
+	}
 }
 
 func filePath(file *RostersFile) string {

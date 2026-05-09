@@ -128,7 +128,7 @@ func (runner Runner) command(ctx context.Context, request Request, user []byte) 
 	args := []string{}
 	switch request.Provider {
 	case "claude":
-		args = []string{"--print", "--output-format", "json", "--append-system-prompt", string(request.System)}
+		args = []string{"--print", "--output-format", "json", "--model", request.Model, "--append-system-prompt", string(request.System)}
 	case "codex":
 		args = []string{"--json", "--model", request.Model, "--append-system-prompt", string(request.System)}
 	case "gemini":

@@ -47,6 +47,9 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 			if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
 				t.Fatalf("argv = %q, want system prompt flag", args)
 			}
+			if provider == "claude" && !strings.Contains(args, "--model\nmodel-name") {
+				t.Fatalf("claude argv = %q, want model flag", args)
+			}
 			if provider == "gemini" {
 				wantPolicy := filepath.Join(root, "config", "gemini-readonly-policy.toml")
 				if !strings.Contains(args, "--policy-file\n"+wantPolicy) {
@@ -152,6 +155,16 @@ func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
 	}
 	if _, err := Parse([]byte(`{"findings":[],"verdict":"pass","summary":"bad"}`)); err == nil {
 		t.Fatal("Parse(invalid verdict) error = nil")
+	}
+}
+
+func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
+	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"ok\",\"overall_confidence\":0.8}"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "ok" {
+		t.Fatalf("Parse() = %#v, want unwrapped PASS result", got)
 	}
 }
 
