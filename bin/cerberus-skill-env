@@ -110,7 +110,7 @@ if [ "$CERBERUS_HOST" = "claude" ]; then
     if [ -z "${CERBERUS_SESSION_ID:-}" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
         export CERBERUS_SESSION_ID="$CLAUDE_SESSION_ID"
     fi
-    if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -n "${CERBERUS_SESSION_ID:-}" ]; then
+    if [ -n "${CERBERUS_SESSION_ID:-}" ]; then
         export CERBERUS_RUN_KEY="$CERBERUS_SESSION_ID"
     fi
     if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -n "${REVIEW_GATE_SESSION_KEY:-}" ]; then

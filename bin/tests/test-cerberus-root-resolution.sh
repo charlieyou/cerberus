@@ -229,6 +229,21 @@ if [[ "$mixed_claude_run" != "claude-session-002" ]]; then
 fi
 log_pass "cerberus-skill-env prefers Claude session id over legacy review gate session key"
 
+log_test "cerberus-skill-env overrides inherited Claude run key from session id"
+inherited_claude_env_output="$TEST_DIR/claude-inherited-run-key.out"
+env CERBERUS_ROOT="$PLUGIN_ROOT" CLAUDE_SESSION_ID=claude-session-003 CERBERUS_RUN_KEY=old-run \
+    "$RUNNER_BASH" -c '. "$1/bin/cerberus-skill-env"; printf "%s\n%s\n" "$CERBERUS_SESSION_ID" "$CERBERUS_RUN_KEY"' _ "$PLUGIN_ROOT" \
+    > "$inherited_claude_env_output"
+inherited_claude_session="$(sed -n '1p' "$inherited_claude_env_output")"
+inherited_claude_run="$(sed -n '2p' "$inherited_claude_env_output")"
+if [[ "$inherited_claude_session" != "claude-session-003" ]]; then
+    log_fail "expected inherited Claude skill env to keep Claude session id, got: $inherited_claude_session"
+fi
+if [[ "$inherited_claude_run" != "claude-session-003" ]]; then
+    log_fail "expected inherited Claude skill env to override stale run key with Stop hook session id, got: $inherited_claude_run"
+fi
+log_pass "cerberus-skill-env overrides inherited Claude run key from session id"
+
 log_test "skill bootstrap resolves Claude-substituted CLAUDE_SKILL_DIR"
 rendered_bootstrap="$TEST_DIR/bootstrap-rendered-skill-dir.sh"
 extract_skill_bootstrap "$PLUGIN_ROOT/skills/review-code/SKILL.md" \
