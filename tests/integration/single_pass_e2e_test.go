@@ -36,15 +36,15 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 		t.Fatalf("RunSinglePass failed: %v", err)
 	}
 
-	gate, err := state.ReadGateState(ctx, env)
+	gate, err := state.ReadGateState(gateStatePath(env))
 	if err != nil {
 		t.Fatalf("ReadGateState failed: %v", err)
 	}
 	if gate.Status != state.GateStateResolved {
 		t.Fatalf("gate status = %q, want %q", gate.Status, state.GateStateResolved)
 	}
-	if gate.Verdict != "pass" {
-		t.Fatalf("gate verdict = %q, want pass", gate.Verdict)
+	if gate.Verdict == nil || *gate.Verdict != "pass" {
+		t.Fatalf("gate verdict = %v, want pass", gate.Verdict)
 	}
 	if code := pollStopHook(ctx, env, 100*time.Millisecond, time.Second); code != 0 {
 		t.Fatalf("Stop hook poll exit code = %d, want 0", code)
@@ -56,7 +56,7 @@ type passReviewerStub struct {
 }
 
 func (stub passReviewerStub) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
-	gate, err := state.ReadGateState(ctx, stub.env)
+	gate, err := state.ReadGateState(gateStatePath(stub.env))
 	if err != nil {
 		return reviewer.Response{}, fmt.Errorf("read gate state during reviewer spawn: %w", err)
 	}
@@ -84,7 +84,7 @@ func pollStopHook(ctx context.Context, env *config.Env, interval, timeout time.D
 	defer tick.Stop()
 
 	for {
-		gate, err := state.ReadGateState(ctx, env)
+		gate, err := state.ReadGateState(gateStatePath(env))
 		if err == nil && gate.Status == state.GateStateResolved {
 			return 0
 		}
@@ -97,4 +97,8 @@ func pollStopHook(ctx context.Context, env *config.Env, interval, timeout time.D
 		case <-tick.C:
 		}
 	}
+}
+
+func gateStatePath(env *config.Env) string {
+	return state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
 }
