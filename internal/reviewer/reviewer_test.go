@@ -3,6 +3,7 @@ package reviewer
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,11 +215,20 @@ func TestParseAcceptsPeerResponsesSeenArray(t *testing.T) {
 
 func mockPath(t *testing.T) string {
 	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "..", "tests", "mocks"))
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
-		t.Fatalf("Abs(tests/mocks) error = %v", err)
+		t.Fatalf("Abs(repo root) error = %v", err)
 	}
-	return abs
+	binDir := t.TempDir()
+	for _, provider := range []string{"claude", "codex", "gemini"} {
+		binary := filepath.Join(binDir, provider)
+		build := exec.Command("go", "build", "-o", binary, "./tests/mocks/"+provider)
+		build.Dir = repoRoot
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build ./tests/mocks/%s failed: %v\n%s", provider, err, output)
+		}
+	}
+	return binDir
 }
 
 func writePolicy(t *testing.T, root string) {

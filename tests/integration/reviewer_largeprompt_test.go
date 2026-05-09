@@ -30,7 +30,7 @@ func TestReviewerLargePromptRoundTripUsesStdin(t *testing.T) {
 	wantHash := fmt.Sprintf("%x", sha256.Sum256(userPrompt))
 
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", recordDir)
-	t.Setenv("PATH", filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	response, err := (reviewer.Runner{Root: root, RunRoot: filepath.Join(t.TempDir(), "run"), Iteration: 1, Round: 1}).Spawn(context.Background(), reviewer.Request{
 		ID:       "codex#1",

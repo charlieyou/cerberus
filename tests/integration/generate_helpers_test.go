@@ -36,6 +36,26 @@ func buildIntegrationCerberus(t *testing.T, repoRoot string) string {
 	return binary
 }
 
+func buildIntegrationMock(t *testing.T, repoRoot, provider, binDir string) string {
+	t.Helper()
+	binary := filepath.Join(binDir, provider)
+	build := exec.Command("go", "build", "-o", binary, "./tests/mocks/"+provider)
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./tests/mocks/%s failed: %v\n%s", provider, err, output)
+	}
+	return binary
+}
+
+func integrationMockPath(t *testing.T, repoRoot string) string {
+	t.Helper()
+	binDir := t.TempDir()
+	for _, provider := range generateProviders {
+		buildIntegrationMock(t, repoRoot, provider, binDir)
+	}
+	return binDir
+}
+
 func integrationRepoRoot(t *testing.T) string {
 	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -93,7 +113,7 @@ func runGenerateCommand(t *testing.T, repoRoot, binary, root string, args ...str
 		"CERBERUS_ROOT="+root,
 		"CERBERUS_FIXTURE_DIR="+fixtureDir,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
-		"PATH="+filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -138,14 +158,15 @@ func keyedGenerateFixtureDirFromArgs(t *testing.T, repoRoot string, args []strin
 func keyedGenerateFixtureDir(t *testing.T, repoRoot, generatorType, prompt string, providers []string) string {
 	t.Helper()
 	fixtureDir := t.TempDir()
-	promptHash := fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
+	sum := sha256.Sum256([]byte(prompt))
+	promptHash := fmt.Sprintf("%x", sum[:8])
 	sourceDir := filepath.Join(repoRoot, "tests", "fixtures", "generate")
 	for _, provider := range providers {
 		data, err := os.ReadFile(filepath.Join(sourceDir, provider+"-"+generatorType+".md"))
 		if err != nil {
 			t.Fatalf("ReadFile(%s fixture) error = %v", provider, err)
 		}
-		target := filepath.Join(fixtureDir, promptHash+":"+provider+"#1.md")
+		target := filepath.Join(fixtureDir, promptHash+":"+provider+"#1.json")
 		if err := os.WriteFile(target, data, 0o644); err != nil {
 			t.Fatalf("WriteFile(%s fixture) error = %v", provider, err)
 		}

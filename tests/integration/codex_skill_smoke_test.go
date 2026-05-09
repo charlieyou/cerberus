@@ -211,7 +211,7 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 		"SMOKE_TMPDIR="+smokeDir,
 		"CLAUDE_PLUGIN_ROOT=",
 		"CLAUDE_SKILL_DIR="+filepath.Join(pluginRoot, "skills", skill),
-		"PATH="+filepath.Join(integrationRepoRoot(t), "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+integrationMockPath(t, integrationRepoRoot(t))+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, err := cmd.CombinedOutput()
 	exitCode := 0

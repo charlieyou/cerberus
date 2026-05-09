@@ -24,7 +24,7 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Abs(repo root) error = %v", err)
 	}
-	t.Setenv("PATH", filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx := context.Background()
 	env := &config.Env{

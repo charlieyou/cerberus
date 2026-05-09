@@ -35,7 +35,7 @@ func TestGeneratePartialFailure(t *testing.T) {
 				"CERBERUS_ROOT="+root,
 				"CERBERUS_FIXTURE_DIR="+fixtureDir,
 				"CERBERUS_MOCK_RECORD_DIR="+recordDir,
-				"PATH="+filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"PATH="+integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"),
 			)
 			output, err := cmd.CombinedOutput()
 			if err != nil {

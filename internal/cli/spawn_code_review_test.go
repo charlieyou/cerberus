@@ -825,13 +825,27 @@ func setSpawnTestEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Abs(repo root) error = %v", err)
 	}
-	t.Setenv("PATH", filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", spawnTestMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CERBERUS_ROOT", repoRoot)
 	t.Setenv("CERBERUS_HOST", "generic")
 	t.Setenv("CERBERUS_STATE_ROOT", t.TempDir())
 	t.Setenv("CERBERUS_PROJECT_KEY", "project")
 	t.Setenv("CERBERUS_RUN_KEY", "run")
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+}
+
+func spawnTestMockPath(t *testing.T, repoRoot string) string {
+	t.Helper()
+	binDir := t.TempDir()
+	for _, provider := range []string{"claude", "codex", "gemini"} {
+		binary := filepath.Join(binDir, provider)
+		build := exec.Command("go", "build", "-o", binary, "./tests/mocks/"+provider)
+		build.Dir = repoRoot
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build ./tests/mocks/%s failed: %v\n%s", provider, err, output)
+		}
+	}
+	return binDir
 }
 
 func onlyCodexCLIOnPath(t *testing.T) {

@@ -34,7 +34,7 @@ func TestGeneratePath(t *testing.T) {
 		"CERBERUS_ROOT="+repoRoot,
 		"CERBERUS_FIXTURE_DIR="+fixtureDir,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
-		"PATH="+filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cerberus generate failed: %v\n%s", err, output)
