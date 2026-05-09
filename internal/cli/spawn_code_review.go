@@ -129,7 +129,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 		opts.maxRounds = 0
 	}
 	if len(opts.commits) > 0 {
-		opts.commits = append(opts.commits, fs.Args()...)
+		opts.commits, opts.focus = splitTrailingCommitArgs(opts.commits, fs.Args())
 	} else {
 		opts.focus = strings.Join(fs.Args(), " ")
 	}
@@ -137,6 +137,40 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 		return opts, err
 	}
 	return opts, nil
+}
+
+func splitTrailingCommitArgs(commits []string, args []string) ([]string, string) {
+	for i, arg := range args {
+		if !looksLikeCommitRef(arg) {
+			return append(commits, args[:i]...), strings.Join(args[i:], " ")
+		}
+	}
+	return append(commits, args...), ""
+}
+
+func looksLikeCommitRef(arg string) bool {
+	if arg == "" || strings.ContainsAny(arg, " \t\r\n") || strings.HasPrefix(arg, "-") {
+		return false
+	}
+	if arg == "HEAD" || strings.HasPrefix(arg, "HEAD^") || strings.HasPrefix(arg, "HEAD~") || strings.HasPrefix(arg, "HEAD:") {
+		return true
+	}
+	if isHexRef(arg) {
+		return true
+	}
+	return strings.ContainsAny(arg, "/._-@{}^~:")
+}
+
+func isHexRef(arg string) bool {
+	if len(arg) < 4 || len(arg) > 64 {
+		return false
+	}
+	for _, char := range arg {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
@@ -339,9 +373,16 @@ func appendExcludes(args []string, excludes []string) []string {
 	}
 	args = append(args, "--", ".")
 	for _, exclude := range excludes {
-		args = append(args, ":(exclude)"+exclude)
+		args = append(args, excludePathspec(exclude))
 	}
 	return args
+}
+
+func excludePathspec(exclude string) string {
+	if strings.HasPrefix(exclude, ":(exclude") || strings.HasPrefix(exclude, ":!") || strings.HasPrefix(exclude, ":^") {
+		return exclude
+	}
+	return ":(exclude)" + exclude
 }
 
 func runGit(args []string) (string, error) {

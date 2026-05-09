@@ -149,6 +149,21 @@ func TestParseSpawnCodeReviewCommitConsumesAllTrailingSHAs(t *testing.T) {
 	}
 }
 
+func TestParseSpawnCodeReviewCommitKeepsTrailingFocus(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags([]string{"--commit", "HEAD", "focus on error handling"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
+	}
+	if got, want := strings.Join(opts.commits, ","), "HEAD"; got != want {
+		t.Fatalf("commits = %q, want %q", got, want)
+	}
+	if got, want := opts.focus, "focus on error handling"; got != want {
+		t.Fatalf("focus = %q, want %q", got, want)
+	}
+}
+
 func TestResolveReviewersAppendsCLIReviewer(t *testing.T) {
 	setRosterTestCWD(t)
 
@@ -262,6 +277,21 @@ func TestCodeReviewGitArgsAppliesExcludeToCommitReview(t *testing.T) {
 	got := strings.Join(args, " ")
 	if !strings.Contains(got, "show --format=fuller --stat --patch --no-ext-diff abc123 -- . :(exclude)vendor/**") {
 		t.Fatalf("git args = %q, want commit review with exclude pathspec", got)
+	}
+}
+
+func TestCodeReviewGitArgsPreservesExcludePathspecMagic(t *testing.T) {
+	args := codeReviewGitArgs(spawnCodeReviewOptions{
+		commits:  []string{"abc123"},
+		excludes: []string{":(exclude,glob)dist/**", ":!vendor/**"},
+	})
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, " -- . :(exclude,glob)dist/** :!vendor/**") {
+		t.Fatalf("git args = %q, want existing exclude pathspec magic preserved", got)
+	}
+	if strings.Contains(got, ":(exclude):(exclude,glob)") || strings.Contains(got, ":(exclude):!") {
+		t.Fatalf("git args = %q, want no double exclude prefix", got)
 	}
 }
 
