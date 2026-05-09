@@ -100,6 +100,32 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	}
 }
 
+func TestRunDebateRunsPeerRoundWhenRoundOnePasses(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &verdictByRoundSpawner{verdicts: map[int]string{
+		1: "PASS",
+		2: "PASS",
+	}}
+
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v", err)
+	}
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictPass)
+	}
+	if got, want := spawner.roundCalls(2), 2; got != want {
+		t.Fatalf("round 2 call count = %d, want %d", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "iterations", "1", "round-2", "peer-broadcast.json")); err != nil {
+		t.Fatalf("round-2 peer-broadcast.json missing: %v", err)
+	}
+}
+
 func TestRunDebateRunsAllRoundsWhenVerdictRequiresDecision(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

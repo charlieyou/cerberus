@@ -291,7 +291,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 		}); err != nil {
 			return Verdict{}, err
 		}
-		if result.Verdict == aggregate.VerdictPass || result.Verdict == aggregate.VerdictFail {
+		if round > 1 && (result.Verdict == aggregate.VerdictPass || result.Verdict == aggregate.VerdictFail) {
 			break
 		}
 	}
