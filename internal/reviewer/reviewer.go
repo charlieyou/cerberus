@@ -34,10 +34,10 @@ type RawReviewerOutput struct {
 	Findings          []RawFinding `json:"findings"`
 	Verdict           string       `json:"verdict"`
 	Summary           string       `json:"summary"`
-	OverallConfidence *float64     `json:"overall_confidence,omitempty"`
-	Strategy          string       `json:"strategy,omitempty"`
-	Round             *int         `json:"round,omitempty"`
-	PeerResponsesSeen []string     `json:"peer_responses_seen,omitempty"`
+	OverallConfidence *float64     `json:"overall_confidence"`
+	Strategy          *string      `json:"strategy"`
+	Round             *int         `json:"round"`
+	PeerResponsesSeen []string     `json:"peer_responses_seen"`
 }
 
 type RawFinding struct {
@@ -47,5 +47,5 @@ type RawFinding struct {
 	FilePath   *string  `json:"file_path"`
 	LineStart  *int     `json:"line_start"`
 	LineEnd    *int     `json:"line_end"`
-	Confidence *float64 `json:"confidence,omitempty"`
+	Confidence *float64 `json:"confidence"`
 }

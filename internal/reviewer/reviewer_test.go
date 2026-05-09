@@ -153,16 +153,19 @@ func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
 	if _, err := Parse([]byte(`not-json`)); err == nil {
 		t.Fatal("Parse(invalid JSON) error = nil")
 	}
-	if _, err := Parse([]byte(`{"findings":[],"verdict":"pass","summary":"bad"}`)); err == nil {
+	if _, err := Parse([]byte(`{"findings":[],"verdict":"pass","summary":"bad","overall_confidence":0.5,"strategy":"mock","round":1,"peer_responses_seen":[]}`)); err == nil {
 		t.Fatal("Parse(invalid verdict) error = nil")
 	}
 }
 
 func TestParseRejectsMissingRequiredFields(t *testing.T) {
 	for name, input := range map[string]string{
-		"missing summary":        `{"findings":[],"verdict":"PASS"}`,
-		"missing finding fields": `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad"}`,
-		"null priority":          `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad"}`,
+		"missing summary":            `{"findings":[],"verdict":"PASS","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing overall confidence": `{"findings":[],"verdict":"PASS","summary":"ok","strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing peer responses":     `{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8,"strategy":"mock","round":1}`,
+		"missing finding fields":     `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing confidence":         `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null priority":              `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
@@ -173,7 +176,7 @@ func TestParseRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestParseAcceptsRequiredNullableFindingLocations(t *testing.T) {
-	got, err := Parse([]byte(`{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad"}`))
+	got, err := Parse([]byte(`{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":null}],"verdict":"FAIL","summary":"bad","overall_confidence":null,"strategy":null,"round":null,"peer_responses_seen":null}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -183,7 +186,7 @@ func TestParseAcceptsRequiredNullableFindingLocations(t *testing.T) {
 }
 
 func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
-	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"ok\",\"overall_confidence\":0.8}"}`))
+	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"ok\",\"overall_confidence\":0.8,\"strategy\":\"mock\",\"round\":1,\"peer_responses_seen\":[]}"}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -193,7 +196,7 @@ func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
 }
 
 func TestParseAcceptsPeerResponsesSeenArray(t *testing.T) {
-	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","peer_responses_seen":["peer-1","peer-2"]}`))
+	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":["peer-1","peer-2"]}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}

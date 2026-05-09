@@ -53,7 +53,7 @@ func validateRequiredFields(stdout []byte) error {
 	if err := json.Unmarshal(stdout, &raw); err != nil {
 		return fmt.Errorf("parse reviewer JSON fields: %w", err)
 	}
-	for _, key := range []string{"findings", "verdict", "summary"} {
+	for _, key := range []string{"findings", "verdict", "summary", "overall_confidence", "strategy", "round", "peer_responses_seen"} {
 		if _, ok := raw[key]; !ok {
 			return fmt.Errorf("reviewer %s is required", key)
 		}
@@ -64,7 +64,7 @@ func validateRequiredFields(stdout []byte) error {
 		return fmt.Errorf("reviewer findings must be an array: %w", err)
 	}
 	for index, finding := range findings {
-		for _, key := range []string{"title", "body", "priority", "file_path", "line_start", "line_end"} {
+		for _, key := range []string{"title", "body", "priority", "file_path", "line_start", "line_end", "confidence"} {
 			if _, ok := finding[key]; !ok {
 				return fmt.Errorf("reviewer findings[%d].%s is required", index, key)
 			}
