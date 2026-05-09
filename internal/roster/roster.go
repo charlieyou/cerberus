@@ -179,7 +179,7 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 		return nil, err
 	}
 	if len(slots) == 0 {
-		return nil, preflightError(filePath(file), rosterName, 0, "resulting panel is empty")
+		return nil, preflightError(filePath(file), rosterName, 0, "empty roster after degradation")
 	}
 	return slots, nil
 }
