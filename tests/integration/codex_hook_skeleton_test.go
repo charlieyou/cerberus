@@ -47,7 +47,7 @@ func TestCodexHookSkeletonSubcommandsReadStdinPayloads(t *testing.T) {
 			if event["event"] != telemetry.EventHookAllowed {
 				t.Fatalf("event = %v, want %s", event["event"], telemetry.EventHookAllowed)
 			}
-			if event["project_key"] != "codex-fixture-project" {
+			if tc.subcommand != "codex-stop" && event["project_key"] != "codex-fixture-project" {
 				t.Fatalf("project_key = %v, want codex-fixture-project", event["project_key"])
 			}
 			if err := os.Remove(filepath.Join(stateRoot, "codex-fixture-project", "codex-fixture-session", "event-log.jsonl")); err != nil {

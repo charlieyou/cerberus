@@ -25,11 +25,15 @@ type codexPayload struct {
 }
 
 func HandleCodexStop(stdinPayload []byte, env *config.Env) error {
-	resolved, runRoot, err := resolveCodexHookRun(stdinPayload, env)
+	return handleCodexStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+}
+
+func handleCodexStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) error {
+	_, runRoot, err := resolveCodexHookRun(stdinPayload, env)
 	if err != nil {
 		return err
 	}
-	return writeCodexHookAllowed(runRoot, resolved)
+	return PollGateState(state.GateStatePath(runRoot), pollInterval, maxWait)
 }
 
 func HandleCodexSessionStart(stdinPayload []byte, env *config.Env) error {
