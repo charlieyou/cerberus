@@ -46,7 +46,7 @@ func TestDebatePath(t *testing.T) {
 			t.Fatalf("ReadFile(%s) error = %v", name, err)
 		}
 		prompt := string(data)
-		if !strings.Contains(prompt, "{{{{PEER_BROADCAST}}}}") || !strings.Contains(prompt, "peer_1") || !strings.Contains(prompt, "peer_2") {
+		if !strings.Contains(prompt, "{{PEER_BROADCAST}}") || !strings.Contains(prompt, "peer_1") || !strings.Contains(prompt, "peer_2") {
 			t.Fatalf("round-2 prompt %s = %q, want peer broadcast substitution", name, prompt)
 		}
 	}

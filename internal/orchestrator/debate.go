@@ -241,5 +241,5 @@ func modelNames(slots []ReviewerSlot) []string {
 }
 
 func promptWithPeerBroadcast(prompt, broadcast []byte) []byte {
-	return appendPrompt(prompt, append([]byte("{{{{PEER_BROADCAST}}}}\n"), append(broadcast, []byte("{{{{/PEER_BROADCAST}}}}")...)...))
+	return appendPrompt(prompt, append([]byte("{{PEER_BROADCAST}}\n"), append(broadcast, []byte("{{/PEER_BROADCAST}}")...)...))
 }

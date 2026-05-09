@@ -59,7 +59,7 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	if got, want := strings.Join(spawner.rounds, ","), "codex#1:1,codex#1:2,codex#2:1,codex#2:2"; got != want {
 		t.Fatalf("spawn rounds = %s, want %s", got, want)
 	}
-	if !strings.Contains(spawner.prompts["codex#1:2"], "{{{{PEER_BROADCAST}}}}") {
+	if !strings.Contains(spawner.prompts["codex#1:2"], "{{PEER_BROADCAST}}") {
 		t.Fatalf("round 2 prompt missing peer broadcast marker: %q", spawner.prompts["codex#1:2"])
 	}
 
