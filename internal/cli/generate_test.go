@@ -67,6 +67,26 @@ func TestGenerateSubcommandRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestGenerateSubcommandRejectsUnknownFlagOnce(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"generate", t.TempDir(), "--unknown"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("run(generate) exit code = %d, want 2; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("run(generate) stdout = %q, want empty", stdout.String())
+	}
+	got := stderr.String()
+	if count := strings.Count(got, "flag provided but not defined: -unknown"); count != 1 {
+		t.Fatalf("run(generate) flag error count = %d, want 1; stderr: %q", count, got)
+	}
+	if count := strings.Count(got, "usage: cerberus generate"); count != 1 {
+		t.Fatalf("run(generate) usage count = %d, want 1; stderr: %q", count, got)
+	}
+}
+
 func TestGenerateSubcommandRejectsMissingPromptInput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

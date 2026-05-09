@@ -42,7 +42,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func parseGenerateFlags(args []string, stderr io.Writer) (generate.Options, error) {
+func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
 	var opts generate.Options
 	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
 		return generate.Options{}, usagef("generate requires an output directory")
@@ -50,9 +50,9 @@ func parseGenerateFlags(args []string, stderr io.Writer) (generate.Options, erro
 	opts.OutputDir = args[0]
 
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, generateUsage)
+		fmt.Fprintln(fs.Output(), generateUsage)
 	}
 	fs.StringVar(&opts.Type, "type", "", "generator type")
 	fs.StringVar(&opts.Mode, "mode", "smart", "generator mode")
