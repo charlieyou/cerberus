@@ -86,6 +86,19 @@ _rdc_aggregate_and_promote() { :; }
 	}
 }
 
+func TestRunRejectsLegacyShippedEntrypointsInSkillsAndTemplates(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "skills/status/SKILL.md", `"$CERBERUS_ROOT/bin/review-gate" status --json
+`)
+	writeFile(t, root, "templates/codex-hooks.json", `{"hooks":{"Stop":[{"hooks":[{"command":"/bin/bash <root>/bin/codex-stop-hook"}]}]}}
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "legacy shipped entrypoint") {
+		t.Fatalf("run() error = %v, want legacy shipped entrypoint failure", err)
+	}
+}
+
 func TestRunRejectsDirectGateStateWritePatternsInBin(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "bin/review-gate", `#!/bin/sh

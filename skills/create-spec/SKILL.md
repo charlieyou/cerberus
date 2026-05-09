@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -509,7 +508,7 @@ Spawn external reviewers on the spec file. Pass `--max-rounds` so the daemon's a
 - Otherwise forward the mode default: `fast=2`, `smart=3`, `max=5`.
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-spec-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-spec.md
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-spec-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-spec.md
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.

@@ -46,11 +46,19 @@ func TestClaudeStopHookInvokesGoGatePolling(t *testing.T) {
 }
 
 func TestCodexHooksInvokeGoHookSubcommands(t *testing.T) {
-	data, err := os.ReadFile("codex-hooks.json")
-	if err != nil {
-		t.Fatalf("read codex-hooks.json: %v", err)
-	}
+	assertCodexHookManifest(t, "codex-hooks.json")
+}
 
+func TestCodexHookTemplateInvokesGoHookSubcommands(t *testing.T) {
+	assertCodexHookManifest(t, "../templates/codex-hooks.json")
+}
+
+func assertCodexHookManifest(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
 	var manifest struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
@@ -59,7 +67,7 @@ func TestCodexHooksInvokeGoHookSubcommands(t *testing.T) {
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatalf("parse codex-hooks.json: %v", err)
+		t.Fatalf("parse %s: %v", path, err)
 	}
 
 	for event, subcommand := range map[string]string{

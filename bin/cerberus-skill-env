@@ -14,54 +14,26 @@ __cerberus_skill_env_has_backend() {
     local root="${1:-}"
     [ -n "$root" ] \
         && [[ "$root" == /* ]] \
-        && [ -r "$root/bin/review-gate" ] \
-        && [ -r "$root/bin/review-gate-models.sh" ] \
+        && [ -x "$root/bin/cerberus" ] \
         && [ -r "$root/config/gemini-readonly-settings.json" ] \
         && [ -r "$root/config/gemini-readonly-policy.toml" ]
 }
 
-__cerberus_skill_env_bootstrap_codex_registry() {
-    local project_key="${1:-}"
-    local registry="${2:-}"
-    local workspace_root="${3:-}"
-    local codex_thread_id="${CODEX_THREAD_ID:-}"
+__cerberus_skill_env_project_root() {
+    local cwd="${1:-$(pwd)}"
+    git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || (cd "$cwd" 2>/dev/null && pwd)
+}
 
-    [ -n "$project_key" ] || return 0
-    [ -n "$registry" ] || return 0
-    [ -n "$workspace_root" ] || return 0
-    [ -n "$codex_thread_id" ] || return 0
-    [ -x "$CERBERUS_ROOT/bin/codex-session-init" ] || return 0
-
-    local should_refresh="false"
-    if [ ! -r "$registry" ]; then
-        should_refresh="true"
-    elif jq -e . "$registry" >/dev/null 2>&1; then
-        local registry_session_id=""
-        local registry_run_key=""
-        registry_session_id="$(jq -r '.session_id // .codex_session_id // empty' "$registry" 2>/dev/null || true)"
-        registry_run_key="$(jq -r '.run_key // empty' "$registry" 2>/dev/null || true)"
-        if [ "$registry_session_id" != "$codex_thread_id" ] || [ -z "$registry_run_key" ]; then
-            should_refresh="true"
-        fi
+__cerberus_skill_env_project_key() {
+    local project_root="${1:-}"
+    [ -n "$project_root" ] || return 1
+    if command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$project_root" | shasum -a 256 | awk '{print substr($1, 1, 16)}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$project_root" | sha256sum | awk '{print substr($1, 1, 16)}'
     else
-        should_refresh="true"
+        return 1
     fi
-
-    [ "$should_refresh" = "true" ] || return 0
-
-    local payload=""
-    payload="$(jq -n \
-        --arg session_id "$codex_thread_id" \
-        --arg workspace_root "$workspace_root" \
-        '{
-            session_id: $session_id,
-            workspace_root: $workspace_root,
-            cwd: $workspace_root,
-            transcript_path: ""
-        }' 2>/dev/null || true)"
-    [ -n "$payload" ] || return 0
-
-    printf '%s' "$payload" | "$CERBERUS_ROOT/bin/codex-session-init" >/dev/null 2>&1 || true
 }
 
 if [ -z "${CERBERUS_ROOT:-}" ]; then
@@ -87,20 +59,16 @@ if [ -z "${CERBERUS_HOST:-}" ]; then
         export CERBERUS_HOST="claude"
     elif [ -n "${CODEX_THREAD_ID:-${CODEX_API_KEY:-${CODEX_HOME:-${CODEX_SANDBOX:-}}}}" ]; then
         export CERBERUS_HOST="codex"
-    elif [ -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ] && command -v jq >/dev/null 2>&1; then
-        __cerberus_skill_cwd="$(pwd)"
-        __cerberus_skill_project_key="$(
-            # shellcheck source=/dev/null
-            . "$CERBERUS_ROOT/bin/review-gate-lib.sh" >/dev/null 2>&1 || exit 0
-            CERBERUS_PROJECT_KEY= CLAUDE_PROJECT_DIR="$__cerberus_skill_cwd" get_project_hash "" 2>/dev/null || true
-        )"
+    elif command -v jq >/dev/null 2>&1; then
+        __cerberus_skill_project_root="$(__cerberus_skill_env_project_root "$(pwd)" 2>/dev/null || true)"
+        __cerberus_skill_project_key="$(__cerberus_skill_env_project_key "$__cerberus_skill_project_root" 2>/dev/null || true)"
         if [ -n "$__cerberus_skill_project_key" ] \
-           && [ -r "$HOME/.cerberus/runtime/codex/$__cerberus_skill_project_key/active-session.json" ]; then
+           && [ -r "$HOME/.codex/projects/$__cerberus_skill_project_key/cerberus/active-session.json" ]; then
             export CERBERUS_HOST="codex"
         else
             export CERBERUS_HOST="generic"
         fi
-        unset __cerberus_skill_cwd __cerberus_skill_project_key
+        unset __cerberus_skill_project_root __cerberus_skill_project_key
     else
         export CERBERUS_HOST="generic"
     fi
@@ -126,52 +94,39 @@ fi
 
 if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
     if [ "$CERBERUS_HOST" = "codex" ] && [ -z "${CLAUDE_SESSION_ID:-}" ]; then
-        if [ ! -r "$CERBERUS_ROOT/bin/review-gate-lib.sh" ]; then
-            echo "cerberus skill: cannot read Codex active-session registry; missing $CERBERUS_ROOT/bin/review-gate-lib.sh" >&2
-            return 1 2>/dev/null || exit 1
-        fi
         if ! command -v jq >/dev/null 2>&1; then
             echo "cerberus skill: cannot read Codex active-session registry; jq is not on PATH" >&2
             return 1 2>/dev/null || exit 1
         fi
 
-        __cerberus_skill_cwd="$(pwd)"
-        __cerberus_skill_project_key="$(
-            # shellcheck source=/dev/null
-            . "$CERBERUS_ROOT/bin/review-gate-lib.sh" >/dev/null 2>&1 || exit 0
-            CERBERUS_PROJECT_KEY= CLAUDE_PROJECT_DIR="$__cerberus_skill_cwd" get_project_hash "" 2>/dev/null || true
-        )"
-        __cerberus_skill_registry="$HOME/.cerberus/runtime/codex/$__cerberus_skill_project_key/active-session.json"
-
-        __cerberus_skill_env_bootstrap_codex_registry \
-            "$__cerberus_skill_project_key" \
-            "$__cerberus_skill_registry" \
-            "$__cerberus_skill_cwd"
+        __cerberus_skill_project_root="$(__cerberus_skill_env_project_root "$(pwd)" 2>/dev/null || true)"
+        __cerberus_skill_project_key="$(__cerberus_skill_env_project_key "$__cerberus_skill_project_root" 2>/dev/null || true)"
+        __cerberus_skill_registry="$HOME/.codex/projects/$__cerberus_skill_project_key/cerberus/active-session.json"
 
         if [ -z "$__cerberus_skill_project_key" ] || [ ! -r "$__cerberus_skill_registry" ]; then
             echo "cerberus skill: Codex active-session registry not found. Start a new Codex session and ensure SessionStart/UserPromptSubmit hooks are installed: $__cerberus_skill_registry" >&2
-            unset __cerberus_skill_cwd __cerberus_skill_project_key __cerberus_skill_registry
+            unset __cerberus_skill_project_root __cerberus_skill_project_key __cerberus_skill_registry
             return 1 2>/dev/null || exit 1
         fi
 
         if ! jq -e . "$__cerberus_skill_registry" >/dev/null 2>&1; then
             echo "cerberus skill: Codex active-session registry is malformed: $__cerberus_skill_registry" >&2
-            unset __cerberus_skill_cwd __cerberus_skill_project_key __cerberus_skill_registry
+            unset __cerberus_skill_project_root __cerberus_skill_project_key __cerberus_skill_registry
             return 1 2>/dev/null || exit 1
         fi
 
         __cerberus_skill_run_key="$(jq -r '.run_key // empty' "$__cerberus_skill_registry" 2>/dev/null || true)"
         if [ -z "$__cerberus_skill_run_key" ]; then
             echo "cerberus skill: Codex active-session registry has no run_key: $__cerberus_skill_registry" >&2
-            unset __cerberus_skill_cwd __cerberus_skill_project_key __cerberus_skill_registry __cerberus_skill_run_key
+            unset __cerberus_skill_project_root __cerberus_skill_project_key __cerberus_skill_registry __cerberus_skill_run_key
             return 1 2>/dev/null || exit 1
         fi
 
         export CERBERUS_PROJECT_KEY="$__cerberus_skill_project_key"
         export CERBERUS_RUN_KEY="$__cerberus_skill_run_key"
-        unset __cerberus_skill_cwd __cerberus_skill_project_key __cerberus_skill_registry __cerberus_skill_run_key
+        unset __cerberus_skill_project_root __cerberus_skill_project_key __cerberus_skill_registry __cerberus_skill_run_key
     fi
 fi
 
-unset -f __cerberus_skill_env_has_backend __cerberus_skill_env_bootstrap_codex_registry
+unset -f __cerberus_skill_env_has_backend __cerberus_skill_env_project_root __cerberus_skill_env_project_key
 unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir __cerberus_skill_env_script_root

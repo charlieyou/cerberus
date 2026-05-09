@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -116,7 +115,7 @@ You may ignore findings that:
 - Complain about removed options/parameters that had no functional difference
 - Treat consolidation of redundant code paths as a problem
 
-Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate artifact-path
+Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus artifact-path
 
 Write the synthesized healthcheck to that path.
 

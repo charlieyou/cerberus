@@ -22,7 +22,7 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-REVIEW_GATE="${PLUGIN_ROOT}/bin/review-gate"
+REVIEW_GATE="${PLUGIN_ROOT}/bin/cerberus"
 
 state_file=""
 state_dir=""
@@ -460,8 +460,8 @@ review_head="$candidate_head"
 rm -f "${state_dir}/reviewed_pass" "${state_dir}/reviewed_head"
 
 if [[ ! -x "$REVIEW_GATE" ]]; then
-    write_last_error "spawn_failed: review-gate is not executable at ${REVIEW_GATE}"
-    block "INFRA-FAILURE: review-gate is not executable. Send NEEDS_HUMAN to lead and go idle."
+    write_last_error "spawn_failed: cerberus is not executable at ${REVIEW_GATE}"
+    block "INFRA-FAILURE: cerberus is not executable. Send NEEDS_HUMAN to lead and go idle."
 fi
 
 session_key="cerberus-impl-${team_hash}-${task_id}-round${round}"
@@ -545,4 +545,4 @@ fi
     printf 'wait_failed: status=%s verdict=%s wait_rc=%s\n' "$wait_status" "$verdict" "$wait_rc"
     printf 'raw_wait_json:\n%s\n' "$wait_json"
 } > "${state_dir}/last_error"
-block "INFRA-FAILURE: review-gate wait ended with status='${wait_status}' verdict='${verdict}' rc=${wait_rc}. Send NEEDS_HUMAN to lead and go idle."
+block "INFRA-FAILURE: cerberus wait ended with status='${wait_status}' verdict='${verdict}' rc=${wait_rc}. Send NEEDS_HUMAN to lead and go idle."

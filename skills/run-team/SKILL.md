@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -129,7 +128,7 @@ Abort with a clear error if any hard gate fails.
 
 4. **Default branch warning**. Detect the repo default branch and current branch. If they differ, warn but do not abort.
 
-5. **Review-gate keying available**. Confirm `${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate` exists and that `spawn-code-review` supports `REVIEW_GATE_SESSION_KEY` while `wait` supports `--session-key`. If not, abort with the missing capability.
+5. **Review-gate keying available**. Confirm `${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus` exists and that `spawn-code-review` supports `REVIEW_GATE_SESSION_KEY` while `wait` supports `--session-key`. If not, abort with the missing capability.
 
 6. **Required JSON tooling**. Confirm `jq` is available on `PATH`. If not, abort:
 
@@ -475,14 +474,14 @@ phase_criteria_path="${state_root}/epic-verify-${phase_index}-${phase_slug}-atte
 head_before_epic_verify=$(git rev-parse HEAD)
 if [ -n "$verify_transcript_path" ]; then
   REVIEW_GATE_SESSION_KEY="$VERIFY_KEY" \
-    "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate" spawn-epic-verify \
+    "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" spawn-epic-verify \
       --session-id "$VERIFY_SESSION_ID" \
       --transcript-path "$verify_transcript_path" \
       --consensus majority --mode fast \
       "$verify_target"
 else
   REVIEW_GATE_SESSION_KEY="$VERIFY_KEY" \
-    "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate" spawn-epic-verify \
+    "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" spawn-epic-verify \
       --session-id "$VERIFY_SESSION_ID" \
       --consensus majority --mode fast \
       "$verify_target"
@@ -490,7 +489,7 @@ fi
 
 phase_verify_json=""
 phase_verify_rc=0
-phase_verify_json=$("${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate" wait --json --finalize \
+phase_verify_json=$("${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" wait --json --finalize \
   --session-key "$VERIFY_KEY") || phase_verify_rc=$?
 head_after_epic_verify=$(git rev-parse HEAD 2>/dev/null || true)
 

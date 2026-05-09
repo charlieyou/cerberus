@@ -31,8 +31,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -54,7 +53,7 @@ Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
 Run:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate resolve --reason "manual clear"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus resolve --reason "manual clear"
 ```
 
 This resolves the active review gate, allowing you to stop the session without completing the review cycle.

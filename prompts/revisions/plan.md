@@ -66,7 +66,7 @@ Now call the Task tool (not in a code block) using the structure above for each 
 When you believe a previously flagged issue is now resolved, briefly note this in author-context. This gives reviewers a checklist to verify.
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/review-gate author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
+${CLAUDE_PLUGIN_ROOT}/bin/cerberus author-context 'Resolved: [what was fixed]. False Positives: [why X is intentional]. Questions: [any open items].'
 ```
 
 Keep it to 1-2 paragraphs max. Update each iteration to reflect current state; do not keep outdated notes. Once all findings are resolved, clear with `author-context --clear`.

@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -68,7 +67,7 @@ Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review $ARGUMENTS
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review $ARGUMENTS
 ```
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
@@ -78,26 +77,26 @@ When running under Codex, `bin/cerberus-skill-env` reads the active run key from
 Examples:
 ```bash
 # User: /review-plan path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review path/to/plan.md
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review path/to/plan.md
 
 # User: /review-plan "focus on error handling"
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --focus "focus on error handling"
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --focus "focus on error handling"
 
 # User: /review-plan --mode max plan.md "check dependencies"
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --mode max --focus "check dependencies" plan.md
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --mode max --focus "check dependencies" plan.md
 
 # User: /review-plan --agents codex,gemini path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --agents codex,gemini path/to/plan.md
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --agents codex,gemini path/to/plan.md
 
 # User: /review-plan --max-rounds 3 path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 3 path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --max-rounds 3 path/to/plan.md
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
 
 # User: /review-plan --consensus any path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --consensus any path/to/plan.md
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review --consensus any path/to/plan.md
 
 # User: /review-plan plan.md focus on error handling
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review plan.md focus on error handling
+"$CERBERUS_ROOT/bin/cerberus" spawn-plan-review plan.md focus on error handling
 ```
 
 If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
@@ -139,6 +138,6 @@ Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) â
 The iterative review continues until:
 - Consensus is reached (per `--consensus` mode, default: majority)
 - Maximum iterations (default 3, configurable via --max-rounds; set `0` to disable auto-respawn) are reached
-- You manually resolve with `"$CERBERUS_ROOT/bin/review-gate" resolve`
+- You manually resolve with `"$CERBERUS_ROOT/bin/cerberus" resolve`
 
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.

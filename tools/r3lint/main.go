@@ -133,6 +133,17 @@ func lintV2TextBoundaries(root string) []string {
 					failures = append(failures, fmt.Sprintf("%s: legacy debate symbol %q duplicates internal Go ownership", rel, token))
 				}
 			}
+			for _, token := range []string{
+				"bin/review-gate",
+				"review-gate-models.sh",
+				"review-gate-lib.sh",
+				"codex-session-init",
+				"codex-stop-hook",
+			} {
+				if strings.Contains(string(data), token) {
+					failures = append(failures, fmt.Sprintf("%s: legacy shipped entrypoint %q bypasses the v2 cerberus binary", rel, token))
+				}
+			}
 			if strings.Contains(string(data), `"gate-state.json"`) {
 				failures = append(failures, fmt.Sprintf("%s: direct gate-state.json literal outside internal/state bypasses state I/O ownership", rel))
 			}

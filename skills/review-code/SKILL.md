@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -156,5 +155,5 @@ When reviewers don't all agree:
 If needed after max iterations:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate resolve  # Resolve the current gate
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus resolve  # Resolve the current gate
 ```

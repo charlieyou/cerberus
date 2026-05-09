@@ -32,8 +32,7 @@ for cerberus_candidate in "${cerberus_candidates[@]}"; do
     if [ -n "$cerberus_candidate" ] \
         && [[ "$cerberus_candidate" == /* ]] \
         && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
+        && [ -x "$cerberus_candidate/bin/cerberus" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
         && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
         cerberus_root="$cerberus_candidate"
@@ -72,12 +71,12 @@ The CLI accepts `--agents`, `--mode`, `--max-rounds`, `--consensus`, `--context-
 Use the Bash tool to run `spawn-ask`, wait for completion, and save the machine-readable result. Set the Bash timeout to 1800000ms (30 minutes).
 
 ```bash
-artifact_path=$(${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate artifact-path)
+artifact_path=$(${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus artifact-path)
 review_dir=$(dirname "$artifact_path")
 result_file="$review_dir/ask-result.json"
 
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-ask $ARGUMENTS
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate wait --json --finalize --timeout 1800 --poll-interval 3 > "$result_file" || true
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-ask $ARGUMENTS
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus wait --json --finalize --timeout 1800 --poll-interval 3 > "$result_file" || true
 
 printf 'ASK_RESULT=%s\nREVIEW_DIR=%s\n' "$result_file" "$review_dir"
 ```
