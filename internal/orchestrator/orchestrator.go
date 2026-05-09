@@ -336,9 +336,6 @@ func resolveRun(env *config.Env) (*config.Env, string, error) {
 	if resolved.RunKey == "" {
 		resolved.RunKey = resolved.SessionID
 	}
-	if resolved.RunKey == "" {
-		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or CERBERUS_SESSION_ID is required")
-	}
 
 	adapter, err := host.NewFromEnv(&resolved)
 	if err != nil {
@@ -358,11 +355,33 @@ func resolveRun(env *config.Env) (*config.Env, string, error) {
 		}
 		resolved.StateRoot = stateRoot
 	}
+	if resolved.RunKey == "" {
+		if err := applySessionCache(&resolved); err != nil {
+			return nil, "", err
+		}
+	}
+	if resolved.RunKey == "" {
+		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or CERBERUS_SESSION_ID is required")
+	}
 	runRoot := state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey)
 	if err := state.EnsureRunDir(runRoot); err != nil {
 		return nil, "", err
 	}
 	return &resolved, runRoot, nil
+}
+
+func applySessionCache(env *config.Env) error {
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	env.RunKey = cache.RunKey
+	env.SessionID = cache.SessionID
+	env.TranscriptPath = cache.TranscriptPath
+	return nil
 }
 
 func resolveSlots(params Params) ([]ReviewerSlot, RosterDefaults, error) {

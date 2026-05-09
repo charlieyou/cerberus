@@ -87,6 +87,36 @@ func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
 	}
 }
 
+func TestStartSinglePassFallsBackToCodexSessionCache(t *testing.T) {
+	env := testEnv(t)
+	env.Host = "codex"
+	env.RunKey = ""
+	env.SessionID = ""
+	env.TranscriptPath = ""
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     env.ProjectKey,
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         "codex-run",
+		TranscriptPath: "/tmp/codex-session.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+
+	started, err := StartSinglePass(env, testParams())
+	if err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+
+	if started.Env.RunKey != "codex-run" || started.Env.SessionID != "codex-session" || started.Env.TranscriptPath != "/tmp/codex-session.jsonl" {
+		t.Fatalf("started env = %#v, want identity from session cache", started.Env)
+	}
+	if _, err := os.Stat(state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, "codex-run"))); err != nil {
+		t.Fatalf("cached run gate state missing: %v", err)
+	}
+}
+
 func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

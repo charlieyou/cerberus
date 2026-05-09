@@ -174,10 +174,9 @@ func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) 
 	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
 		return payloadSessionID, true
 	}
-	if cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey)); err == nil {
-		if cache.SessionID == payloadSessionID && cache.RunKey != "" {
-			return cache.RunKey, true
-		}
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
+	if err == nil && cache.SessionID == payloadSessionID && cache.RunKey != "" {
+		return cache.RunKey, true
 	}
 	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
 }
