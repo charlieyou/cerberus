@@ -98,7 +98,7 @@ func validateFile(file *RostersFile) error {
 	if file.Defaults.Mode != "" && !validMode(file.Defaults.Mode) {
 		return preflightError(path, defaultRosterName, 0, "unknown mode %q", file.Defaults.Mode)
 	}
-	if file.Defaults.MaxRounds < 0 {
+	if file.Defaults.MaxRounds != nil && *file.Defaults.MaxRounds <= 0 {
 		return preflightError(path, defaultRosterName, 0, "max_rounds must be positive")
 	}
 	if len(file.Rosters) == 0 {

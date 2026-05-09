@@ -115,6 +115,9 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 	var slots []RosterSlot
 	builtIn := file == nil
 	if builtIn {
+		if opts.RosterName != "" {
+			return nil, preflightError(filePath(file), rosterName, 0, "--roster %q requires a rosters.yaml file", opts.RosterName)
+		}
 		slots = cloneSlots(builtInDefaultSlots)
 		slots = degradeBuiltInDefault(slots)
 	} else {

@@ -19,7 +19,7 @@ type Roster struct {
 // RosterDefaults contains optional panel-wide YAML defaults.
 type RosterDefaults struct {
 	Mode      string `yaml:"mode,omitempty"`
-	MaxRounds int    `yaml:"max_rounds,omitempty"`
+	MaxRounds *int   `yaml:"max_rounds,omitempty"`
 }
 
 // RostersFile is the top-level YAML schema.

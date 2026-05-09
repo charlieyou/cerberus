@@ -46,6 +46,33 @@ func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
 	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "gemini#1"})
 }
 
+func TestNamedRosterWithoutFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	withFakeCLIs(t, dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+
+	file, err := LoadRosters("")
+	if err != nil {
+		t.Fatalf("LoadRosters() error = %v", err)
+	}
+	if file != nil {
+		t.Fatalf("LoadRosters() = %v, want nil without file", file)
+	}
+
+	_, err = Resolve(file, "custom", nil, "")
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want missing roster file error")
+	}
+	message := err.Error()
+	for _, want := range []string{"<built-in>", "custom", "requires a rosters.yaml file"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error %q does not contain %q", message, want)
+		}
+	}
+}
+
 func TestExistingFileWithoutDefaultRosterErrors(t *testing.T) {
 	dir := t.TempDir()
 	withFakeCLIs(t, dir)
@@ -68,6 +95,35 @@ rosters:
 	}
 	message := err.Error()
 	for _, want := range []string{path, "default", "pass --roster <name>", "remove rosters.yaml"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestExplicitZeroMaxRoundsRejects(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rosters.yaml")
+	writeFile(t, path, `version: 1
+defaults:
+  max_rounds: 0
+rosters:
+  default:
+    reviewers:
+      - provider: codex
+        model: gpt-5.5
+`)
+	file, err := LoadRosters(path)
+	if err != nil {
+		t.Fatalf("LoadRosters() error = %v", err)
+	}
+
+	_, err = Resolve(file, "default", nil, "")
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want max_rounds error")
+	}
+	message := err.Error()
+	for _, want := range []string{path, "default", "slot 0", "max_rounds must be positive"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("error %q does not contain %q", message, want)
 		}
