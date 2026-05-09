@@ -662,8 +662,8 @@ The Codex install is:
 
 The Cerberus backend itself continues to read `CERBERUS_ROOT` (with
 `CLAUDE_PLUGIN_ROOT` fallback) via `__cerberus_resolve_root`. The
-placeholder lives **only** in the legacy hook template, not in any
-backend code path or current Codex skill body.
+Codex hook definitions pass `${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}`, so
+manual path substitution is not part of the fallback contract.
 
 ### Implications for downstream tasks (historical)
 
