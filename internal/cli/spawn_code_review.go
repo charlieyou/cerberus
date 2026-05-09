@@ -140,14 +140,14 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 }
 
 func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
-	if opts.mode != "" {
+	if opts.modeSet {
 		switch opts.mode {
 		case "fast", "smart", "max":
 		default:
 			return fmt.Errorf("--mode must be fast, smart, or max")
 		}
 	}
-	if opts.maxRounds != 0 && opts.maxRounds <= 0 {
+	if opts.maxRoundsSet && opts.maxRounds <= 0 {
 		return fmt.Errorf("--max-rounds must be positive")
 	}
 	switch opts.consensus {

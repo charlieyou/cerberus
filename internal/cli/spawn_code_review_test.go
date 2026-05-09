@@ -97,6 +97,20 @@ func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	}
 }
 
+func TestParseSpawnCodeReviewRejectsExplicitInvalidRuntimeFlags(t *testing.T) {
+	var stderr bytes.Buffer
+
+	_, err := parseSpawnCodeReviewFlags([]string{"--max-rounds", "0"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--max-rounds must be positive") {
+		t.Fatalf("zero max-rounds error = %v, want positive error", err)
+	}
+
+	_, err = parseSpawnCodeReviewFlags([]string{"--mode", ""}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--mode must be fast, smart, or max") {
+		t.Fatalf("empty mode error = %v, want mode enum error", err)
+	}
+}
+
 func TestParseSpawnCodeReviewCommitConsumesAllTrailingSHAs(t *testing.T) {
 	var stderr bytes.Buffer
 
