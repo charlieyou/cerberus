@@ -158,6 +158,30 @@ func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
 	}
 }
 
+func TestParseRejectsMissingRequiredFields(t *testing.T) {
+	for name, input := range map[string]string{
+		"missing summary":        `{"findings":[],"verdict":"PASS"}`,
+		"missing finding fields": `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad"}`,
+		"null priority":          `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse() error = nil, want required field error")
+			}
+		})
+	}
+}
+
+func TestParseAcceptsRequiredNullableFindingLocations(t *testing.T) {
+	got, err := Parse([]byte(`{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Priority == nil || *got.Findings[0].Priority != 1 {
+		t.Fatalf("Findings = %#v, want parsed required finding", got.Findings)
+	}
+}
+
 func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
 	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"ok\",\"overall_confidence\":0.8}"}`))
 	if err != nil {
