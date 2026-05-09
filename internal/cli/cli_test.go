@@ -92,6 +92,74 @@ func TestActiveRunRootFallsBackToSessionCache(t *testing.T) {
 	}
 }
 
+func TestStatusAcceptsSessionKey(t *testing.T) {
+	stateRoot := t.TempDir()
+	projectKey := "project-key"
+	runKey := "review-run"
+	verdict := state.VerdictPass
+	writeTestGateState(t, stateRoot, projectKey, runKey, state.StatusResolved, &verdict)
+	t.Setenv("CERBERUS_HOST", "generic")
+	t.Setenv("CERBERUS_STATE_ROOT", stateRoot)
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status", "--json", "--session-key", runKey}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("status exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"run_key": "`+runKey+`"`) || !strings.Contains(got, `"status": "resolved"`) {
+		t.Fatalf("status stdout = %q, want resolved run %q", got, runKey)
+	}
+}
+
+func TestWaitAcceptsLegacyPollingFlagsAndSessionKey(t *testing.T) {
+	stateRoot := t.TempDir()
+	projectKey := "project-key"
+	runKey := "review-run"
+	verdict := state.VerdictPass
+	writeTestGateState(t, stateRoot, projectKey, runKey, state.StatusResolved, &verdict)
+	t.Setenv("CERBERUS_HOST", "generic")
+	t.Setenv("CERBERUS_STATE_ROOT", stateRoot)
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"wait", "--json", "--finalize", "--timeout", "5", "--poll-interval", "1", "--session-key", runKey}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("wait exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"run_key": "`+runKey+`"`) || !strings.Contains(got, `"status": "resolved"`) {
+		t.Fatalf("wait stdout = %q, want resolved run %q", got, runKey)
+	}
+}
+
+func TestStatusSessionIDWinsOverSessionKey(t *testing.T) {
+	stateRoot := t.TempDir()
+	projectKey := "project-key"
+	realRun := "session-run"
+	decoyRun := "decoy-run"
+	verdict := state.VerdictPass
+	writeTestGateState(t, stateRoot, projectKey, realRun, state.StatusResolved, &verdict)
+	writeTestGateState(t, stateRoot, projectKey, decoyRun, state.StatusPending, nil)
+	t.Setenv("CERBERUS_HOST", "generic")
+	t.Setenv("CERBERUS_STATE_ROOT", stateRoot)
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status", "--json", "--session-id", realRun, "--session-key", decoyRun}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("status exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"run_key": "`+realRun+`"`) || strings.Contains(got, `"run_key": "`+decoyRun+`"`) {
+		t.Fatalf("status stdout = %q, want session-id run %q", got, realRun)
+	}
+}
+
 func TestSpawnCodeReviewMaxRoundsFlagParsing(t *testing.T) {
 	var stderr bytes.Buffer
 
@@ -109,5 +177,21 @@ func TestSpawnCodeReviewMaxRoundsFlagParsing(t *testing.T) {
 	}
 	if opts.maxRounds != 5 {
 		t.Fatalf("override maxRounds = %d, want 5", opts.maxRounds)
+	}
+}
+
+func writeTestGateState(t *testing.T, stateRoot, projectKey, runKey, status string, verdict *string) {
+	t.Helper()
+	runRoot := state.RunDir(stateRoot, projectKey, runKey)
+	if err := state.WriteGateState(state.GateStatePath(runRoot), &state.GateState{
+		RunKey:     runKey,
+		Host:       "generic",
+		ProjectKey: projectKey,
+		SessionID:  runKey,
+		Status:     status,
+		Verdict:    verdict,
+		StartedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("WriteGateState() error = %v", err)
 	}
 }

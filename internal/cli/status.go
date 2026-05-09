@@ -8,19 +8,26 @@ import (
 	"io"
 	"os"
 
+	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	var jsonOut bool
+	var sessionKey string
+	var sessionID string
+	var transcriptPath string
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.BoolVar(&jsonOut, "json", false, "print JSON")
+	fs.StringVar(&sessionKey, "session-key", "", "run key to inspect")
+	fs.StringVar(&sessionID, "session-id", "", "session id to inspect")
+	fs.StringVar(&transcriptPath, "transcript-path", "", "transcript path for compatibility")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	path, ok, err := gateStatePath()
+	path, ok, err := gateStatePathForEnv(envWithRunOverrides(sessionKey, sessionID, transcriptPath))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -50,6 +57,21 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "verdict: %s\n", *gate.Verdict)
 	}
 	return 0
+}
+
+func envWithRunOverrides(sessionKey, sessionID, transcriptPath string) *config.Env {
+	env := config.Resolve()
+	if sessionID != "" {
+		env.SessionID = sessionID
+		env.RunKey = sessionID
+	}
+	if sessionKey != "" && sessionID == "" {
+		env.RunKey = sessionKey
+	}
+	if transcriptPath != "" {
+		env.TranscriptPath = transcriptPath
+	}
+	return env
 }
 
 func printNoActiveStatus(stdout io.Writer, jsonOut bool) int {

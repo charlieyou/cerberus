@@ -48,6 +48,28 @@ func TestResolveFallsBackToClaudePluginRootForRoot(t *testing.T) {
 	}
 }
 
+func TestResolveFallsBackToReviewGateSessionKey(t *testing.T) {
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("REVIEW_GATE_SESSION_KEY", "legacy-run-key")
+
+	env := Resolve()
+
+	if env.RunKey != "legacy-run-key" {
+		t.Fatalf("RunKey = %q, want REVIEW_GATE_SESSION_KEY value", env.RunKey)
+	}
+}
+
+func TestResolvePrefersCerberusRunKey(t *testing.T) {
+	t.Setenv("CERBERUS_RUN_KEY", "cerberus-run-key")
+	t.Setenv("REVIEW_GATE_SESSION_KEY", "legacy-run-key")
+
+	env := Resolve()
+
+	if env.RunKey != "cerberus-run-key" {
+		t.Fatalf("RunKey = %q, want CERBERUS_RUN_KEY value", env.RunKey)
+	}
+}
+
 func TestResolveLeavesUnsetCerberusValuesEmpty(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "")
 	t.Setenv("CERBERUS_HOST", "")

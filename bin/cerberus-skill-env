@@ -36,6 +36,27 @@ __cerberus_skill_env_project_key() {
     fi
 }
 
+__cerberus_skill_env_ensure_built() {
+    local root="${1:-}"
+    [ -n "$root" ] || return 1
+    if ! command -v make >/dev/null 2>&1; then
+        echo "cerberus: make not found on PATH; install make and retry." >&2
+        return 127
+    fi
+    if ! make -q -C "$root" build >/dev/null 2>&1; then
+        if ! command -v go >/dev/null 2>&1; then
+            echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2
+            return 127
+        fi
+        echo "cerberus: building... (this happens once after clone or upgrade)" >&2
+        local start end
+        start="$(date +%s)"
+        make -C "$root" build >&2 || return $?
+        end="$(date +%s)"
+        echo "cerberus: build complete in $((end-start))s" >&2
+    fi
+}
+
 if [ -z "${CERBERUS_ROOT:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
         export CERBERUS_ROOT="$CLAUDE_PLUGIN_ROOT"
@@ -53,6 +74,7 @@ fi
 if ! __cerberus_skill_env_has_backend "$CERBERUS_ROOT"; then
     export CERBERUS_ROOT="$__cerberus_skill_env_script_root"
 fi
+__cerberus_skill_env_ensure_built "$CERBERUS_ROOT" || return $? 2>/dev/null || exit $?
 
 if [ -z "${CERBERUS_HOST:-}" ]; then
     if [ -n "${CLAUDE_SESSION_ID:-${CLAUDE_TRANSCRIPT_PATH:-${CLAUDE_PROJECT_DIR:-${CLAUDE_PLUGIN_ROOT:-}}}}" ]; then
@@ -128,5 +150,5 @@ if [ -z "${CERBERUS_RUN_KEY:-}" ] && [ -z "${REVIEW_GATE_SESSION_KEY:-}" ]; then
     fi
 fi
 
-unset -f __cerberus_skill_env_has_backend __cerberus_skill_env_project_root __cerberus_skill_env_project_key
+unset -f __cerberus_skill_env_has_backend __cerberus_skill_env_project_root __cerberus_skill_env_project_key __cerberus_skill_env_ensure_built
 unset __cerberus_skill_env_source __cerberus_skill_env_dir __cerberus_skill_env_bin_dir __cerberus_skill_env_script_root

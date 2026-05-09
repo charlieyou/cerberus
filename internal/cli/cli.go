@@ -87,6 +87,10 @@ func printUsage(w io.Writer) {
 
 func activeRunRoot() (string, bool, error) {
 	env := config.Resolve()
+	return activeRunRootForEnv(env)
+}
+
+func activeRunRootForEnv(env *config.Env) (string, bool, error) {
 	if env.Host == "" {
 		env.Host = "generic"
 	}
@@ -134,6 +138,15 @@ func activeRunRoot() (string, bool, error) {
 
 func gateStatePath() (string, bool, error) {
 	runRoot, ok, err := activeRunRoot()
+	return gateStatePathForRun(runRoot, ok, err)
+}
+
+func gateStatePathForEnv(env *config.Env) (string, bool, error) {
+	runRoot, ok, err := activeRunRootForEnv(env)
+	return gateStatePathForRun(runRoot, ok, err)
+}
+
+func gateStatePathForRun(runRoot string, ok bool, err error) (string, bool, error) {
 	if err != nil || !ok {
 		return "", ok, err
 	}

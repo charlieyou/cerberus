@@ -25,11 +25,15 @@ func Resolve() *Env {
 	if root == "" {
 		root = os.Getenv("CLAUDE_PLUGIN_ROOT")
 	}
+	runKey := os.Getenv("CERBERUS_RUN_KEY")
+	if runKey == "" {
+		runKey = os.Getenv("REVIEW_GATE_SESSION_KEY")
+	}
 
 	return &Env{
 		Root:           root,
 		Host:           os.Getenv("CERBERUS_HOST"),
-		RunKey:         os.Getenv("CERBERUS_RUN_KEY"),
+		RunKey:         runKey,
 		SessionID:      os.Getenv("CERBERUS_SESSION_ID"),
 		StateRoot:      os.Getenv("CERBERUS_STATE_ROOT"),
 		ProjectKey:     os.Getenv("CERBERUS_PROJECT_KEY"),

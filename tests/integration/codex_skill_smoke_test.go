@@ -204,6 +204,7 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 		"CERBERUS_ROOT="+pluginRoot,
 		"CERBERUS_HOST=codex",
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
+		"GOFLAGS=-modcacherw",
 		"SMOKE_PROMPT_FILE="+promptFile,
 		"SMOKE_EPIC_FILE="+epicFile,
 		"SMOKE_REVIEW_DIR="+reviewDir,
@@ -231,6 +232,7 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 
 func newCodexSmokePluginRoot(t *testing.T, repoRoot, binary string) string {
 	t.Helper()
+	_ = binary
 	root := t.TempDir()
 	if err := os.Symlink(filepath.Join(repoRoot, "prompts"), filepath.Join(root, "prompts")); err != nil {
 		t.Fatalf("Symlink(prompts) error = %v", err)
@@ -253,14 +255,6 @@ func newCodexSmokePluginRoot(t *testing.T, repoRoot, binary string) string {
 			t.Fatalf("ReadFile(%s) error = %v", rel, err)
 		}
 		writeIntegrationFile(t, root, rel, string(data))
-	}
-	target := filepath.Join(root, "bin", "cerberus")
-	data, err := os.ReadFile(binary)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", binary, err)
-	}
-	if err := os.WriteFile(target, data, 0o755); err != nil {
-		t.Fatalf("WriteFile(%s) error = %v", target, err)
 	}
 	return root
 }
