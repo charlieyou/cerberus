@@ -99,6 +99,20 @@ printf '{}' > "$RUN_DIR/gate-state.json"
 	}
 }
 
+func TestRunRejectsComposedGateStatePathsInBin(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "bin/review-gate-hook.sh", `#!/bin/sh
+
+STATE_FILE="$REVIEW_DIR/gate-state.json"
+jq '.status="resolved"' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+`)
+
+	err := run(root)
+	if err == nil || !strings.Contains(err.Error(), "direct gate-state.json write pattern") {
+		t.Fatalf("run() error = %v, want composed gate-state path failure in bin", err)
+	}
+}
+
 func TestRunAllowsOrchestratorAndTestImports(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "internal/orchestrator/round.go", `package orchestrator

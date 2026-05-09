@@ -138,12 +138,16 @@ func lintV2TextBoundaries(root string) []string {
 			}
 			if strings.HasPrefix(rel, "bin/") {
 				for _, token := range []string{
+					"/gate-state.json\"",
 					"> \"$RUN_DIR/gate-state.json\"",
 					"> \"$review_dir/gate-state.json\"",
 					"> \"$state_file\"",
+					"> \"$STATE_FILE\"",
 					"mv \"$tmp_state\" \"$RUN_DIR/gate-state.json\"",
 					"mv \"$tmp_state\" \"$review_dir/gate-state.json\"",
 					"mv \"$tmp_state\" \"$state_file\"",
+					"mv \"$tmp\" \"$STATE_FILE\"",
+					"mv \"$TEMP_FILE\" \"$STATE_FILE\"",
 				} {
 					if strings.Contains(string(data), token) {
 						failures = append(failures, fmt.Sprintf("%s: direct gate-state.json write pattern %q bypasses state I/O ownership", rel, token))
