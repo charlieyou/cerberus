@@ -80,20 +80,12 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 	if payload.TranscriptPath != "" || payload.Transcript != "" {
 		resolved.TranscriptPath = firstNonEmpty(payload.TranscriptPath, payload.Transcript)
 	}
-	if payload.SessionID != "" {
-		resolved.RunKey = payload.SessionID
-	} else if resolved.RunKey == "" {
-		resolved.RunKey = resolved.SessionID
-	}
 	if workspace := firstNonEmpty(payload.WorkspaceRoot, payload.CWD); workspace != "" {
 		projectKey, err := host.ProjectKeyFromDir(workspace)
 		if err != nil {
 			return nil, "", err
 		}
 		resolved.ProjectKey = projectKey
-	}
-	if resolved.RunKey == "" {
-		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or Codex session_id is required")
 	}
 
 	adapter, err := host.NewFromEnv(&resolved)
@@ -114,7 +106,30 @@ func resolveCodexHookRun(stdinPayload []byte, env *config.Env) (*config.Env, str
 		}
 		resolved.StateRoot = stateRoot
 	}
+	if shouldUseCodexPayloadRunKey(&resolved, payload.SessionID) {
+		resolved.RunKey = payload.SessionID
+	} else if resolved.RunKey == "" {
+		resolved.RunKey = resolved.SessionID
+	}
+	if resolved.RunKey == "" {
+		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or Codex session_id is required")
+	}
 	return &resolved, state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey), nil
+}
+
+func shouldUseCodexPayloadRunKey(env *config.Env, payloadSessionID string) bool {
+	if payloadSessionID == "" || env.RunKey == "" || env.RunKey == payloadSessionID {
+		return payloadSessionID != ""
+	}
+	if env.StateRoot == "" || env.ProjectKey == "" {
+		return true
+	}
+
+	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
+	if _, err := os.Stat(gatePath); err == nil {
+		return false
+	}
+	return true
 }
 
 func decodeCodexPayload(stdinPayload []byte) (codexPayload, error) {

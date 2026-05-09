@@ -185,3 +185,62 @@ func TestHandleClaudeSessionStartPayloadCWDOverridesProcessCWDAndStaleProjectKey
 		t.Fatalf("stale project key was used; stat err = %v", err)
 	}
 }
+
+func TestHandleCodexPromptSubmitPreservesActiveEnvRunKeyAcrossSessionRefresh(t *testing.T) {
+	env := &config.Env{
+		Host:       "generic",
+		StateRoot:  t.TempDir(),
+		ProjectKey: "project",
+		RunKey:     "session-a",
+	}
+	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
+	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusPending}); err != nil {
+		t.Fatalf("seed active gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/current.jsonl"}`)
+	if err := HandleCodexPromptSubmit(payload, env); err != nil {
+		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "session-a", "session.json"))
+	if err != nil {
+		t.Fatalf("read preserved session.json: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal session.json: %v", err)
+	}
+	if got["run_key"] != "session-a" || got["session_id"] != "session-b" || got["transcript_path"] != "/tmp/current.jsonl" {
+		t.Fatalf("session.json = %#v, want preserved run key with refreshed Codex session id", got)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("refreshed Codex session id was incorrectly used as run key; stat err = %v", err)
+	}
+}
+
+func TestHandleCodexSessionStartUsesPayloadSessionWhenEnvRunHasNoGate(t *testing.T) {
+	env := &config.Env{
+		Host:       "generic",
+		StateRoot:  t.TempDir(),
+		ProjectKey: "project",
+		RunKey:     "stale-session",
+	}
+	payload := []byte(`{"session_id":"current-session","transcript_path":"/tmp/current.jsonl"}`)
+
+	if err := HandleCodexSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleCodexSessionStart() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "current-session", "session.json"))
+	if err != nil {
+		t.Fatalf("read current session.json: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal session.json: %v", err)
+	}
+	if got["run_key"] != "current-session" || got["session_id"] != "current-session" {
+		t.Fatalf("session.json = %#v, want payload session id to replace stale env run", got)
+	}
+}
