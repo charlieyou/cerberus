@@ -2,18 +2,14 @@ package integration_test
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
-	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
@@ -28,7 +24,8 @@ func TestDebatePath(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, output)
 	}
-	setMockPath(t, repoRoot)
+	recordDir := t.TempDir()
+	installDebateMockCLI(t, repoRoot, recordDir)
 
 	env := &config.Env{
 		Host:       "generic",
@@ -37,14 +34,9 @@ func TestDebatePath(t *testing.T) {
 		ProjectKey: "integration-project",
 		RunKey:     "debate-path",
 	}
-	spawner := &fixtureDebateSpawner{
-		fixtureDir: filepath.Join(repoRoot, "tests", "fixtures", "debate"),
-		prompts:    map[string]string{},
-	}
 
 	verdict, err := (orchestrator.Orchestrator{
-		Env:     env,
-		Spawner: spawner,
+		Env: env,
 	}).RunDebate(context.Background(), []orchestrator.ReviewerSlot{
 		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
 		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
@@ -55,10 +47,14 @@ func TestDebatePath(t *testing.T) {
 	if verdict.Verdict != state.VerdictPass {
 		t.Fatalf("verdict = %q, want pass", verdict.Verdict)
 	}
-	for _, id := range []string{"codex#1", "codex#2"} {
-		prompt := spawner.prompts[id+":2"]
+	for _, name := range []string{"invocation-3.stdin", "invocation-4.stdin"} {
+		data, err := os.ReadFile(filepath.Join(recordDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		prompt := string(data)
 		if !strings.Contains(prompt, "{{{{PEER_BROADCAST}}}}") || !strings.Contains(prompt, "peer_1") || !strings.Contains(prompt, "peer_2") {
-			t.Fatalf("round-2 prompt for %s = %q, want peer broadcast substitution", id, prompt)
+			t.Fatalf("round-2 prompt %s = %q, want peer broadcast substitution", name, prompt)
 		}
 	}
 
@@ -78,39 +74,39 @@ func TestDebatePath(t *testing.T) {
 	}
 }
 
-type fixtureDebateSpawner struct {
-	fixtureDir string
-	mu         sync.Mutex
-	prompts    map[string]string
-}
-
-func (spawner *fixtureDebateSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
-	spawner.mu.Lock()
-	defer spawner.mu.Unlock()
-
-	key := fmt.Sprintf("%s:%d", request.ID, request.Round)
-	spawner.prompts[key] = string(request.User)
-	file := "round-1-codex1.json"
-	switch {
-	case request.Round == 1 && request.ID == "codex#2":
-		file = "round-1-codex2.json"
-	case request.Round == 2 && request.ID == "codex#1":
-		file = "round-2-codex1.json"
-	case request.Round == 2 && request.ID == "codex#2":
-		file = "round-2-codex2.json"
-	}
-	output, err := os.ReadFile(filepath.Join(spawner.fixtureDir, file))
-	if err != nil {
-		return reviewer.Response{}, err
-	}
-	var parsed reviewer.RawReviewerOutput
-	if err := json.Unmarshal(output, &parsed); err != nil {
-		return reviewer.Response{}, err
-	}
-	return reviewer.Response{ID: request.ID, Output: output, Parsed: &parsed}, nil
-}
-
-func setMockPath(t *testing.T, repoRoot string) {
+func installDebateMockCLI(t *testing.T, repoRoot, recordDir string) {
 	t.Helper()
-	t.Setenv("PATH", filepath.Join(repoRoot, "tests", "mocks")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+set -eu
+record_dir=${CERBERUS_DEBATE_MOCK_DIR:?}
+fixture_dir=${CERBERUS_DEBATE_FIXTURE_DIR:?}
+mkdir -p "$record_dir"
+while ! mkdir "$record_dir/lock" 2>/dev/null; do sleep 0.01; done
+trap 'rmdir "$record_dir/lock"' EXIT
+count_file="$record_dir/count"
+if [ -f "$count_file" ]; then
+  count=$(cat "$count_file")
+else
+  count=0
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+cat > "$record_dir/invocation-$count.stdin"
+printf '%s\n' "$@" > "$record_dir/invocation-$count.args"
+case "$count" in
+  1) cat "$fixture_dir/round-1-codex1.json" ;;
+  2) cat "$fixture_dir/round-1-codex2.json" ;;
+  3) cat "$fixture_dir/round-2-codex1.json" ;;
+  4) cat "$fixture_dir/round-2-codex2.json" ;;
+  *) echo "unexpected invocation $count" >&2; exit 1 ;;
+esac
+`
+	path := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(mock codex) error = %v", err)
+	}
+	t.Setenv("CERBERUS_DEBATE_MOCK_DIR", recordDir)
+	t.Setenv("CERBERUS_DEBATE_FIXTURE_DIR", filepath.Join(repoRoot, "tests", "fixtures", "debate"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
