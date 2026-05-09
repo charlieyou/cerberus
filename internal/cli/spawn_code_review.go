@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/roster"
@@ -57,7 +56,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 			RosterDefaults: resolved.defaults,
 			Mode:           opts.mode,
 			MaxRounds:      opts.explicitMaxRounds(),
-			Consensus:      aggregate.Mode(opts.consensus),
+			Consensus:      orchestrator.ConsensusMode(opts.consensus),
 			RosterID:       resolved.rosterID,
 		})
 		if err != nil {
@@ -82,7 +81,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		RosterDefaults: resolved.defaults,
 		Mode:           opts.mode,
 		MaxRounds:      opts.explicitMaxRounds(),
-		Consensus:      aggregate.Mode(opts.consensus),
+		Consensus:      orchestrator.ConsensusMode(opts.consensus),
 		RosterID:       resolved.rosterID,
 	}
 	started, err := orchestrator.StartSinglePass(config.Resolve(), params)

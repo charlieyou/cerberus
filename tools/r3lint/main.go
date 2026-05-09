@@ -1,0 +1,146 @@
+package main
+
+import (
+	"fmt"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const modulePath = "github.com/charlieyou/cerberus/"
+
+func main() {
+	if err := run("."); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(root string) error {
+	var failures []string
+	for _, path := range []string{
+		"bin/review-gate-debate.sh",
+	} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err == nil {
+			failures = append(failures, fmt.Sprintf("%s: legacy shell debate runtime must not ship in the v2 source tree", path))
+		} else if !os.IsNotExist(err) {
+			failures = append(failures, fmt.Sprintf("%s: %v", path, err))
+		}
+	}
+
+	for _, failure := range lintV2TextBoundaries(root) {
+		failures = append(failures, failure)
+	}
+
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", path, err))
+			return nil
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".beads":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", path, err))
+			return nil
+		}
+		for _, failure := range lintGoFile(filepath.ToSlash(rel), path) {
+			failures = append(failures, failure)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("R3 structural lint failed:\n%s", strings.Join(failures, "\n"))
+	}
+	fmt.Println("R3 structural lint: ok")
+	return nil
+}
+
+func lintGoFile(rel, path string) []string {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	if err != nil {
+		return []string{fmt.Sprintf("%s: %v", rel, err)}
+	}
+
+	var failures []string
+	for _, imported := range file.Imports {
+		importPath := strings.Trim(imported.Path.Value, `"`)
+		switch importPath {
+		case modulePath + "internal/aggregate", modulePath + "internal/anonymize":
+			if !allowedReviewCoreImport(rel) {
+				failures = append(failures, fmt.Sprintf("%s: %s may only be imported by internal/orchestrator or tests", rel, importPath))
+			}
+		}
+	}
+	return failures
+}
+
+func lintV2TextBoundaries(root string) []string {
+	var failures []string
+	for _, dir := range []string{"cmd", "internal", "hooks", "skills", "prompts", "config", "templates"} {
+		base := filepath.Join(root, dir)
+		if _, err := os.Stat(base); os.IsNotExist(err) {
+			continue
+		}
+		_ = filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", path, err))
+				return nil
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", path, err))
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if strings.HasSuffix(rel, "_test.go") {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", rel, err))
+				return nil
+			}
+			for _, token := range []string{
+				"debate_assign_peer_ids",
+				"_rdc_aggregate_and_promote",
+				"_rdc_write_gate_state_debate_block",
+			} {
+				if strings.Contains(string(data), token) {
+					failures = append(failures, fmt.Sprintf("%s: legacy debate symbol %q duplicates internal Go ownership", rel, token))
+				}
+			}
+			return nil
+		})
+	}
+	return failures
+}
+
+func allowedReviewCoreImport(rel string) bool {
+	if strings.HasPrefix(rel, "internal/orchestrator/") {
+		return true
+	}
+	if strings.HasSuffix(rel, "_test.go") {
+		return true
+	}
+	if strings.HasPrefix(rel, "tests/") {
+		return true
+	}
+	return false
+}

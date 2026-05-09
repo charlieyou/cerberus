@@ -17,7 +17,7 @@ test:
 
 lint:
 	go vet ./...
-	@echo "structural lint: to be implemented in Epic G"
+	go run ./tools/r3lint
 
 fixtures-refresh:
 	@echo "fixtures-refresh: to be implemented in Epic G"

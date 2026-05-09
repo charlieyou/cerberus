@@ -17,6 +17,8 @@ import (
 	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
+type ConsensusMode = aggregate.Mode
+
 // Params contains the single-pass review inputs.
 type Params struct {
 	Prompt         []byte
@@ -24,7 +26,7 @@ type Params struct {
 	RosterDefaults RosterDefaults
 	Mode           string
 	MaxRounds      int
-	Consensus      aggregate.Mode
+	Consensus      ConsensusMode
 	RosterID       string
 }
 
