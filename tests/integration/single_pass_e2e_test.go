@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 		},
 	}
 
-	if err := orchestrator.RunSinglePass(ctx, env, params, passReviewerStub{t: t, env: env}); err != nil {
+	if err := orchestrator.RunSinglePass(ctx, env, params, passReviewerStub{env: env}); err != nil {
 		t.Fatalf("RunSinglePass failed: %v", err)
 	}
 
@@ -51,19 +52,16 @@ func TestSinglePassReviewResolvesStopHookGate(t *testing.T) {
 }
 
 type passReviewerStub struct {
-	t   *testing.T
 	env *config.Env
 }
 
 func (stub passReviewerStub) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
-	stub.t.Helper()
-
 	gate, err := state.ReadGateState(ctx, stub.env)
 	if err != nil {
-		stub.t.Fatalf("ReadGateState during reviewer spawn failed: %v", err)
+		return reviewer.Response{}, fmt.Errorf("read gate state during reviewer spawn: %w", err)
 	}
 	if gate.Status != state.GateStatePending {
-		stub.t.Fatalf("gate status during reviewer spawn = %q, want %q", gate.Status, state.GateStatePending)
+		return reviewer.Response{}, fmt.Errorf("gate status during reviewer spawn = %q, want %q", gate.Status, state.GateStatePending)
 	}
 
 	output, err := json.Marshal(map[string]any{
