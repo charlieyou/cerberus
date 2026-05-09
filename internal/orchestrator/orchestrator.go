@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/aggregate"
@@ -33,6 +34,14 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	if env == nil {
 		env = config.Resolve()
 	}
+	slots, err := resolveSlots(params)
+	if err != nil {
+		return err
+	}
+	if err := preflightExplicitSlots(slots, params.Reviewers != nil); err != nil {
+		return err
+	}
+
 	resolvedEnv, runRoot, err := resolveRun(env)
 	if err != nil {
 		return err
@@ -44,11 +53,6 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 			Iteration: 1,
 			Round:     1,
 		}
-	}
-
-	slots, err := resolveSlots(params)
-	if err != nil {
-		return err
 	}
 
 	gatePath := state.GateStatePath(runRoot)
@@ -186,4 +190,31 @@ func resolveSlots(params Params) ([]ReviewerSlot, error) {
 		}
 	}
 	return slots, nil
+}
+
+func preflightExplicitSlots(slots []ReviewerSlot, explicit bool) error {
+	if !explicit {
+		return nil
+	}
+	for i, slot := range slots {
+		slotIndex := i + 1
+		if slot.ID == "" {
+			return fmt.Errorf("reviewer preflight slot %d: id is required", slotIndex)
+		}
+		if slot.Provider == "" {
+			return fmt.Errorf("reviewer preflight slot %d: provider is required", slotIndex)
+		}
+		if slot.Model == "" {
+			return fmt.Errorf("reviewer preflight slot %d: model is required", slotIndex)
+		}
+		switch slot.Provider {
+		case "claude", "codex", "gemini":
+		default:
+			return fmt.Errorf("reviewer preflight slot %d: unsupported provider %q", slotIndex, slot.Provider)
+		}
+		if _, err := exec.LookPath(slot.Provider); err != nil {
+			return fmt.Errorf("reviewer preflight slot %d: provider CLI %q is not available on PATH", slotIndex, slot.Provider)
+		}
+	}
+	return nil
 }

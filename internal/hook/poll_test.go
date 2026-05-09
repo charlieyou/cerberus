@@ -54,6 +54,33 @@ func TestPollGateStateReturnsErrorAfterMaxWait(t *testing.T) {
 	}
 }
 
+func TestPollGateStateRetriesTransientUnreadableState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gate-state.json")
+	if err := os.WriteFile(path, []byte(`{"status":`), 0o644); err != nil {
+		t.Fatalf("write malformed gate: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- PollGateState(path, 10*time.Millisecond, time.Second)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	verdict := state.VerdictPass
+	if err := state.WriteGateState(path, &state.GateState{Status: state.StatusResolved, Verdict: &verdict}); err != nil {
+		t.Fatalf("write resolved gate: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PollGateState() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PollGateState() did not return after malformed gate was replaced")
+	}
+}
+
 func TestHandleClaudeSessionStartInitializesRunFromStdinPayload(t *testing.T) {
 	env := &config.Env{
 		Host:       "generic",

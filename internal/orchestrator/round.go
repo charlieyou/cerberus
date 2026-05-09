@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -27,7 +28,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	defer cancel()
 
 	outputs := make([]reviewer.RawReviewerOutput, len(slots))
-	errs := make(chan error, len(slots))
+	errs := make(chan roundError, len(slots))
 	var wg sync.WaitGroup
 
 	for i, slot := range slots {
@@ -48,16 +49,16 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				Round:     1,
 			})
 			if err != nil {
+				errs <- roundError{err: err}
 				cancel()
-				errs <- err
 				return
 			}
 			parsed := response.Parsed
 			if parsed == nil {
 				parsed, err = reviewer.Parse(response.Output)
 				if err != nil {
+					errs <- roundError{err: err}
 					cancel()
-					errs <- err
 					return
 				}
 			}
@@ -67,10 +68,25 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 
 	wg.Wait()
 	close(errs)
-	for err := range errs {
-		if err != nil {
-			return nil, err
+	var canceled error
+	for result := range errs {
+		if result.err == nil {
+			continue
 		}
+		if errors.Is(result.err, context.Canceled) {
+			if canceled == nil {
+				canceled = result.err
+			}
+			continue
+		}
+		return nil, result.err
+	}
+	if canceled != nil {
+		return nil, canceled
 	}
 	return outputs, nil
+}
+
+type roundError struct {
+	err error
 }

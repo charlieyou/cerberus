@@ -42,7 +42,17 @@ func PollGateState(path string, pollInterval, maxWait time.Duration) error {
 				writeHookEvent(path, telemetry.EventHookAllowed, nil)
 				return nil
 			}
-			return err
+			if !blocked {
+				blocked = true
+				writeHookEvent(path, telemetry.EventHookBlocked, map[string]any{"error": err.Error()})
+			}
+			tick = ticker.C
+			select {
+			case <-deadline.C:
+				return fmt.Errorf("timed out waiting for readable gate state %s after %s: %w", path, maxWait, err)
+			case <-tick:
+			}
+			continue
 		}
 		if gate.Status == state.StatusResolved {
 			writeHookEvent(path, telemetry.EventHookAllowed, map[string]any{"status": gate.Status})

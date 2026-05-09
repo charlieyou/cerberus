@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 
 func TestRunSinglePassTransitionsPendingToResolvedPass(t *testing.T) {
 	env := testEnv(t)
+	setMockPath(t)
 	spawner := observingSpawner{t: t, env: env}
 
 	if err := RunSinglePass(context.Background(), env, testParams(), spawner); err != nil {
@@ -34,6 +36,7 @@ func TestRunSinglePassTransitionsPendingToResolvedPass(t *testing.T) {
 
 func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 	env := testEnv(t)
+	setMockPath(t)
 	wantErr := errors.New("reviewer failed")
 
 	err := RunSinglePass(context.Background(), env, testParams(), errorSpawner{err: wantErr})
@@ -52,6 +55,7 @@ func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 
 func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
+	setMockPath(t)
 	path := gatePath(env)
 	if err := state.WriteGateState(path, &state.GateState{
 		RunKey:           env.RunKey,
@@ -73,6 +77,33 @@ func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 
 	if !strings.Contains(stderr, "warning: gate-state.json is already pending") {
 		t.Fatalf("stderr = %q, want pending gate warning", stderr)
+	}
+}
+
+func TestRunSinglePassExplicitMissingCLIFailsBeforePendingGate(t *testing.T) {
+	env := testEnv(t)
+	t.Setenv("PATH", t.TempDir())
+
+	err := RunSinglePass(context.Background(), env, testParams(), passSpawner{})
+	if err == nil {
+		t.Fatal("RunSinglePass() error = nil, want missing CLI preflight error")
+	}
+	if !strings.Contains(err.Error(), `provider CLI "claude" is not available on PATH`) {
+		t.Fatalf("RunSinglePass() error = %q, want missing CLI preflight", err)
+	}
+	if _, err := state.ReadGateState(gatePath(env)); err == nil {
+		t.Fatal("gate-state.json exists after preflight failure, want no pending gate")
+	}
+}
+
+func TestRunRoundReturnsOriginalErrorBeforeCancellationNoise(t *testing.T) {
+	wantErr := errors.New("reviewer command failed")
+	_, err := runRound(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub"},
+		{ID: "claude#1", Provider: "claude", Model: "stub"},
+	}, noisyCancelSpawner{err: wantErr}, roundPrompts{})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runRound() error = %v, want original error %v", err, wantErr)
 	}
 }
 
@@ -100,6 +131,17 @@ type errorSpawner struct {
 }
 
 func (spawner errorSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	return reviewer.Response{}, spawner.err
+}
+
+type noisyCancelSpawner struct {
+	err error
+}
+
+func (spawner noisyCancelSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if request.ID == "codex#1" {
+		return reviewer.Response{}, context.Canceled
+	}
 	return reviewer.Response{}, spawner.err
 }
 
@@ -154,6 +196,15 @@ func readGate(t *testing.T, env *config.Env) *state.GateState {
 
 func gatePath(env *config.Env) string {
 	return state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
+}
+
+func setMockPath(t *testing.T) {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("..", "..", "tests", "mocks"))
+	if err != nil {
+		t.Fatalf("Abs(tests/mocks) error = %v", err)
+	}
+	t.Setenv("PATH", abs+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func captureStderr(t *testing.T, fn func()) string {
