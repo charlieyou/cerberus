@@ -18,21 +18,30 @@ import (
 
 // Params contains the single-pass review inputs.
 type Params struct {
-	Prompt    []byte
-	Reviewers []ReviewerSlot
+	Prompt         []byte
+	Reviewers      []ReviewerSlot
+	RosterDefaults RosterDefaults
+	Mode           string
+	MaxRounds      int
+	Consensus      aggregate.Mode
+	RosterID       string
+}
+
+// RosterDefaults carries panel-wide defaults from rosters.yaml.
+type RosterDefaults struct {
 	Mode      string
 	MaxRounds int
-	Consensus aggregate.Mode
-	RosterID  string
 }
 
 // ReviewerSlot names one resolved reviewer slot.
 type ReviewerSlot struct {
-	ID          string
-	Provider    string
-	Model       string
-	Strategy    string
-	PersonaPath string
+	ID            string
+	Provider      string
+	Model         string
+	Strategy      string
+	PersonaPath   string
+	Mode          string
+	InstanceIndex int
 }
 
 // RunSinglePass executes one review round and resolves the gate from reviewer output.
@@ -40,7 +49,7 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	if env == nil {
 		env = config.Resolve()
 	}
-	slots, err := resolveSlots(params)
+	slots, defaults, err := resolveSlots(params)
 	if err != nil {
 		return err
 	}
@@ -69,9 +78,15 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	startedAt := time.Now().UTC()
 	mode := params.Mode
 	if mode == "" {
+		mode = defaults.Mode
+	}
+	if mode == "" {
 		mode = "smart"
 	}
 	maxRounds := params.MaxRounds
+	if maxRounds <= 0 {
+		maxRounds = defaults.MaxRounds
+	}
 	if maxRounds <= 0 {
 		maxRounds = 1
 	}
@@ -113,9 +128,10 @@ func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner 
 	}
 
 	outputs, err := runRound(ctx, slots, spawner, roundPrompts{
-		User:    params.Prompt,
-		RunRoot: runRoot,
-		Root:    resolvedEnv.Root,
+		User:        params.Prompt,
+		RunRoot:     runRoot,
+		Root:        resolvedEnv.Root,
+		RuntimeMode: mode,
 	})
 	if err != nil {
 		return err
@@ -191,30 +207,43 @@ func resolveRun(env *config.Env) (*config.Env, string, error) {
 	return &resolved, runRoot, nil
 }
 
-func resolveSlots(params Params) ([]ReviewerSlot, error) {
+func resolveSlots(params Params) ([]ReviewerSlot, RosterDefaults, error) {
 	if len(params.Reviewers) > 0 {
-		return params.Reviewers, nil
+		return params.Reviewers, params.RosterDefaults, nil
 	}
 
 	file, err := roster.LoadRosters("")
 	if err != nil {
-		return nil, err
+		return nil, RosterDefaults{}, err
 	}
 	resolved, err := roster.Resolve(file, "", nil, "")
 	if err != nil {
-		return nil, err
+		return nil, RosterDefaults{}, err
 	}
-	slots := make([]ReviewerSlot, len(resolved))
-	for i, slot := range resolved {
-		slots[i] = ReviewerSlot{
-			ID:          slot.InstanceID,
-			Provider:    slot.Provider,
-			Model:       slot.Model,
-			Strategy:    slot.Strategy,
-			PersonaPath: slot.PersonaPath,
+	defaults := RosterDefaults{}
+	if file != nil {
+		defaults.Mode = file.Defaults.Mode
+		if file.Defaults.MaxRounds != nil {
+			defaults.MaxRounds = *file.Defaults.MaxRounds
 		}
 	}
-	return slots, nil
+	return reviewerSlotsFromRoster(resolved), defaults, nil
+}
+
+func reviewerSlotsFromRoster(slots []roster.RosterSlot) []ReviewerSlot {
+	reviewers := make([]ReviewerSlot, len(slots))
+	for i, slot := range slots {
+		reviewers[i] = ReviewerSlot{
+			ID:            slot.InstanceID,
+			Provider:      slot.Provider,
+			Model:         slot.Model,
+			Strategy:      slot.Strategy,
+			PersonaPath:   slot.PersonaPath,
+			Mode:          slot.Mode,
+			InstanceIndex: slot.InstanceIndex,
+		}
+	}
+	return reviewers
 }
 
 func preflightExplicitSlots(slots []ReviewerSlot, explicit bool) error {

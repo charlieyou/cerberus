@@ -7,6 +7,7 @@ type Request struct {
 	ID        string
 	Provider  string
 	Model     string
+	Mode      string
 	System    []byte
 	User      []byte
 	Prompt    []byte

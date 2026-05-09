@@ -72,6 +72,9 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 	if opts.roster != "default" || opts.replaceSlot != "claude#1" || opts.consensus != "all" {
 		t.Fatalf("parsed options = %#v, want roster/replace/consensus", opts)
 	}
+	if opts.mode != "" || opts.maxRounds != 0 {
+		t.Fatalf("implicit mode/maxRounds = %q/%d, want empty/0", opts.mode, opts.maxRounds)
+	}
 	if got, want := strings.Join(opts.reviewers, ","), "claude:opus,codex:gpt-5.3-codex:falsification-first"; got != want {
 		t.Fatalf("reviewers = %q, want %q", got, want)
 	}
@@ -79,6 +82,18 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 	_, err = parseSpawnCodeReviewFlags([]string{"--reviewer", "claude:model:strategy:extra"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--reviewer must use provider:model[:strategy]") {
 		t.Fatalf("long reviewer parse error = %v, want grammar error", err)
+	}
+}
+
+func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags([]string{"--mode", "smart", "--max-rounds", "1"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
+	}
+	if opts.mode != "smart" || opts.maxRounds != 1 {
+		t.Fatalf("mode/maxRounds = %q/%d, want smart/1", opts.mode, opts.maxRounds)
 	}
 }
 
@@ -100,28 +115,28 @@ func TestParseSpawnCodeReviewCommitConsumesAllTrailingSHAs(t *testing.T) {
 func TestResolveReviewersAppendsCLIReviewer(t *testing.T) {
 	setRosterTestCWD(t)
 
-	reviewers, rosterID, err := resolveReviewers(spawnCodeReviewOptions{
+	resolved, err := resolveReviewers(spawnCodeReviewOptions{
 		roster:    "default",
 		reviewers: []string{"claude:opus"},
 	})
 	if err != nil {
 		t.Fatalf("resolveReviewers() error = %v", err)
 	}
-	if rosterID != "default" {
-		t.Fatalf("rosterID = %q, want default", rosterID)
+	if resolved.rosterID != "default" {
+		t.Fatalf("rosterID = %q, want default", resolved.rosterID)
 	}
-	if got, want := len(reviewers), 2; got != want {
+	if got, want := len(resolved.reviewers), 2; got != want {
 		t.Fatalf("len(reviewers) = %d, want %d", got, want)
 	}
-	if reviewers[0].ID != "codex#1" || reviewers[1].ID != "claude#1" {
-		t.Fatalf("reviewer IDs = %#v, want codex#1 then claude#1", reviewers)
+	if resolved.reviewers[0].ID != "codex#1" || resolved.reviewers[1].ID != "claude#1" {
+		t.Fatalf("reviewer IDs = %#v, want codex#1 then claude#1", resolved.reviewers)
 	}
 }
 
 func TestResolveReviewersReplacesSlot(t *testing.T) {
 	setRosterTestCWD(t)
 
-	reviewers, _, err := resolveReviewers(spawnCodeReviewOptions{
+	resolved, err := resolveReviewers(spawnCodeReviewOptions{
 		roster:      "default",
 		reviewers:   []string{"claude:opus"},
 		replaceSlot: "codex#1",
@@ -129,11 +144,11 @@ func TestResolveReviewersReplacesSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveReviewers() error = %v", err)
 	}
-	if got, want := len(reviewers), 1; got != want {
+	if got, want := len(resolved.reviewers), 1; got != want {
 		t.Fatalf("len(reviewers) = %d, want %d", got, want)
 	}
-	if reviewers[0].ID != "claude#1" || reviewers[0].Provider != "claude" || reviewers[0].Model != "opus" {
-		t.Fatalf("reviewer = %#v, want claude#1 opus", reviewers[0])
+	if resolved.reviewers[0].ID != "claude#1" || resolved.reviewers[0].Provider != "claude" || resolved.reviewers[0].Model != "opus" {
+		t.Fatalf("reviewer = %#v, want claude#1 opus", resolved.reviewers[0])
 	}
 }
 
@@ -141,15 +156,63 @@ func TestResolveReviewersPreservesStrategy(t *testing.T) {
 	setRosterTestCWD(t)
 	writeStrategy(t, "falsification-first")
 
-	reviewers, _, err := resolveReviewers(spawnCodeReviewOptions{
+	resolved, err := resolveReviewers(spawnCodeReviewOptions{
 		roster:    "default",
 		reviewers: []string{"claude:opus:falsification-first"},
 	})
 	if err != nil {
 		t.Fatalf("resolveReviewers() error = %v", err)
 	}
-	if got, want := reviewers[1].Strategy, "falsification-first"; got != want {
+	if got, want := resolved.reviewers[1].Strategy, "falsification-first"; got != want {
 		t.Fatalf("reviewer strategy = %q, want %q", got, want)
+	}
+}
+
+func TestResolveReviewersCarriesRosterDefaultsAndSlotMode(t *testing.T) {
+	setSpawnTestEnv(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".cerberus"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
+	}
+	rosters := []byte(`version: 1
+defaults:
+  mode: max
+  max_rounds: 3
+rosters:
+  default:
+    reviewers:
+      - provider: codex
+        model: gpt
+        mode: fast
+`)
+	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "rosters.yaml"), rosters, 0o644); err != nil {
+		t.Fatalf("WriteFile(rosters.yaml) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%s) error = %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd %s: %v", oldwd, err)
+		}
+	})
+
+	resolved, err := resolveReviewers(spawnCodeReviewOptions{})
+	if err != nil {
+		t.Fatalf("resolveReviewers() error = %v", err)
+	}
+	if resolved.defaults.Mode != "max" || resolved.defaults.MaxRounds != 3 {
+		t.Fatalf("defaults = %#v, want mode max max_rounds 3", resolved.defaults)
+	}
+	if got, want := resolved.reviewers[0].Mode, "fast"; got != want {
+		t.Fatalf("reviewer mode = %q, want %q", got, want)
+	}
+	if got, want := resolved.reviewers[0].InstanceIndex, 1; got != want {
+		t.Fatalf("reviewer instance index = %d, want %d", got, want)
 	}
 }
 

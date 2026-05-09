@@ -41,7 +41,7 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	reviewers, rosterID, err := resolveReviewers(opts)
+	resolved, err := resolveReviewers(opts)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -53,12 +53,13 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 	}
 
 	params := orchestrator.Params{
-		Prompt:    prompt,
-		Reviewers: reviewers,
-		Mode:      opts.mode,
-		MaxRounds: opts.maxRounds,
-		Consensus: aggregate.Mode(opts.consensus),
-		RosterID:  rosterID,
+		Prompt:         prompt,
+		Reviewers:      resolved.reviewers,
+		RosterDefaults: resolved.defaults,
+		Mode:           opts.mode,
+		MaxRounds:      opts.maxRounds,
+		Consensus:      aggregate.Mode(opts.consensus),
+		RosterID:       resolved.rosterID,
 	}
 	if err := orchestrator.RunSinglePass(context.Background(), config.Resolve(), params, nil); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -69,19 +70,21 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 }
 
 type spawnCodeReviewOptions struct {
-	mode        string
-	maxRounds   int
-	consensus   string
-	agents      string
-	roster      string
-	reviewers   []string
-	replaceSlot string
-	excludes    []string
-	uncommitted bool
-	base        string
-	commits     []string
-	debate      bool
-	focus       string
+	mode         string
+	modeSet      bool
+	maxRounds    int
+	maxRoundsSet bool
+	consensus    string
+	agents       string
+	roster       string
+	reviewers    []string
+	replaceSlot  string
+	excludes     []string
+	uncommitted  bool
+	base         string
+	commits      []string
+	debate       bool
+	focus        string
 }
 
 func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReviewOptions, error) {
@@ -111,6 +114,20 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	opts.reviewers = reviewers
 	opts.excludes = excludes
 	opts.commits = commits
+	fs.Visit(func(flag *flag.Flag) {
+		switch flag.Name {
+		case "mode":
+			opts.modeSet = true
+		case "max-rounds":
+			opts.maxRoundsSet = true
+		}
+	})
+	if !opts.modeSet {
+		opts.mode = ""
+	}
+	if !opts.maxRoundsSet {
+		opts.maxRounds = 0
+	}
 	if len(opts.commits) > 0 {
 		opts.commits = append(opts.commits, fs.Args()...)
 	} else {
@@ -123,12 +140,14 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 }
 
 func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
-	switch opts.mode {
-	case "fast", "smart", "max":
-	default:
-		return fmt.Errorf("--mode must be fast, smart, or max")
+	if opts.mode != "" {
+		switch opts.mode {
+		case "fast", "smart", "max":
+		default:
+			return fmt.Errorf("--mode must be fast, smart, or max")
+		}
 	}
-	if opts.maxRounds <= 0 {
+	if opts.maxRounds != 0 && opts.maxRounds <= 0 {
 		return fmt.Errorf("--max-rounds must be positive")
 	}
 	switch opts.consensus {
@@ -159,14 +178,21 @@ func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
 	return nil
 }
 
-func resolveReviewers(opts spawnCodeReviewOptions) ([]orchestrator.ReviewerSlot, string, error) {
+type resolvedReviewerConfig struct {
+	reviewers []orchestrator.ReviewerSlot
+	rosterID  string
+	defaults  orchestrator.RosterDefaults
+}
+
+func resolveReviewers(opts spawnCodeReviewOptions) (resolvedReviewerConfig, error) {
 	if opts.agents != "" {
-		return reviewersFromAgents(opts.agents)
+		reviewers, rosterID, err := reviewersFromAgents(opts.agents)
+		return resolvedReviewerConfig{reviewers: reviewers, rosterID: rosterID}, err
 	}
 
 	file, err := roster.LoadRosters("")
 	if err != nil {
-		return nil, "", err
+		return resolvedReviewerConfig{}, err
 	}
 	slots, err := roster.ResolveWithOptions(file, roster.ResolveOptions{
 		RosterName:   opts.roster,
@@ -174,23 +200,44 @@ func resolveReviewers(opts spawnCodeReviewOptions) ([]orchestrator.ReviewerSlot,
 		ReplaceSlot:  opts.replaceSlot,
 	})
 	if err != nil {
-		return nil, "", err
-	}
-	reviewers := make([]orchestrator.ReviewerSlot, len(slots))
-	for i, slot := range slots {
-		reviewers[i] = orchestrator.ReviewerSlot{
-			ID:          slot.InstanceID,
-			Provider:    slot.Provider,
-			Model:       slot.Model,
-			Strategy:    slot.Strategy,
-			PersonaPath: slot.PersonaPath,
-		}
+		return resolvedReviewerConfig{}, err
 	}
 	rosterID := opts.roster
 	if rosterID == "" {
 		rosterID = "default"
 	}
-	return reviewers, rosterID, nil
+	return resolvedReviewerConfig{
+		reviewers: reviewersFromRosterSlots(slots),
+		rosterID:  rosterID,
+		defaults:  defaultsFromRosterFile(file),
+	}, nil
+}
+
+func reviewersFromRosterSlots(slots []roster.RosterSlot) []orchestrator.ReviewerSlot {
+	reviewers := make([]orchestrator.ReviewerSlot, len(slots))
+	for i, slot := range slots {
+		reviewers[i] = orchestrator.ReviewerSlot{
+			ID:            slot.InstanceID,
+			Provider:      slot.Provider,
+			Model:         slot.Model,
+			Strategy:      slot.Strategy,
+			PersonaPath:   slot.PersonaPath,
+			Mode:          slot.Mode,
+			InstanceIndex: slot.InstanceIndex,
+		}
+	}
+	return reviewers
+}
+
+func defaultsFromRosterFile(file *roster.RostersFile) orchestrator.RosterDefaults {
+	if file == nil {
+		return orchestrator.RosterDefaults{}
+	}
+	defaults := orchestrator.RosterDefaults{Mode: file.Defaults.Mode}
+	if file.Defaults.MaxRounds != nil {
+		defaults.MaxRounds = *file.Defaults.MaxRounds
+	}
+	return defaults
 }
 
 func reviewersFromAgents(agents string) ([]orchestrator.ReviewerSlot, string, error) {

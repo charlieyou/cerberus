@@ -80,6 +80,77 @@ func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	}
 }
 
+func TestRunSinglePassUsesRosterDefaultsWhenParamsOmitted(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := modeSpawner{want: "max"}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:         []byte("review this"),
+		RosterDefaults: RosterDefaults{Mode: "max", MaxRounds: 3},
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+
+	gate := readGate(t, env)
+	if gate.MaxRounds != 3 {
+		t.Fatalf("gate max_rounds = %d, want 3", gate.MaxRounds)
+	}
+	runTelemetry := readRunTelemetry(t, env)
+	if got, want := runTelemetry["mode"], "max"; got != want {
+		t.Fatalf("run telemetry mode = %v, want %q", got, want)
+	}
+}
+
+func TestRunSinglePassCLIParamsOverrideRosterDefaults(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := modeSpawner{want: "smart"}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:         []byte("review this"),
+		RosterDefaults: RosterDefaults{Mode: "max", MaxRounds: 3},
+		Mode:           "smart",
+		MaxRounds:      1,
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+
+	gate := readGate(t, env)
+	if gate.MaxRounds != 1 {
+		t.Fatalf("gate max_rounds = %d, want 1", gate.MaxRounds)
+	}
+	runTelemetry := readRunTelemetry(t, env)
+	if got, want := runTelemetry["mode"], "smart"; got != want {
+		t.Fatalf("run telemetry mode = %v, want %q", got, want)
+	}
+}
+
+func TestRunSinglePassSlotModeOverridesRuntimeModeForReviewer(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := modeSpawner{want: "fast"}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:         []byte("review this"),
+		RosterDefaults: RosterDefaults{Mode: "max"},
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", Mode: "fast"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+}
+
 func TestRunSinglePassExplicitMissingCLIFailsBeforePendingGate(t *testing.T) {
 	env := testEnv(t)
 	t.Setenv("PATH", t.TempDir())
@@ -228,6 +299,17 @@ func (spawner promptContentSpawner) Spawn(ctx context.Context, request reviewer.
 	return passResponse(request.ID)
 }
 
+type modeSpawner struct {
+	want string
+}
+
+func (spawner modeSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if request.Mode != spawner.want {
+		return reviewer.Response{}, fmt.Errorf("request mode = %q, want %q", request.Mode, spawner.want)
+	}
+	return passResponse(request.ID)
+}
+
 func passResponse(id string) (reviewer.Response, error) {
 	confidence := 0.9
 	round := 1
@@ -303,6 +385,20 @@ func readGate(t *testing.T, env *config.Env) *state.GateState {
 		t.Fatalf("ReadGateState() error = %v", err)
 	}
 	return gate
+}
+
+func readRunTelemetry(t *testing.T, env *config.Env) map[string]any {
+	t.Helper()
+	path := filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "run-telemetry.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(run telemetry) error = %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal(run telemetry) error = %v", err)
+	}
+	return got
 }
 
 func gatePath(env *config.Env) string {

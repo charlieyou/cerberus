@@ -13,10 +13,11 @@ import (
 )
 
 type roundPrompts struct {
-	System  []byte
-	User    []byte
-	Root    string
-	RunRoot string
+	System      []byte
+	User        []byte
+	Root        string
+	RunRoot     string
+	RuntimeMode string
 }
 
 func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]reviewer.RawReviewerOutput, error) {
@@ -50,6 +51,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				ID:        slot.ID,
 				Provider:  slot.Provider,
 				Model:     slot.Model,
+				Mode:      firstNonEmpty(slot.Mode, prompts.RuntimeMode),
 				System:    system,
 				User:      user,
 				Root:      prompts.Root,
@@ -106,6 +108,7 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 		Model:       slot.Model,
 		Strategy:    slot.Strategy,
 		PersonaPath: slot.PersonaPath,
+		Mode:        slot.Mode,
 	}, "code")
 	if err != nil {
 		return nil, nil, err
@@ -132,4 +135,13 @@ func appendPrompt(base, extra []byte) []byte {
 
 type roundError struct {
 	err error
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
