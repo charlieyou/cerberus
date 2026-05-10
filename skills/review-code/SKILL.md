@@ -79,7 +79,7 @@ Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode
 
 ```bash
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review $ARGUMENTS
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review $ARGUMENTS
 ```
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
@@ -88,23 +88,23 @@ Examples:
 ```bash
 # User: /review-code --mode fast
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --mode fast
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --mode fast
 
 # User: /review-code "focus on security"
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review focus on security
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review focus on security
 
 # User: /review-code --base main "check error handling"
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --base main check error handling
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --base main check error handling
 
 # User: /review-code --exclude 'dist/**' --exclude '**/*.snap'
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review --exclude 'dist/**' --exclude '**/*.snap'
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --exclude 'dist/**' --exclude '**/*.snap'
 
 # User: /review-code main..feature focus on error handling
 if ! make -q -C "$CERBERUS_ROOT" build >/dev/null 2>&1; then make -C "$CERBERUS_ROOT" build >&2 || exit $?; fi
-"$CERBERUS_ROOT/bin/cerberus" spawn-code-review main..feature focus on error handling
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review main..feature focus on error handling
 ```
 
 ## Review Criteria
@@ -135,5 +135,5 @@ When reviewers don't all agree:
 If needed after max iterations:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus resolve  # Resolve the current gate
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus resolve  # Resolve the current gate
 ```

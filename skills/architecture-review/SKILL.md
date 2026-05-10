@@ -50,22 +50,22 @@ The `cerberus generate` subcommand requires an output directory as the first arg
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/architecture-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/architecture-drafts" --type architecture-review $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /architecture-review --mode fast
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast
 
 # User: /architecture-review "focus on error handling"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --focus "focus on error handling"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --focus "focus on error handling"
 
 # User: /architecture-review --mode max "review the API layer"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode max --focus "review the API layer"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode max --focus "review the API layer"
 
 # User: /architecture-review --mode fast focus on error handling
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast focus on error handling
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type architecture-review --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
@@ -97,7 +97,7 @@ Synthesis rules:
 3. Deduplicate similar issues - merge overlapping findings into single well-documented issues
 4. Calibrate severity - adjust severity levels based on aggregate evidence
 
-Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus artifact-path
+Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus artifact-path
 
 Write the synthesized architecture review to that path.
 

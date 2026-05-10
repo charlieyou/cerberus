@@ -71,7 +71,7 @@ Reviewers will use their tools to read any referenced spec/plan files.
 Use the Bash tool to spawn the epic verification:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-epic-verify "$EPIC_FILE" $ARGUMENTS
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus spawn-epic-verify "$EPIC_FILE" $ARGUMENTS
 ```
 
 Pass all remaining `$ARGUMENTS` directly. The CLI accepts:
@@ -92,13 +92,13 @@ Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode
 Examples:
 ```bash
 # User: /verify-epic specs/auth-epic.md --mode fast
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-epic-verify specs/auth-epic.md --mode fast
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus spawn-epic-verify specs/auth-epic.md --mode fast
 
 # User: /verify-epic specs/feature.md --agents codex,gemini
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-epic-verify specs/feature.md --agents codex,gemini
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus spawn-epic-verify specs/feature.md --agents codex,gemini
 
 # User: /verify-epic specs/refactor.md --consensus all
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus spawn-epic-verify specs/refactor.md --consensus all
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus spawn-epic-verify specs/refactor.md --consensus all
 ```
 
 ## Verification Architecture
@@ -154,5 +154,5 @@ When reviewers find unmet criteria:
 If needed after max iterations:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus resolve  # Resolve the current gate
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus resolve  # Resolve the current gate
 ```

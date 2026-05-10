@@ -44,22 +44,22 @@ The `cerberus generate` subcommand requires an output directory as the first arg
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-mkdir -p "${REVIEW_DIR:-/tmp}/healthcheck-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/healthcheck-drafts" --type healthcheck $ARGUMENTS
+mkdir -p "${REVIEW_DIR:-/tmp}/healthcheck-drafts" && ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "${REVIEW_DIR:-/tmp}/healthcheck-drafts" --type healthcheck $ARGUMENTS
 ```
 
 Examples:
 ```bash
 # User: /healthcheck --mode fast
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast
 
 # User: /healthcheck "focus on the API layer"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --focus "focus on the API layer"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --focus "focus on the API layer"
 
 # User: /healthcheck --mode max "review error handling"
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode max --focus "review error handling"
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode max --focus "review error handling"
 
 # User: /healthcheck --mode fast focus on error handling
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast focus on error handling
+${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus generate "$OUTPUT_DIR" --type healthcheck --mode fast focus on error handling
 ```
 
 Defaults to `--mode smart` if not specified.
@@ -95,7 +95,7 @@ You may ignore findings that:
 - Complain about removed options/parameters that had no functional difference
 - Treat consolidation of redundant code paths as a problem
 
-Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus artifact-path
+Get the artifact path by running: ${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus artifact-path
 
 Write the synthesized healthcheck to that path.
 

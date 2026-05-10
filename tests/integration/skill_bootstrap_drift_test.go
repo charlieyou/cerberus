@@ -102,9 +102,41 @@ func TestStatusSkillRunBlockSupportsPluginRoot(t *testing.T) {
 		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
 
-	want := `"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" status --json`
+	canonicalPath := filepath.Join(repoRoot, "prompts", "host-neutral-bootstrap.md")
+	canonicalData, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", canonicalPath, err)
+	}
+	canonicalBody, err := ExtractResolverBody(string(canonicalData))
+	if err != nil {
+		t.Fatalf("ExtractResolverBody(%s) error = %v", canonicalPath, err)
+	}
+
+	want := strings.TrimSuffix(canonicalBody, "\n") + "\n" + resolverEndMarker + "\n" + `exec "$bin" status --json $ARGUMENTS`
 	if !strings.Contains(string(data), want) {
-		t.Fatalf("%s status run block must support PLUGIN_ROOT fallback; missing %q", path, want)
+		t.Fatalf("%s status run block must use the lazy-build resolver and status exec line", path)
+	}
+}
+
+func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
+	repoRoot := skillBootstrapDriftRepoRoot(t)
+	for _, skill := range survivingSkillBootstraps {
+		t.Run(skill, func(t *testing.T) {
+			path := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", path, err)
+			}
+			content := string(data)
+			for _, forbidden := range []string{
+				"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}",
+				"$CERBERUS_ROOT/bin/cerberus",
+			} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s must use PLUGIN_ROOT fallback instead of %q", path, forbidden)
+				}
+			}
+		})
 	}
 }
 
