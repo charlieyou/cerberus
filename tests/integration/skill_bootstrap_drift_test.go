@@ -120,6 +120,8 @@ func TestStatusSkillRunBlockSupportsPluginRoot(t *testing.T) {
 
 func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 	repoRoot := skillBootstrapDriftRepoRoot(t)
+	fallbackBin := "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus"
+	exportResolvedRoot := `CERBERUS_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"`
 	for _, skill := range survivingSkillBootstraps {
 		t.Run(skill, func(t *testing.T) {
 			path := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
@@ -135,6 +137,11 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 			} {
 				if strings.Contains(content, forbidden) {
 					t.Fatalf("%s must use PLUGIN_ROOT fallback instead of %q", path, forbidden)
+				}
+			}
+			for lineNumber, line := range strings.Split(content, "\n") {
+				if strings.Contains(line, fallbackBin) && !strings.Contains(line, exportResolvedRoot) {
+					t.Fatalf("%s:%d must export resolved root before invoking %s", path, lineNumber+1, fallbackBin)
 				}
 			}
 		})

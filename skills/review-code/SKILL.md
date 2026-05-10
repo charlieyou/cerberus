@@ -135,5 +135,5 @@ When reviewers don't all agree:
 If needed after max iterations:
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus resolve  # Resolve the current gate
+CERBERUS_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}" "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" resolve  # Resolve the current gate
 ```
