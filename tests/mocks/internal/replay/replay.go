@@ -46,6 +46,9 @@ func recordInvocation(provider string, prompt []byte) {
 		args += "\n"
 	}
 	_ = os.WriteFile(filepath.Join(recordDir, provider+".args"), []byte(args), 0o644)
+	sum := sha256.Sum256(prompt)
+	stats := fmt.Sprintf("{\"prompt_sha256\":\"%s\"}\n", hex.EncodeToString(sum[:]))
+	_ = os.WriteFile(filepath.Join(recordDir, provider+".stats.json"), []byte(stats), 0o644)
 }
 
 func replayFixture(provider, fixtureDir string, prompt []byte) {
