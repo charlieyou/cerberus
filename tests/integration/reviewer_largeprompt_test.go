@@ -51,10 +51,7 @@ func TestReviewerLargePromptStdinRoundTrip(t *testing.T) {
 				t.Fatalf("%s Spawn() error = %v", provider, err)
 			}
 
-			parsed, err := reviewer.Parse(response.Output)
-			if err != nil {
-				t.Fatalf("%s canonical reviewer output JSON parse error = %v; output = %s", provider, err, response.Output)
-			}
+			parsed := response.Parsed
 			if parsed.Verdict != "PASS" {
 				t.Fatalf("%s parsed verdict = %q, want PASS", provider, parsed.Verdict)
 			}
