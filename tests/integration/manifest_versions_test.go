@@ -40,8 +40,9 @@ func TestClaudeMarketplacePinsV2AndV1Rollback(t *testing.T) {
 	}
 	var marketplace struct {
 		Plugins []struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
+			Name    string          `json:"name"`
+			Version string          `json:"version"`
+			Source  json.RawMessage `json:"source"`
 		} `json:"plugins"`
 	}
 	if err := json.Unmarshal(data, &marketplace); err != nil {
@@ -58,6 +59,7 @@ func TestClaudeMarketplacePinsV2AndV1Rollback(t *testing.T) {
 		}
 		if strings.HasPrefix(plugin.Version, "1.54.") {
 			hasV1Rollback = true
+			assertGitRollbackSource(t, path, plugin.Source)
 		}
 	}
 	if !hasV2 {
@@ -65,6 +67,28 @@ func TestClaudeMarketplacePinsV2AndV1Rollback(t *testing.T) {
 	}
 	if !hasV1Rollback {
 		t.Fatalf("%s missing cerberus marketplace rollback entry for version 1.54.x", path)
+	}
+}
+
+func assertGitRollbackSource(t *testing.T, path string, sourceData json.RawMessage) {
+	t.Helper()
+
+	var source struct {
+		Source string `json:"source"`
+		URL    string `json:"url"`
+		Ref    string `json:"ref"`
+	}
+	if err := json.Unmarshal(sourceData, &source); err != nil {
+		t.Fatalf("%s v1 rollback source must be a git source object, got %s: %v", path, sourceData, err)
+	}
+	if source.Source != "url" {
+		t.Fatalf("%s v1 rollback source.source = %q, want url", path, source.Source)
+	}
+	if source.URL != "https://github.com/charlieyou/cerberus.git" {
+		t.Fatalf("%s v1 rollback source.url = %q, want https://github.com/charlieyou/cerberus.git", path, source.URL)
+	}
+	if !strings.HasPrefix(source.Ref, "v1.54.") {
+		t.Fatalf("%s v1 rollback source.ref = %q, want v1.54.x tag", path, source.Ref)
 	}
 }
 
