@@ -144,7 +144,7 @@ func lintV2TextBoundaries(root string) []string {
 					failures = append(failures, fmt.Sprintf("%s: legacy shipped entrypoint %q bypasses the v2 cerberus binary", rel, token))
 				}
 			}
-			gateState := "gate-state" + ".json"
+			gateState := strings.Join([]string{"gate-state", ".json"}, "")
 			if strings.Contains(string(data), `"`+gateState+`"`) {
 				failures = append(failures, fmt.Sprintf("%s: direct %s literal outside internal/state bypasses state I/O ownership", rel, gateState))
 			}

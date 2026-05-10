@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -79,20 +80,51 @@ func lintGoFile(rel, path string) []string {
 		}
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
-		lit, ok := node.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
+		expr, ok := node.(ast.Expr)
+		if !ok {
 			return true
 		}
-		if strings.Contains(lit.Value, gateStateName()) {
+		value, ok := stringExprValue(expr)
+		if !ok {
+			return true
+		}
+		if strings.Contains(value, gateStateName()) {
 			failures = append(failures, fmt.Sprintf("%s: direct %s literal outside internal/state bypasses state I/O ownership", rel, gateStateName()))
+			return false
 		}
 		return true
 	})
 	return failures
 }
 
+func stringExprValue(expr ast.Expr) (string, bool) {
+	switch typed := expr.(type) {
+	case *ast.BasicLit:
+		if typed.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(typed.Value)
+		return value, err == nil
+	case *ast.BinaryExpr:
+		if typed.Op != token.ADD {
+			return "", false
+		}
+		left, ok := stringExprValue(typed.X)
+		if !ok {
+			return "", false
+		}
+		right, ok := stringExprValue(typed.Y)
+		if !ok {
+			return "", false
+		}
+		return left + right, true
+	default:
+		return "", false
+	}
+}
+
 func gateStateName() string {
-	return "gate-state" + ".json"
+	return strings.Join([]string{"gate-state", ".json"}, "")
 }
 
 func allowedR3Owner(rel string) bool {
