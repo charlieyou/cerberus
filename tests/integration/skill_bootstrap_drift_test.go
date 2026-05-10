@@ -131,6 +131,7 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 			for _, forbidden := range []string{
 				"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}",
 				"$CERBERUS_ROOT/bin/cerberus",
+				`make -C "$CERBERUS_ROOT"`,
 			} {
 				if strings.Contains(content, forbidden) {
 					t.Fatalf("%s must use PLUGIN_ROOT fallback instead of %q", path, forbidden)
