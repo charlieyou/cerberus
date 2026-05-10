@@ -1,8 +1,0 @@
-{
-  "verdict": "FAIL",
-  "overall_confidence": 0.8,
-  "findings": [
-    {"title": "Claude misuse in API call", "body": "The function calls Claude.complete() but should use the abstract client. See line 42."},
-    {"title": "GPT-4 fallback missing", "body": "When Anthropic/Claude returns 5xx, fallback to OpenAI is incomplete.\nThe retry logic does not preserve idempotency keys."}
-  ]
-}

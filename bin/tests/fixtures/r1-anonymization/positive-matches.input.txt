@@ -1,6 +1,0 @@
-GPT-4 said it would work.
-We tried gpt-4o on the same input.
-Claude-3.5 disagreed politely.
-The Anthropic/Claude pipeline returned 5xx.
-Gemini 1.5 Pro had a different take.
-OpenAI's response was concise.
