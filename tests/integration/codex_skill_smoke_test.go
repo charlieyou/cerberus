@@ -2,8 +2,6 @@ package integration_test
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -292,11 +290,6 @@ func bashBlocks(t *testing.T, path string) []string {
 		t.Fatalf("%s has no bash bootstrap block", path)
 	}
 	return blocks
-}
-
-func codexSmokeProjectKey(projectRoot string) string {
-	sum := sha256.Sum256([]byte(projectRoot))
-	return hex.EncodeToString(sum[:])[:16]
 }
 
 func codexSmokeGitRoot(t *testing.T, dir string) string {

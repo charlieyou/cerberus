@@ -46,6 +46,9 @@ func TestSkillBootstrapDriftCanonicalParses(t *testing.T) {
 	if !strings.Contains(body, `bin="$root/bin/cerberus"`) {
 		t.Fatalf("canonical resolver body must reference bin/cerberus")
 	}
+	if !strings.Contains(body, `export CERBERUS_ROOT="$root"`) {
+		t.Fatalf("canonical resolver body must export the resolved root for the child process")
+	}
 	if !strings.Contains(string(data), `exec "$bin" "$@"`) {
 		t.Fatalf("canonical bootstrap must document the skill exec form")
 	}
