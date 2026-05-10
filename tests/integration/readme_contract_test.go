@@ -17,7 +17,9 @@ func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
 
 	for _, forbidden := range []string{
 		"bin/cerberus clear-gate",
+		"bin/cerberus generate --type",
 		"persona_path:",
+		"`persona_path`",
 		"  consensus:",
 		"    defaults:",
 	} {
@@ -28,9 +30,12 @@ func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
 
 	for _, required := range []string{
 		`bin/cerberus resolve --reason "manual clear"`,
+		"bin/cerberus generate /tmp/create-plan-drafts",
+		"  --type create-plan",
 		"  max_rounds: 3",
 		"        persona: personas/security.md",
 		"`consensus` is a CLI flag, not a roster YAML key",
+		"Fix `persona` in the roster",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README.md missing implemented CLI or roster schema %q", required)

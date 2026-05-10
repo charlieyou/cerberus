@@ -158,7 +158,9 @@ ${CERBERUS_ROOT}/bin/cerberus spawn-code-review --mode smart
 ${CERBERUS_ROOT}/bin/cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
 ${CERBERUS_ROOT}/bin/cerberus status --json
 ${CERBERUS_ROOT}/bin/cerberus resolve --reason "manual clear"
-${CERBERUS_ROOT}/bin/cerberus generate --type create-plan --prompt-file prompt.md
+${CERBERUS_ROOT}/bin/cerberus generate /tmp/create-plan-drafts \
+  --type create-plan \
+  --prompt-file prompt.md
 ```
 
 ## Review Flags
@@ -466,7 +468,7 @@ Signature:
 cerberus: roster preflight failed: persona file not found
 ```
 
-Fix `persona_path` in the roster or create the referenced file.
+Fix `persona` in the roster or create the referenced file.
 
 ## Rollback To v1.54.x
 
