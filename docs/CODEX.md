@@ -21,6 +21,9 @@ are documented in the main [README](../README.md):
 2. Enable the Codex plugin from `.codex-plugin/plugin.json`.
 3. Start a new Codex session so Codex reloads the plugin manifest, skills, and
    hook manifest.
+4. Open `/hooks`, review the Cerberus `SessionStart`, `UserPromptSubmit`, and
+   `Stop` hooks, and trust them. Codex discovers plugin hooks before trusting
+   them, but untrusted or modified hooks stay inactive until reviewed.
 
 The Codex plugin manifest points at `skills/` for the `/cerberus:*` skills and
 at `hooks/codex-hooks.json` for lifecycle hooks. The hook entries lazy-build
@@ -38,7 +41,10 @@ plugin_hooks = true
 
 Set `CERBERUS_ROOT` only when you are running Cerberus from a local checkout or
 testing an unpacked plugin. In a normal plugin install, `${PLUGIN_ROOT}` points
-the hook manifest at the installed Cerberus plugin root.
+the hook manifest at the installed Cerberus plugin root. Codex hook trust pins
+the hook command text, not the current value of environment variables, so a
+`CERBERUS_ROOT` override can redirect a previously trusted hook to a different
+checkout; unset it for normal plugin installs.
 
 ## Codex Lifecycle Hooks
 
@@ -65,6 +71,10 @@ cerberus hook codex-stop
 
 This stdin-only contract is D37. Do not wrap these hooks with scripts that
 forward `"$@"`; Codex event data must be passed through stdin.
+
+Codex records a trusted hash for each reviewed hook command. If the Cerberus
+hook command changes after an upgrade, Codex marks that hook as modified and it
+will not run again until you review and trust the new hash in `/hooks`.
 
 ## State On Codex
 
@@ -251,8 +261,9 @@ the skill or restart the Codex session.
 `codex-stop` allows a stop even though you expected a gate
 
 Check `/cerberus:status`. If there is no active gate, verify that
-`codex-session-start` and `codex-prompt-submit` have run in this Codex session
-and that state exists under `~/.codex/projects/<key>/cerberus/`.
+`codex-session-start` and `codex-prompt-submit` have run in this Codex session,
+that the Cerberus hooks are trusted in `/hooks`, and that state exists under
+`~/.codex/projects/<key>/cerberus/`.
 
 Custom roster fails but the default roster works
 
