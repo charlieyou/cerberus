@@ -8,6 +8,7 @@ package integration_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -197,7 +198,7 @@ func firstLine(path string) (string, error) {
 
 	buf := make([]byte, 256)
 	n, err := file.Read(buf)
-	if err != nil && n == 0 {
+	if err != nil && err != io.EOF {
 		return "", err
 	}
 	line := string(buf[:n])
