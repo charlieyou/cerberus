@@ -39,12 +39,61 @@ func TestResolveReadsCerberusEnv(t *testing.T) {
 
 func TestResolveFallsBackToClaudePluginRootForRoot(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("PLUGIN_ROOT", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "/claude/plugin")
 
 	env := Resolve()
 
 	if env.Root != "/claude/plugin" {
 		t.Fatalf("Root = %q, want CLAUDE_PLUGIN_ROOT value", env.Root)
+	}
+	if env.Host != "claude" {
+		t.Fatalf("Host = %q, want inferred claude host", env.Host)
+	}
+}
+
+func TestResolveFallsBackToPluginRootAndInfersCodexHost(t *testing.T) {
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "/codex/plugin")
+
+	env := Resolve()
+
+	if env.Root != "/codex/plugin" {
+		t.Fatalf("Root = %q, want PLUGIN_ROOT value", env.Root)
+	}
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want inferred codex host", env.Host)
+	}
+}
+
+func TestResolveWithBothPluginRootsInfersCodexHostAndUsesClaudeRootFallback(t *testing.T) {
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/claude/plugin")
+	t.Setenv("PLUGIN_ROOT", "/codex/plugin")
+
+	env := Resolve()
+
+	if env.Root != "/claude/plugin" {
+		t.Fatalf("Root = %q, want CLAUDE_PLUGIN_ROOT value", env.Root)
+	}
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want inferred codex host", env.Host)
+	}
+}
+
+func TestResolvePrefersExplicitHostOverPluginRootInference(t *testing.T) {
+	t.Setenv("CERBERUS_HOST", "generic")
+	t.Setenv("PLUGIN_ROOT", "/codex/plugin")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+
+	env := Resolve()
+
+	if env.Host != "generic" {
+		t.Fatalf("Host = %q, want explicit CERBERUS_HOST", env.Host)
 	}
 }
 
@@ -79,6 +128,7 @@ func TestResolveLeavesUnsetCerberusValuesEmpty(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", "")
 	t.Setenv("CERBERUS_TRANSCRIPT_PATH", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
 
 	env := Resolve()
 
@@ -90,6 +140,7 @@ func TestResolveLeavesUnsetCerberusValuesEmpty(t *testing.T) {
 func TestResolveDoesNotReadReviewGateRootAlias(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
 	t.Setenv("REVIEW_GATE_ROOT", "/review/gate")
 
 	env := Resolve()

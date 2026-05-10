@@ -110,8 +110,10 @@ include advisory locking around gate state.
 
 ## Environment Contract
 
-v2 reads the `CERBERUS_*` contract below. `CLAUDE_PLUGIN_ROOT` is honored only
-as a fallback for `CERBERUS_ROOT`.
+v2 reads the `CERBERUS_*` contract below. `CLAUDE_PLUGIN_ROOT` and `PLUGIN_ROOT`
+are honored as plugin-root fallbacks for `CERBERUS_ROOT`. When `CERBERUS_HOST` is
+unset, Cerberus infers `codex` from `PLUGIN_ROOT`, `claude` from
+`CLAUDE_PLUGIN_ROOT`, and otherwise falls back to `generic`.
 
 | Variable | Meaning |
 | --- | --- |

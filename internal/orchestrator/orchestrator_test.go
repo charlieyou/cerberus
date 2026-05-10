@@ -119,6 +119,42 @@ func TestStartSinglePassFallsBackToCodexSessionCache(t *testing.T) {
 	}
 }
 
+func TestStartSinglePassCodexWithoutSessionCacheExplainsHookSetup(t *testing.T) {
+	env := testEnv(t)
+	env.Host = "codex"
+	env.RunKey = ""
+	env.SessionID = ""
+
+	_, err := StartSinglePass(env, testParams())
+
+	if err == nil {
+		t.Fatal("StartSinglePass() error = nil, want missing Codex hook setup error")
+	}
+	for _, want := range []string{"Codex Cerberus hooks have not initialized", "/hooks", "CERBERUS_RUN_KEY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("StartSinglePass() error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestStartSinglePassClaudeWithoutSessionCacheExplainsHookSetup(t *testing.T) {
+	env := testEnv(t)
+	env.Host = "claude"
+	env.RunKey = ""
+	env.SessionID = ""
+
+	_, err := StartSinglePass(env, testParams())
+
+	if err == nil {
+		t.Fatal("StartSinglePass() error = nil, want missing Claude hook setup error")
+	}
+	for _, want := range []string{"Claude Cerberus hooks have not initialized", "restart Claude Code", "CERBERUS_RUN_KEY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("StartSinglePass() error = %q, want %q", err, want)
+		}
+	}
+}
+
 func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

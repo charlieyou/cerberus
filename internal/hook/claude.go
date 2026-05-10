@@ -48,6 +48,16 @@ func HandleClaudeSessionStart(stdinPayload []byte, env *config.Env) error {
 	if err := os.WriteFile(filepath.Join(runRoot, "session.json"), data, 0o644); err != nil {
 		return fmt.Errorf("write claude session state: %w", err)
 	}
+	if err := state.WriteSessionCache(state.SessionCachePath(resolved.StateRoot, resolved.ProjectKey), &state.SessionCache{
+		Host:           resolved.Host,
+		ProjectKey:     resolved.ProjectKey,
+		SessionID:      resolved.SessionID,
+		RunKey:         resolved.RunKey,
+		TranscriptPath: resolved.TranscriptPath,
+		LastSeen:       time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("write claude session cache: %w", err)
+	}
 	return nil
 }
 

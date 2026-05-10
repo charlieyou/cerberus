@@ -94,6 +94,11 @@ pointer. Review skills use that hook-maintained state to connect
 run in the current Codex session, start a new session after enabling the plugin
 instead of manually inventing a run key.
 
+Codex plugin installs normally provide `PLUGIN_ROOT`; Cerberus uses that to
+infer `CERBERUS_HOST=codex` when the host variable is not explicitly set. That
+keeps review skills, status commands, and the Stop hook on the same Codex state
+tree by default.
+
 ## Running Review On Codex
 
 After the plugin is enabled and a new Codex session is running, invoke the

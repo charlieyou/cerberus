@@ -374,6 +374,12 @@ func resolveRun(env *config.Env) (*config.Env, string, error) {
 		}
 	}
 	if resolved.RunKey == "" {
+		switch resolved.Host {
+		case "codex":
+			return nil, "", fmt.Errorf("Codex Cerberus hooks have not initialized this session; open /hooks, trust the Cerberus hooks, then start a new Codex session, or set CERBERUS_RUN_KEY for automation")
+		case "claude":
+			return nil, "", fmt.Errorf("Claude Cerberus hooks have not initialized this session; restart Claude Code after installing the plugin, or set CERBERUS_RUN_KEY for automation")
+		}
 		return nil, "", fmt.Errorf("CERBERUS_RUN_KEY or CERBERUS_SESSION_ID is required")
 	}
 	runRoot := state.RunDir(resolved.StateRoot, resolved.ProjectKey, resolved.RunKey)

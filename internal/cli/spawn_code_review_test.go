@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/hook"
+	"github.com/charlieyou/cerberus/internal/host"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/state"
 	"github.com/charlieyou/cerberus/internal/telemetry"
@@ -417,6 +418,203 @@ func TestSpawnCodeReviewWarnsGenericHostNeedsManualWait(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 		}
+	}
+	waitForSpawnGateStatus(t, state.StatusResolved)
+}
+
+func TestSpawnCodeReviewInfersCodexHostFromPluginRoot(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs(repo root) error = %v", err)
+	}
+	home := t.TempDir()
+	projectKey := "project"
+	runKey := "codex-run"
+	stateRoot := filepath.Join(home, ".codex", "projects", projectKey, "cerberus")
+	if err := state.WriteSessionCache(state.SessionCachePath(stateRoot, projectKey), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     projectKey,
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         runKey,
+		TranscriptPath: "/tmp/codex-session.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	t.Setenv("PATH", spawnTestMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CERBERUS_STATE_ROOT", "")
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", repoRoot)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+	startRuntimeInlineForTest(t, nil)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "CERBERUS_HOST=generic") {
+		t.Fatalf("stderr = %q, want codex inference without generic warning", stderr.String())
+	}
+	gate := waitForGateAtPath(t, state.GateStatePath(state.RunDir(stateRoot, projectKey, runKey)), state.StatusResolved)
+	if gate.Host != "codex" || gate.RunKey != runKey || gate.ProjectKey != projectKey {
+		t.Fatalf("gate = %#v, want codex host and cached run identity", gate)
+	}
+}
+
+func TestSpawnCodeReviewInfersCodexHostAndProjectKeyFromCurrentRepo(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs(repo root) error = %v", err)
+	}
+	home := t.TempDir()
+	projectKey, err := host.ProjectKeyFromDir(repoRoot)
+	if err != nil {
+		t.Fatalf("ProjectKeyFromDir(repo root) error = %v", err)
+	}
+	runKey := "codex-derived-project-run"
+	stateRoot := filepath.Join(home, ".codex", "projects", projectKey, "cerberus")
+	if err := state.WriteSessionCache(state.SessionCachePath(stateRoot, projectKey), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     projectKey,
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         runKey,
+		TranscriptPath: "/tmp/codex-session.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	t.Setenv("PATH", spawnTestMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CERBERUS_STATE_ROOT", "")
+	t.Setenv("CERBERUS_PROJECT_KEY", "")
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", repoRoot)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+	startRuntimeInlineForTest(t, nil)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "CERBERUS_HOST=generic") {
+		t.Fatalf("stderr = %q, want codex inference without generic warning", stderr.String())
+	}
+	gate := waitForGateAtPath(t, state.GateStatePath(state.RunDir(stateRoot, projectKey, runKey)), state.StatusResolved)
+	if gate.Host != "codex" || gate.RunKey != runKey || gate.ProjectKey != projectKey {
+		t.Fatalf("gate = %#v, want codex host and repo-derived project key", gate)
+	}
+}
+
+func TestSpawnCodeReviewInfersClaudeHostFromClaudePluginRoot(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs(repo root) error = %v", err)
+	}
+	home := t.TempDir()
+	projectKey := "project"
+	runKey := "claude-run"
+	stateRoot := filepath.Join(home, ".claude", "projects", projectKey, "cerberus")
+	if err := state.WriteSessionCache(state.SessionCachePath(stateRoot, projectKey), &state.SessionCache{
+		Host:           "claude",
+		ProjectKey:     projectKey,
+		SessionID:      "claude-session",
+		RunKey:         runKey,
+		TranscriptPath: "/tmp/claude-session.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	t.Setenv("PATH", spawnTestMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CERBERUS_STATE_ROOT", "")
+	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", repoRoot)
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+	startRuntimeInlineForTest(t, nil)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "CERBERUS_HOST=generic") {
+		t.Fatalf("stderr = %q, want claude inference without generic warning", stderr.String())
+	}
+	gate := waitForGateAtPath(t, state.GateStatePath(state.RunDir(stateRoot, projectKey, runKey)), state.StatusResolved)
+	if gate.Host != "claude" || gate.RunKey != runKey || gate.ProjectKey != projectKey {
+		t.Fatalf("gate = %#v, want claude host and cached run identity", gate)
+	}
+}
+
+func TestSpawnCodeReviewInfersClaudeHostAndProjectKeyFromCurrentRepo(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs(repo root) error = %v", err)
+	}
+	home := t.TempDir()
+	projectKey, err := host.ProjectKeyFromDir(repoRoot)
+	if err != nil {
+		t.Fatalf("ProjectKeyFromDir(repo root) error = %v", err)
+	}
+	runKey := "claude-derived-project-run"
+	stateRoot := filepath.Join(home, ".claude", "projects", projectKey, "cerberus")
+	if err := state.WriteSessionCache(state.SessionCachePath(stateRoot, projectKey), &state.SessionCache{
+		Host:           "claude",
+		ProjectKey:     projectKey,
+		SessionID:      "claude-session",
+		RunKey:         runKey,
+		TranscriptPath: "/tmp/claude-session.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	t.Setenv("PATH", spawnTestMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CERBERUS_STATE_ROOT", "")
+	t.Setenv("CERBERUS_PROJECT_KEY", "")
+	t.Setenv("CERBERUS_RUN_KEY", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", repoRoot)
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+	startRuntimeInlineForTest(t, nil)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "CERBERUS_HOST=generic") {
+		t.Fatalf("stderr = %q, want claude inference without generic warning", stderr.String())
+	}
+	gate := waitForGateAtPath(t, state.GateStatePath(state.RunDir(stateRoot, projectKey, runKey)), state.StatusResolved)
+	if gate.Host != "claude" || gate.RunKey != runKey || gate.ProjectKey != projectKey {
+		t.Fatalf("gate = %#v, want claude host and repo-derived project key", gate)
 	}
 }
 
@@ -1065,10 +1263,15 @@ func startDebateRuntimeCaptureForTest(t *testing.T) **orchestrator.StartedRun {
 
 func waitForSpawnGateStatus(t *testing.T, want string) *state.GateState {
 	t.Helper()
+	return waitForGateAtPath(t, spawnGatePath(), want)
+}
+
+func waitForGateAtPath(t *testing.T, path, want string) *state.GateState {
+	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	var last *state.GateState
 	for time.Now().Before(deadline) {
-		gate, err := state.ReadGateState(spawnGatePath())
+		gate, err := state.ReadGateState(path)
 		if err == nil {
 			last = gate
 			if gate.Status == want {

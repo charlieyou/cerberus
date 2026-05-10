@@ -25,6 +25,9 @@ func TestCodexDefaultRosterDegradesToCodexOnlyAndRuns(t *testing.T) {
 		"CERBERUS_STATE_ROOT="+stateRoot,
 		"CERBERUS_PROJECT_KEY=codex-degrade",
 		"CERBERUS_RUN_KEY=codex-only",
+		"HOME="+t.TempDir(),
+		"USERPROFILE="+t.TempDir(),
+		"XDG_CONFIG_HOME="+t.TempDir(),
 		"PATH="+reviewerBin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin",
 	)
 
@@ -59,6 +62,9 @@ func TestDefaultRosterDegradesMissingGeminiToTwoSlots(t *testing.T) {
 		"CERBERUS_STATE_ROOT="+stateRoot,
 		"CERBERUS_PROJECT_KEY=default-degrade",
 		"CERBERUS_RUN_KEY=missing-gemini",
+		"HOME="+t.TempDir(),
+		"USERPROFILE="+t.TempDir(),
+		"XDG_CONFIG_HOME="+t.TempDir(),
 		"PATH="+reviewerBin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin",
 	)
 
@@ -141,6 +147,9 @@ func TestCodexDefaultRosterDegradationRefusesEmptyAndDebateOneReviewer(t *testin
 			"CERBERUS_STATE_ROOT="+stateRoot,
 			"CERBERUS_PROJECT_KEY=codex-degrade",
 			"CERBERUS_RUN_KEY=empty-roster",
+			"HOME="+t.TempDir(),
+			"USERPROFILE="+t.TempDir(),
+			"XDG_CONFIG_HOME="+t.TempDir(),
 			"PATH="+emptyBin,
 		)
 
@@ -170,6 +179,9 @@ func TestCodexDefaultRosterDegradationRefusesEmptyAndDebateOneReviewer(t *testin
 			"CERBERUS_STATE_ROOT="+stateRoot,
 			"CERBERUS_PROJECT_KEY=codex-degrade",
 			"CERBERUS_RUN_KEY=debate-one",
+			"HOME="+t.TempDir(),
+			"USERPROFILE="+t.TempDir(),
+			"XDG_CONFIG_HOME="+t.TempDir(),
 			"PATH="+reviewerBin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin",
 		)
 

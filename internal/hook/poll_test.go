@@ -106,6 +106,13 @@ func TestHandleClaudeSessionStartInitializesRunFromStdinPayload(t *testing.T) {
 	if got["run_key"] != "session-123" || got["transcript_path"] != "/tmp/transcript.jsonl" {
 		t.Fatalf("session.json = %#v, want run key and transcript path from stdin payload", got)
 	}
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
+	if err != nil {
+		t.Fatalf("ReadSessionCache() error = %v", err)
+	}
+	if cache.RunKey != "session-123" || cache.SessionID != "session-123" || cache.TranscriptPath != "/tmp/transcript.jsonl" {
+		t.Fatalf("session cache = %#v, want run key and transcript path from stdin payload", cache)
+	}
 }
 
 func TestHandleClaudeSessionStartPayloadOverridesStaleEnvRunIdentity(t *testing.T) {
