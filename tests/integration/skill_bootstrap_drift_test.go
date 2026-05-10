@@ -141,6 +141,22 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 	}
 }
 
+func TestReviewCodeCommandsExportResolvedRoot(t *testing.T) {
+	repoRoot := skillBootstrapDriftRepoRoot(t)
+	path := filepath.Join(repoRoot, "skills", "review-code", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	content := string(data)
+	if strings.Contains(content, `"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review`) {
+		t.Fatalf("%s must not invoke spawn-code-review through a fallback path without exporting the resolved root", path)
+	}
+	if got := strings.Count(content, `CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review`); got != 6 {
+		t.Fatalf("%s has %d review-code commands exporting resolved root, want 6", path, got)
+	}
+}
+
 func assertNoLegacySkillBootstrapReferences(t *testing.T, path, content string) {
 	t.Helper()
 

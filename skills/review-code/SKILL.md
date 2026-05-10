@@ -78,7 +78,8 @@ Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review $ARGUMENTS
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review $ARGUMENTS
 ```
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
@@ -86,19 +87,24 @@ Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode
 Examples:
 ```bash
 # User: /review-code --mode fast
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --mode fast
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review --mode fast
 
 # User: /review-code "focus on security"
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review focus on security
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review focus on security
 
 # User: /review-code --base main "check error handling"
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --base main check error handling
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review --base main check error handling
 
 # User: /review-code --exclude 'dist/**' --exclude '**/*.snap'
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review --exclude 'dist/**' --exclude '**/*.snap'
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review --exclude 'dist/**' --exclude '**/*.snap'
 
 # User: /review-code main..feature focus on error handling
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review main..feature focus on error handling
+cerberus_root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review main..feature focus on error handling
 ```
 
 ## Review Criteria
