@@ -90,6 +90,7 @@ func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
 
 func TestStartSinglePassFallsBackToCodexSessionCache(t *testing.T) {
 	env := testEnv(t)
+	setMockPath(t)
 	env.Host = "codex"
 	env.RunKey = ""
 	env.SessionID = ""

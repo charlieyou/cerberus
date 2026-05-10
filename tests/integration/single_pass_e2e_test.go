@@ -114,6 +114,7 @@ func TestCodexHookEndToEndSingleSlotSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Abs(repo root) error = %v", err)
 	}
+	t.Setenv("PATH", integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx := context.Background()
 	stateRoot := t.TempDir()
