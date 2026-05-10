@@ -90,7 +90,7 @@ After the plugin is enabled and a new Codex session is running, invoke the
 review skill from Codex:
 
 ```text
-/cerberus:review-code --roster codex-panel --uncommitted
+/cerberus:review-code --uncommitted
 ```
 
 The skill spawns reviewer processes, writes gate state under the Codex state
