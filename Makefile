@@ -18,6 +18,7 @@ test:
 lint:
 	go vet ./...
 	go run ./tools/r3lint
+	go test ./tests/integration/cleanup_invariants_test.go
 
 fixtures-refresh:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; go build -o "$$tmp/fixtures-refresh" ./tests/fixtures/refresh.go; "$$tmp/fixtures-refresh"
