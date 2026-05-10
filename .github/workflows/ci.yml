@@ -37,6 +37,9 @@ jobs:
           GOOS=$([ "${{ matrix.os }}" = "macos-latest" ] && echo darwin || echo linux) \
           GOARCH=${{ matrix.arch }} \
           go build -ldflags="-s -w" -tags netgo -o bin/cerberus.${{ matrix.os }}.${{ matrix.arch }} ./cmd/cerberus
-      - run: |
-          # TODO(Epic G/D35): assert binary size caps for release builds.
-          test -f bin/cerberus.${{ matrix.os }}.${{ matrix.arch }}
+      - name: Binary-size assertion (D35)
+        run: |
+          # D35 binary-size assertion (30 MB cap on darwin-arm64; 35 MB elsewhere)
+          SIZE=$(stat -c%s bin/cerberus.${{ matrix.os }}.${{ matrix.arch }} 2>/dev/null || stat -f%z bin/cerberus.${{ matrix.os }}.${{ matrix.arch }})
+          CAP=$([ "${{ matrix.os }}-${{ matrix.arch }}" = "macos-latest-arm64" ] && echo $((30*1024*1024)) || echo $((35*1024*1024)))
+          if [ "$SIZE" -gt "$CAP" ]; then echo "binary size $SIZE exceeds cap $CAP"; exit 1; fi
