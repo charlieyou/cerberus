@@ -237,7 +237,7 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 		}
 		args = append(args, "--append-system-prompt", string(system))
 	case "codex":
-		args = []string{"--json", "--model", invocation.Model, "--append-system-prompt", string(system)}
+		args = []string{"exec", "--json", "--model", invocation.Model, string(system)}
 	case "gemini":
 		if invocation.Root == "" {
 			return nil, fmt.Errorf("CERBERUS_ROOT is required for gemini policy file")
@@ -246,7 +246,7 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 		if _, err := os.Stat(policyPath); err != nil {
 			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
 		}
-		args = []string{"--json", "--model", invocation.Model, "--append-system-prompt", string(system), "--policy-file", policyPath}
+		args = []string{"--output-format", "json", "--model", invocation.Model, "--prompt", string(system), "--policy", policyPath}
 	default:
 		return nil, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
 	}

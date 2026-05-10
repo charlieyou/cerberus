@@ -44,6 +44,27 @@ The built-in default panel drops unavailable reviewer CLIs with one stderr
 warning per missing CLI. Custom YAML rosters are strict: if a selected custom
 roster names an unavailable provider, preflight rejects the run.
 
+### Reviewer CLI Contract
+
+The mock CLIs under `tests/mocks/` intentionally validate the same
+non-interactive flags Cerberus passes to the real reviewer CLIs. The current
+contract was checked against these installed versions:
+
+| Tool | Verified version | Cerberus invocation shape |
+| --- | --- | --- |
+| `claude` | `2.1.138 (Claude Code)` | `claude --print --output-format json [--model <model>] --append-system-prompt <system>` |
+| `codex` | `codex-cli 0.130.0` | `codex exec --json --model <model> <system>` |
+| `gemini` | `0.40.0` | `gemini --output-format json --model <model> --prompt <system> --policy <policy.toml>` |
+
+After upgrading any reviewer CLI, run:
+
+```bash
+go test ./tests/integration -run TestProviderCLIContractMatchesMocks -v
+```
+
+If that contract changes, update `internal/reviewer/spawn.go`, the mock
+argument validation in `tests/mocks/internal/replay`, and this table together.
+
 ## Install
 
 ### Claude Code

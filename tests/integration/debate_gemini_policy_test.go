@@ -83,8 +83,8 @@ func assertGeminiMockInvocations(t *testing.T, runRoot, recordDir string, instan
 				t.Fatalf("ReadFile(%s) error = %v", path, err)
 			}
 			text := string(data)
-			if !strings.Contains(text, "--policy-file") || !strings.Contains(text, policyPath) {
-				t.Fatalf("%s = %q, want --policy-file %s", path, text, policyPath)
+			if !strings.Contains(text, "--policy") || !strings.Contains(text, policyPath) {
+				t.Fatalf("%s = %q, want --policy %s", path, text, policyPath)
 			}
 		}
 	}

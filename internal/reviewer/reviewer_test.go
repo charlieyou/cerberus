@@ -46,18 +46,32 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 			if stdin != "large user prompt body" {
 				t.Fatalf("stdin = %q, want user prompt", stdin)
 			}
-			if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
-				t.Fatalf("argv = %q, want system prompt flag", args)
+			if !strings.Contains(args, "system prompt") {
+				t.Fatalf("argv = %q, want system prompt in argv", args)
 			}
 			if !strings.Contains(args, "Cerberus review mode: max.") {
 				t.Fatalf("argv = %q, want review mode in system prompt", args)
 			}
-			if provider == "claude" && !strings.Contains(args, "--model\nmodel-name") {
-				t.Fatalf("claude argv = %q, want model flag", args)
+			if provider == "claude" {
+				if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
+					t.Fatalf("claude argv = %q, want system prompt flag", args)
+				}
+				if !strings.Contains(args, "--model\nmodel-name") {
+					t.Fatalf("claude argv = %q, want model flag", args)
+				}
+			}
+			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name") {
+				t.Fatalf("codex argv = %q, want exec json and model flags", args)
 			}
 			if provider == "gemini" {
 				wantPolicy := filepath.Join(root, "config", "gemini-readonly-policy.toml")
-				if !strings.Contains(args, "--policy-file\n"+wantPolicy) {
+				if !strings.Contains(args, "--output-format\njson\n") {
+					t.Fatalf("gemini argv = %q, want JSON output-format flag", args)
+				}
+				if !strings.Contains(args, "--prompt\nsystem prompt") {
+					t.Fatalf("gemini argv = %q, want prompt flag", args)
+				}
+				if !strings.Contains(args, "--policy\n"+wantPolicy) {
 					t.Fatalf("gemini argv = %q, want policy file %s", args, wantPolicy)
 				}
 			}

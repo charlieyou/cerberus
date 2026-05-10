@@ -286,8 +286,12 @@ func assertJSONOutputFlag(t *testing.T, recordDir, provider string) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
 	}
-	if !strings.Contains(string(data), "--json\n") {
-		t.Fatalf("%s args = %q, want JSON output flag", provider, data)
+	want := "--json\n"
+	if provider == "gemini" {
+		want = "--output-format\njson\n"
+	}
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("%s args = %q, want JSON output flag %q", provider, data, want)
 	}
 }
 

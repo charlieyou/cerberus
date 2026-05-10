@@ -38,10 +38,13 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 			if strings.Contains(args, userPrompt[:1024]) {
 				t.Fatalf("argv contains user prompt prefix")
 			}
-			if !strings.Contains(args, "--append-system-prompt\nsystem prompt\n") {
-				t.Fatalf("%s args = %q, want system prompt flag", provider, args)
+			if !strings.Contains(args, "system prompt\n") {
+				t.Fatalf("%s args = %q, want system prompt in argv", provider, args)
 			}
 			if provider == "claude" {
+				if !strings.Contains(args, "--append-system-prompt\nsystem prompt\n") {
+					t.Fatalf("claude args = %q, want system prompt flag", args)
+				}
 				if !strings.Contains(args, "--print\n--output-format\njson\n") {
 					t.Fatalf("claude args = %q, want print json flags", args)
 				}
@@ -49,15 +52,18 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 					t.Fatalf("claude args = %q, want no model flag for generator", args)
 				}
 			}
-			if provider == "codex" && !strings.Contains(args, "--json\n--model\nmodel-name\n") {
-				t.Fatalf("codex args = %q, want json and model flags", args)
+			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name\n") {
+				t.Fatalf("codex args = %q, want exec json and model flags", args)
 			}
 			if provider == "gemini" {
 				wantPolicy := filepath.Join(root, "config", "gemini-readonly-policy.toml")
-				if !strings.Contains(args, "--json\n--model\nmodel-name\n") {
-					t.Fatalf("gemini args = %q, want json and model flags", args)
+				if !strings.Contains(args, "--output-format\njson\n--model\nmodel-name\n") {
+					t.Fatalf("gemini args = %q, want JSON output-format and model flags", args)
 				}
-				if !strings.Contains(args, "--policy-file\n"+wantPolicy+"\n") {
+				if !strings.Contains(args, "--prompt\nsystem prompt\n") {
+					t.Fatalf("gemini args = %q, want prompt flag", args)
+				}
+				if !strings.Contains(args, "--policy\n"+wantPolicy+"\n") {
 					t.Fatalf("gemini args = %q, want policy file %s", args, wantPolicy)
 				}
 			}
