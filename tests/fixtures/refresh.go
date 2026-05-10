@@ -11,12 +11,21 @@ import (
 	"strings"
 
 	"github.com/charlieyou/cerberus/internal/config"
-	"github.com/charlieyou/cerberus/internal/prompts"
 	"github.com/charlieyou/cerberus/internal/reviewer"
-	"github.com/charlieyou/cerberus/internal/roster"
 )
 
 var providers = []string{"claude", "codex", "gemini"}
+
+const reviewerSystemPrompt = `Return reviewer output as raw JSON only, with no markdown fences or prose outside JSON.
+The JSON object must contain:
+- "findings": an array
+- "verdict": one of "PASS", "FAIL", or "NEEDS_WORK"
+- "summary": a string
+- "overall_confidence": a number from 0 to 1
+- "strategy": a string
+- "round": 1
+- "peer_responses_seen": an array
+If the prompt does not contain enough context for a substantive review, return an empty findings array and verdict "PASS".`
 
 func main() {
 	if err := run(); err != nil {
@@ -35,7 +44,7 @@ func run() error {
 	}
 	promptDir := filepath.Join(root, "tests", "fixtures", "_prompts")
 	for _, provider := range providers {
-		request, err := buildRefreshRequest(root, promptDir, provider)
+		request, err := buildRefreshRequest(promptDir, provider)
 		if err != nil {
 			return err
 		}
@@ -72,7 +81,7 @@ type refreshRequest struct {
 	User       []byte
 }
 
-func buildRefreshRequest(root, promptDir, provider string) (refreshRequest, error) {
+func buildRefreshRequest(promptDir, provider string) (refreshRequest, error) {
 	model, ok := config.DefaultModelForProvider(provider)
 	if !ok {
 		return refreshRequest{}, fmt.Errorf("fixtures-refresh: no default model for %s", provider)
@@ -82,15 +91,11 @@ func buildRefreshRequest(root, promptDir, provider string) (refreshRequest, erro
 		return refreshRequest{}, err
 	}
 	instanceID := provider + "#1"
-	system, err := reviewerSystemPrompt(root, provider, model, instanceID, artifact)
-	if err != nil {
-		return refreshRequest{}, err
-	}
 	return refreshRequest{
 		Model:      model,
 		InstanceID: instanceID,
 		FixtureKey: fixtureKey(artifact, instanceID),
-		System:     system,
+		System:     []byte(reviewerSystemPrompt),
 		User:       artifact,
 	}, nil
 }
@@ -111,26 +116,6 @@ func readProviderPrompt(dir, provider string) ([]byte, error) {
 		return nil, fmt.Errorf("fixtures-refresh: read prompt %s: %w", path, err)
 	}
 	return body, nil
-}
-
-func reviewerSystemPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, error) {
-	system, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
-		Provider:      provider,
-		Model:         model,
-		Strategy:      "verification-first",
-		InstanceID:    instanceID,
-		InstanceIndex: 1,
-	}, "code", map[string]string{
-		"CONTEXT":      "Fixture refresh smoke prompt. Return valid reviewer JSON for this small synthetic artifact.",
-		"DIFF_CONTENT": string(artifact),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
-	}
-	if len(system) == 0 {
-		return user, nil
-	}
-	return []byte(string(system) + "\n\n" + string(user)), nil
 }
 
 func fixtureKey(prompt []byte, instanceID string) string {
