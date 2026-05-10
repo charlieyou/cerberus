@@ -444,7 +444,7 @@ workspace.
 Signature:
 
 ```text
-cerberus: roster preflight failed: provider CLI not found
+roster preflight <path> roster "<name>" slot <n>: provider CLI "<provider>" is not available on PATH
 ```
 
 Install the named provider CLI or remove that reviewer from the selected roster.
@@ -455,7 +455,7 @@ Only the built-in default panel drops missing provider CLIs automatically.
 Signature:
 
 ```text
-cerberus: debate requires at least 2 reviewers
+--debate requires at least 2 reviewers in the resolved roster (got <n>); see docs/debate.md for rationale
 ```
 
 Install another provider CLI, pick a larger roster, or remove `--debate`.
@@ -465,7 +465,7 @@ Install another provider CLI, pick a larger roster, or remove `--debate`.
 Signature:
 
 ```text
-cerberus: roster preflight failed: persona file not found
+roster preflight <path> roster "<name>" slot <n>: persona file "<path>" does not exist
 ```
 
 Fix `persona` in the roster or create the referenced file.
