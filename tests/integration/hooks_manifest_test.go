@@ -30,24 +30,21 @@ func TestHookManifestsUseCanonicalLazyBuildBootstrap(t *testing.T) {
 	canonicalResolver := compactCanonicalHookResolver(t, filepath.Join(repoRoot, "prompts", "host-neutral-bootstrap.md"))
 
 	tests := []struct {
-		name     string
-		path     string
-		rootLine string
-		events   map[string]string
+		name   string
+		path   string
+		events map[string]string
 	}{
 		{
-			name:     "claude",
-			path:     filepath.Join(repoRoot, "hooks", "hooks.json"),
-			rootLine: `root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"`,
+			name: "claude",
+			path: filepath.Join(repoRoot, "hooks", "hooks.json"),
 			events: map[string]string{
 				"SessionStart": "claude-session-start",
 				"Stop":         "claude-stop",
 			},
 		},
 		{
-			name:     "codex",
-			path:     filepath.Join(repoRoot, "hooks", "codex-hooks.json"),
-			rootLine: `root="${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}"`,
+			name: "codex",
+			path: filepath.Join(repoRoot, "hooks", "codex-hooks.json"),
 			events: map[string]string{
 				"SessionStart":     "codex-session-start",
 				"UserPromptSubmit": "codex-prompt-submit",
@@ -70,14 +67,13 @@ func TestHookManifestsUseCanonicalLazyBuildBootstrap(t *testing.T) {
 			}
 			assertEventSet(t, tt.path, manifest.Hooks, keys(tt.events))
 
-			resolver := strings.Replace(canonicalResolver, `root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"`, tt.rootLine, 1)
 			for event, hookName := range tt.events {
 				command := onlyHookCommand(t, tt.path, event, manifest.Hooks[event])
 				if command.Type != "command" {
 					t.Fatalf("%s %s type = %q, want command", tt.path, event, command.Type)
 				}
 
-				wantCommand := "sh -c '" + resolver + `; exec "$bin" hook ` + hookName + "'"
+				wantCommand := "sh -c '" + canonicalResolver + `; exec "$bin" hook ` + hookName + "'"
 				if command.Command != wantCommand {
 					t.Fatalf("%s %s command drifted from canonical resolver\nwant: %s\n got: %s", tt.path, event, wantCommand, command.Command)
 				}
