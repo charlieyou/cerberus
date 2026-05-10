@@ -26,15 +26,46 @@ func TestReadProviderPromptSelectsOnlyMatchingProvider(t *testing.T) {
 
 func TestReviewerPromptIncludesArtifactAndReviewerJSONShape(t *testing.T) {
 	root := repoRoot(t)
-	prompt, err := reviewerPrompt(root, "codex", "gpt-5.5", "codex#1", []byte("synthetic fixture artifact"))
+	system, prompt, err := reviewerPrompt(root, "codex", "gpt-5.5", "codex#1", []byte("synthetic fixture artifact"))
 	if err != nil {
 		t.Fatalf("reviewerPrompt() error = %v", err)
+	}
+	if !strings.Contains(string(system), "Walk through the artifact") {
+		t.Fatalf("reviewerPrompt() system = %q, want strategy guidance", system)
 	}
 	text := string(prompt)
 	for _, want := range []string{"synthetic fixture artifact", `"findings"`, `"verdict"`, `"overall_confidence"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("reviewerPrompt() missing %q", want)
 		}
+	}
+}
+
+func TestBuildRefreshRequestKeysRawPromptButSendsReviewerPrompt(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	rawPrompt := []byte("mock smoke prompt for codex\n")
+	if err := os.WriteFile(filepath.Join(dir, "codex.txt"), rawPrompt, 0o644); err != nil {
+		t.Fatalf("WriteFile(codex prompt) error = %v", err)
+	}
+
+	request, err := buildRefreshRequest(root, dir, "codex")
+	if err != nil {
+		t.Fatalf("buildRefreshRequest() error = %v", err)
+	}
+	if got, want := request.FixtureKey, fixtureKey(rawPrompt, "codex#1"); got != want {
+		t.Fatalf("FixtureKey = %q, want raw prompt key %q", got, want)
+	}
+	if string(request.User) == string(rawPrompt) {
+		t.Fatalf("User prompt was not composed")
+	}
+	for _, want := range []string{"mock smoke prompt for codex", `"findings"`, `"verdict"`} {
+		if !strings.Contains(string(request.User), want) {
+			t.Fatalf("User prompt missing %q", want)
+		}
+	}
+	if len(request.System) == 0 {
+		t.Fatalf("System prompt is empty")
 	}
 }
 

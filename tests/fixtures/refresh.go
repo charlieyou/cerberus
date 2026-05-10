@@ -35,29 +35,20 @@ func run() error {
 	}
 	promptDir := filepath.Join(root, "tests", "fixtures", "_prompts")
 	for _, provider := range providers {
-		model, ok := config.DefaultModelForProvider(provider)
-		if !ok {
-			return fmt.Errorf("fixtures-refresh: no default model for %s", provider)
-		}
-		artifact, err := readProviderPrompt(promptDir, provider)
+		request, err := buildRefreshRequest(root, promptDir, provider)
 		if err != nil {
 			return err
 		}
-		instanceID := provider + "#1"
-		userPrompt, err := reviewerPrompt(root, provider, model, instanceID, artifact)
-		if err != nil {
-			return err
-		}
-		key := fixtureKey(userPrompt, instanceID)
-		fixturePath := filepath.Join(root, "tests", "fixtures", provider, key+".json")
-		if err := verifyMockLookupPath(provider, key, instanceID, fixturePath); err != nil {
+		fixturePath := filepath.Join(root, "tests", "fixtures", provider, request.FixtureKey+".json")
+		if err := verifyMockLookupPath(provider, request.FixtureKey, request.InstanceID, fixturePath); err != nil {
 			return err
 		}
 		response, err := (reviewer.Runner{Root: root}).Spawn(context.Background(), reviewer.Request{
-			ID:       instanceID,
+			ID:       request.InstanceID,
 			Provider: provider,
-			Model:    model,
-			User:     userPrompt,
+			Model:    request.Model,
+			System:   request.System,
+			User:     request.User,
 		})
 		if err != nil {
 			return fmt.Errorf("fixtures-refresh: %s with %s.txt: %w", provider, provider, err)
@@ -71,6 +62,37 @@ func run() error {
 		fmt.Printf("wrote %s\n", fixturePath)
 	}
 	return nil
+}
+
+type refreshRequest struct {
+	Model      string
+	InstanceID string
+	FixtureKey string
+	System     []byte
+	User       []byte
+}
+
+func buildRefreshRequest(root, promptDir, provider string) (refreshRequest, error) {
+	model, ok := config.DefaultModelForProvider(provider)
+	if !ok {
+		return refreshRequest{}, fmt.Errorf("fixtures-refresh: no default model for %s", provider)
+	}
+	artifact, err := readProviderPrompt(promptDir, provider)
+	if err != nil {
+		return refreshRequest{}, err
+	}
+	instanceID := provider + "#1"
+	system, userPrompt, err := reviewerPrompt(root, provider, model, instanceID, artifact)
+	if err != nil {
+		return refreshRequest{}, err
+	}
+	return refreshRequest{
+		Model:      model,
+		InstanceID: instanceID,
+		FixtureKey: fixtureKey(artifact, instanceID),
+		System:     system,
+		User:       userPrompt,
+	}, nil
 }
 
 func requireProviderCLIs() error {
@@ -91,10 +113,11 @@ func readProviderPrompt(dir, provider string) ([]byte, error) {
 	return body, nil
 }
 
-func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, error) {
-	_, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
+func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, []byte, error) {
+	system, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
 		Provider:      provider,
 		Model:         model,
+		Strategy:      "verification-first",
 		InstanceID:    instanceID,
 		InstanceIndex: 1,
 	}, "code", map[string]string{
@@ -102,9 +125,9 @@ func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) (
 		"DIFF_CONTENT": string(artifact),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
+		return nil, nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
 	}
-	return user, nil
+	return system, user, nil
 }
 
 func fixtureKey(prompt []byte, instanceID string) string {
