@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 var survivingCodexSkills = []string{
@@ -134,7 +135,7 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 
 func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, script string, wantExit int, wantOutput string) {
 	t.Helper()
-	home := t.TempDir()
+	home := retryCleanupTempDir(t)
 	sessionID := "codex-smoke-" + skill
 	payload := map[string]string{
 		"session_id":      sessionID,
@@ -218,6 +219,26 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 	if wantOutput != "" && !strings.Contains(string(output), wantOutput) {
 		t.Fatalf("%s smoke output = %q, want substring %q", skill, output, wantOutput)
 	}
+}
+
+func retryCleanupTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", strings.ReplaceAll(t.Name(), "/", "")+"-")
+	if err != nil {
+		t.Fatalf("MkdirTemp error = %v", err)
+	}
+	t.Cleanup(func() {
+		var err error
+		for range 10 {
+			err = os.RemoveAll(dir)
+			if err == nil || os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("RemoveAll(%s) error = %v", dir, err)
+	})
+	return dir
 }
 
 func newCodexSmokePluginRoot(t *testing.T, repoRoot, binary string) string {

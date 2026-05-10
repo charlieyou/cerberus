@@ -68,6 +68,9 @@ Start with the default panel:
 /cerberus:review-code
 ```
 
+That command is the fresh-install smoke path: it resolves the built-in panel,
+performs the lazy build if needed, and starts a standard code review.
+
 ### Codex CLI
 
 Install the same plugin tree for Codex CLI and enable the bundled hooks. The
