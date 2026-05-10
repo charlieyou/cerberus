@@ -94,6 +94,20 @@ func TestSurvivingSkillBootstrapsMatchCanonicalResolver(t *testing.T) {
 	}
 }
 
+func TestStatusSkillRunBlockSupportsPluginRoot(t *testing.T) {
+	repoRoot := skillBootstrapDriftRepoRoot(t)
+	path := filepath.Join(repoRoot, "skills", "status", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+
+	want := `"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" status --json`
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("%s status run block must support PLUGIN_ROOT fallback; missing %q", path, want)
+	}
+}
+
 func assertNoLegacySkillBootstrapReferences(t *testing.T, path, content string) {
 	t.Helper()
 

@@ -47,7 +47,7 @@ The active run key is resolved by the shared backend from the current host envir
 Use the Bash tool to run the backend status command:
 
 ```bash
-"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/cerberus" status --json $ARGUMENTS
+"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" status --json $ARGUMENTS
 ```
 
 ## Output
