@@ -82,7 +82,7 @@ func buildRefreshRequest(root, promptDir, provider string) (refreshRequest, erro
 		return refreshRequest{}, err
 	}
 	instanceID := provider + "#1"
-	system, userPrompt, err := reviewerPrompt(root, provider, model, instanceID, artifact)
+	system, err := reviewerSystemPrompt(root, provider, model, instanceID, artifact)
 	if err != nil {
 		return refreshRequest{}, err
 	}
@@ -91,7 +91,7 @@ func buildRefreshRequest(root, promptDir, provider string) (refreshRequest, erro
 		InstanceID: instanceID,
 		FixtureKey: fixtureKey(artifact, instanceID),
 		System:     system,
-		User:       userPrompt,
+		User:       artifact,
 	}, nil
 }
 
@@ -113,7 +113,7 @@ func readProviderPrompt(dir, provider string) ([]byte, error) {
 	return body, nil
 }
 
-func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, []byte, error) {
+func reviewerSystemPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, error) {
 	system, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
 		Provider:      provider,
 		Model:         model,
@@ -125,9 +125,12 @@ func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) (
 		"DIFF_CONTENT": string(artifact),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
+		return nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
 	}
-	return system, user, nil
+	if len(system) == 0 {
+		return user, nil
+	}
+	return []byte(string(system) + "\n\n" + string(user)), nil
 }
 
 func fixtureKey(prompt []byte, instanceID string) string {
