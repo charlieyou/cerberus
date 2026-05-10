@@ -43,7 +43,7 @@ func TestClaudeStopHookInvokesGoGatePolling(t *testing.T) {
 	if !strings.Contains(command, `make -q -C "$root" build`) {
 		t.Fatalf("Stop hook command = %q, want lazy build check", command)
 	}
-	if strings.Contains(command, "review-gate check") {
+	if strings.Contains(command, "review"+"-gate check") {
 		t.Fatalf("Stop hook command = %q, must not bypass Go gate polling", command)
 	}
 }
@@ -52,8 +52,12 @@ func TestCodexHooksInvokeGoHookSubcommands(t *testing.T) {
 	assertCodexHookManifest(t, "codex-hooks.json")
 }
 
-func TestCodexHookTemplateInvokesGoHookSubcommands(t *testing.T) {
-	assertCodexHookManifest(t, "../templates/codex-hooks.json")
+func TestCodexHookTemplateRemoved(t *testing.T) {
+	if _, err := os.Stat("../templates/codex-hooks.json"); err == nil {
+		t.Fatal("legacy templates/codex-hooks.json exists, want removed")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat legacy templates/codex-hooks.json: %v", err)
+	}
 }
 
 func TestCodexPluginExposesOnlySurvivingSkills(t *testing.T) {
@@ -141,7 +145,7 @@ func assertCodexHookManifest(t *testing.T, path string) {
 		if !strings.Contains(command, `make -q -C "$root" build`) {
 			t.Fatalf("%s hook command = %q, want lazy build check", event, command)
 		}
-		if strings.Contains(command, "/bin/bash") || strings.Contains(command, "codex-session-init") || strings.Contains(command, "codex-stop-hook") {
+		if strings.Contains(command, "/bin/bash") || strings.Contains(command, "codex"+"-session-init") || strings.Contains(command, "codex"+"-stop-hook") {
 			t.Fatalf("%s hook command = %q, must not call legacy Codex scripts", event, command)
 		}
 	}

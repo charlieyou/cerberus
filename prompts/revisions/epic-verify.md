@@ -13,7 +13,7 @@ Use this mode only when the user explicitly requests it.
 In Report-Only Mode:
 1. Do **not** edit implementation code, tests, plans, specs, or generated artifacts.
 2. Do **not** spawn implementation sub-agents.
-3. Do **not** use the review gate workflow: do not call `review-gate author-context`, `review-gate spawn*`, `review-gate wait`, `review-gate resolve`, or any clear-gate tool unless the user separately and explicitly asks you to clear an active gate.
+3. Do **not** use or clear any Cerberus gate workflow unless the user separately and explicitly asks you to clear an active gate.
 4. Write the findings only to a Markdown document. Use a user-specified path if one was provided; otherwise write `epic-verification-findings.md` at the repository root.
 5. The Markdown document must contain:
    - Title and short summary
