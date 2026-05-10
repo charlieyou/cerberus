@@ -395,6 +395,31 @@ func TestSpawnCodeReviewCreatesPendingGateObservedByHookPoll(t *testing.T) {
 	}
 }
 
+func TestSpawnCodeReviewWarnsGenericHostNeedsManualWait(t *testing.T) {
+	setSpawnTestEnv(t)
+	startRuntimeInlineForTest(t, nil)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "review spawned") {
+		t.Fatalf("stdout = %q, want review spawned", stdout.String())
+	}
+	for _, want := range []string{
+		"CERBERUS_HOST=generic has no automatic Stop hook",
+		`same cerberus binary with `,
+		`wait --json --session-key "run"`,
+		"same CERBERUS_STATE_ROOT and CERBERUS_PROJECT_KEY",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+}
+
 func TestSpawnCodeReviewRuntimeLaunchFailureResolvesPendingGate(t *testing.T) {
 	setSpawnTestEnv(t)
 	old := startReviewRuntime

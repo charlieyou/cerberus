@@ -79,6 +79,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 			}
 			return 1
 		}
+		warnIfGenericHostNeedsManualWait(started, stderr)
 		fmt.Fprintln(stdout, "review spawned")
 		return 0
 	}
@@ -108,8 +109,16 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		}
 		return 1
 	}
+	warnIfGenericHostNeedsManualWait(started, stderr)
 	fmt.Fprintln(stdout, "review spawned")
 	return 0
+}
+
+func warnIfGenericHostNeedsManualWait(started *orchestrator.StartedRun, stderr io.Writer) {
+	if started == nil || started.Env.Host != "generic" {
+		return
+	}
+	fmt.Fprintf(stderr, "warning: CERBERUS_HOST=generic has no automatic Stop hook; run the same cerberus binary with `wait --json --session-key %q` and the same CERBERUS_STATE_ROOT and CERBERUS_PROJECT_KEY to wait for this gate\n", started.Env.RunKey)
 }
 
 func normalizeReviewArgs(args []string, artifactType string) []string {
