@@ -8,11 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/charlieyou/cerberus/internal/config"
+	"github.com/charlieyou/cerberus/internal/prompts"
 	"github.com/charlieyou/cerberus/internal/reviewer"
+	"github.com/charlieyou/cerberus/internal/roster"
 )
 
 var providers = []string{"claude", "codex", "gemini"}
@@ -32,39 +33,42 @@ func run() error {
 	if err := requireProviderCLIs(); err != nil {
 		return err
 	}
-	prompts, err := readPrompts(filepath.Join(root, "tests", "fixtures", "_prompts"))
-	if err != nil {
-		return err
-	}
+	promptDir := filepath.Join(root, "tests", "fixtures", "_prompts")
 	for _, provider := range providers {
 		model, ok := config.DefaultModelForProvider(provider)
 		if !ok {
 			return fmt.Errorf("fixtures-refresh: no default model for %s", provider)
 		}
-		for _, prompt := range prompts {
-			instanceID := provider + "#1"
-			key := fixtureKey(prompt.body, instanceID)
-			fixturePath := filepath.Join(root, "tests", "fixtures", provider, key+".json")
-			if err := verifyMockLookupPath(provider, key, instanceID, fixturePath); err != nil {
-				return err
-			}
-			response, err := (reviewer.Runner{Root: root}).Spawn(context.Background(), reviewer.Request{
-				ID:       instanceID,
-				Provider: provider,
-				Model:    model,
-				User:     prompt.body,
-			})
-			if err != nil {
-				return fmt.Errorf("fixtures-refresh: %s with %s: %w", provider, prompt.name, err)
-			}
-			if err := os.MkdirAll(filepath.Dir(fixturePath), 0o755); err != nil {
-				return fmt.Errorf("fixtures-refresh: create fixture dir: %w", err)
-			}
-			if err := os.WriteFile(fixturePath, response.Output, 0o644); err != nil {
-				return fmt.Errorf("fixtures-refresh: write %s: %w", fixturePath, err)
-			}
-			fmt.Printf("wrote %s\n", fixturePath)
+		artifact, err := readProviderPrompt(promptDir, provider)
+		if err != nil {
+			return err
 		}
+		instanceID := provider + "#1"
+		userPrompt, err := reviewerPrompt(root, provider, model, instanceID, artifact)
+		if err != nil {
+			return err
+		}
+		key := fixtureKey(userPrompt, instanceID)
+		fixturePath := filepath.Join(root, "tests", "fixtures", provider, key+".json")
+		if err := verifyMockLookupPath(provider, key, instanceID, fixturePath); err != nil {
+			return err
+		}
+		response, err := (reviewer.Runner{Root: root}).Spawn(context.Background(), reviewer.Request{
+			ID:       instanceID,
+			Provider: provider,
+			Model:    model,
+			User:     userPrompt,
+		})
+		if err != nil {
+			return fmt.Errorf("fixtures-refresh: %s with %s.txt: %w", provider, provider, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(fixturePath), 0o755); err != nil {
+			return fmt.Errorf("fixtures-refresh: create fixture dir: %w", err)
+		}
+		if err := os.WriteFile(fixturePath, response.Output, 0o644); err != nil {
+			return fmt.Errorf("fixtures-refresh: write %s: %w", fixturePath, err)
+		}
+		fmt.Printf("wrote %s\n", fixturePath)
 	}
 	return nil
 }
@@ -78,36 +82,29 @@ func requireProviderCLIs() error {
 	return nil
 }
 
-type promptFile struct {
-	name string
-	body []byte
+func readProviderPrompt(dir, provider string) ([]byte, error) {
+	path := filepath.Join(dir, provider+".txt")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("fixtures-refresh: read prompt %s: %w", path, err)
+	}
+	return body, nil
 }
 
-func readPrompts(dir string) ([]promptFile, error) {
-	entries, err := os.ReadDir(dir)
+func reviewerPrompt(root, provider, model, instanceID string, artifact []byte) ([]byte, error) {
+	_, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
+		Provider:      provider,
+		Model:         model,
+		InstanceID:    instanceID,
+		InstanceIndex: 1,
+	}, "code", map[string]string{
+		"CONTEXT":      "Fixture refresh smoke prompt. Return valid reviewer JSON for this small synthetic artifact.",
+		"DIFF_CONTENT": string(artifact),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("fixtures-refresh: read prompt dir %s: %w", dir, err)
+		return nil, fmt.Errorf("fixtures-refresh: compose reviewer prompt for %s: %w", provider, err)
 	}
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".txt" {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return nil, fmt.Errorf("fixtures-refresh: no .txt prompts in %s", dir)
-	}
-	prompts := make([]promptFile, 0, len(names))
-	for _, name := range names {
-		body, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return nil, fmt.Errorf("fixtures-refresh: read prompt %s: %w", name, err)
-		}
-		prompts = append(prompts, promptFile{name: name, body: body})
-	}
-	return prompts, nil
+	return user, nil
 }
 
 func fixtureKey(prompt []byte, instanceID string) string {
