@@ -41,13 +41,14 @@ func ExtractResolverBody(input string) (string, error) {
 		return "", errMissingResolverStart
 	}
 
-	end := strings.Index(input[start:], resolverEndMarker)
+	bodyStart := start + len(resolverStartMarker)
+	end := strings.Index(input[bodyStart:], resolverEndMarker)
 	if end < 0 {
 		return "", errMissingResolverEnd
 	}
 
-	body := strings.TrimSpace(input[start : start+end])
-	if body == "" {
+	body := input[start : bodyStart+end]
+	if input[bodyStart:bodyStart+end] == "" {
 		return "", errEmptyResolverBody
 	}
 	return body, nil
