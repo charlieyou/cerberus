@@ -100,7 +100,6 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 		"verify-epic":         {block: 2, setupScript: `EPIC_FILE="$SMOKE_EPIC_FILE"; ARGUMENTS="--agents codex"`},
 	}
 
-	wantProjectKey := codexSmokeProjectKey(projectRoot)
 	for _, skill := range survivingCodexSkills {
 		t.Run(skill, func(t *testing.T) {
 			tc, ok := tests[skill]
@@ -108,14 +107,12 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 				t.Fatalf("missing smoke case for %s", skill)
 			}
 			skillPath := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
-			bootstrap := bashBlock(t, skillPath, 1)
 			if tc.promptOnly {
 				for i, block := range bashBlocks(t, skillPath)[1:] {
 					if strings.Contains(block, "bin/cerberus") {
 						t.Fatalf("%s prompt-only block %d invokes backend: %s", skill, i+2, block)
 					}
 				}
-				runCodexSmokeScript(t, binary, pluginRoot, projectRoot, skill, bootstrap+"\nprintf '%s/%s/%s\\n' \"$CERBERUS_HOST\" \"$CERBERUS_PROJECT_KEY\" \"$CERBERUS_RUN_KEY\"\n", 0, "codex/"+wantProjectKey+"/codex-smoke-"+skill)
 				return
 			}
 
@@ -129,14 +126,9 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 				`REVIEW_DIR="${REVIEW_DIR:-$SMOKE_REVIEW_DIR}"`,
 				`TMPDIR="${TMPDIR:-$SMOKE_TMPDIR}"`,
 				tc.setupScript,
-				bootstrap,
-				`printf 'BOOTSTRAP=%s/%s/%s\n' "$CERBERUS_HOST" "$CERBERUS_PROJECT_KEY" "$CERBERUS_RUN_KEY"`,
 				runBlock,
 			}, "\n") + "\n"
 			wantOutput := tc.wantOutput
-			if wantOutput == "" {
-				wantOutput = "BOOTSTRAP=codex/" + wantProjectKey + "/codex-smoke-" + skill
-			}
 			runCodexSmokeScript(t, binary, pluginRoot, projectRoot, skill, script, tc.wantExit, wantOutput)
 		})
 	}
@@ -225,7 +217,7 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 	if exitCode != wantExit {
 		t.Fatalf("%s smoke exit = %d, want %d\n%s", skill, exitCode, wantExit, output)
 	}
-	if !strings.Contains(string(output), wantOutput) {
+	if wantOutput != "" && !strings.Contains(string(output), wantOutput) {
 		t.Fatalf("%s smoke output = %q, want substring %q", skill, output, wantOutput)
 	}
 }
@@ -245,11 +237,14 @@ func newCodexSmokePluginRoot(t *testing.T, repoRoot, binary string) string {
 			t.Fatalf("Symlink(%s) error = %v", rel, err)
 		}
 	}
-	for _, rel := range []string{
-		"bin/cerberus-skill-env",
-		"config/gemini-readonly-settings.json",
-		"config/gemini-readonly-policy.toml",
-	} {
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", binDir, err)
+	}
+	if err := os.Symlink(binary, filepath.Join(binDir, "cerberus")); err != nil {
+		t.Fatalf("Symlink(bin/cerberus) error = %v", err)
+	}
+	for _, rel := range []string{"config/gemini-readonly-settings.json", "config/gemini-readonly-policy.toml"} {
 		data, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
 			t.Fatalf("ReadFile(%s) error = %v", rel, err)

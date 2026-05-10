@@ -7,47 +7,27 @@ argument-hint: '[--debate] [--mode <fast|smart|max>] [--consensus <majority|all|
 
 ## Host-Neutral Execution
 
-Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
+Before running any Bash snippet in this skill, run the shared Cerberus resolver below. It lazily builds and executes `bin/cerberus` from the configured plugin root.
 
 ```bash
-cerberus_root=""
-cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
-case "$cerberus_plugin_root" in
-    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
-esac
-cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
-case "$cerberus_skill_dir" in
-    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
-esac
-
-cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
-if [ -n "$cerberus_skill_dir" ]; then
-    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
+# --- shared resolver (canonical body; identical across all callers) ---
+root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+bin="$root/bin/cerberus"
+[ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
+command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
+if ! make -q -C "$root" build >/dev/null 2>&1; then
+    command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }
+    echo "cerberus: building... (this happens once after clone or upgrade)" >&2
+    start=$(date +%s)
+    make -C "$root" build >&2 || exit $?
+    end=$(date +%s)
+    echo "cerberus: build complete in $((end-start))s" >&2
 fi
-cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -n "$cerberus_git_root" ]; then
-    cerberus_candidates+=("$cerberus_git_root")
-fi
-for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] \
-        && [[ "$cerberus_candidate" == /* ]] \
-        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
-        cerberus_root="$cerberus_candidate"
-        break
-    fi
-done
-if [ -z "$cerberus_root" ]; then
-    echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
-    exit 127
-fi
-export CERBERUS_ROOT="$cerberus_root"
-# shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env" || exit $?
+# --- shared resolver above; per-caller exec below (allowed to diverge) ---
+exec "$bin" "$@"
 ```
 
-Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
+Use `bin/cerberus` through the configured plugin root when invoking Cerberus commands below.
 
 
 # Plan Review (Iterative)
@@ -71,7 +51,7 @@ Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
 
-When running under Codex, `bin/cerberus-skill-env` reads the active run key from `~/.cerberus/runtime/codex/<project-key>/active-session.json`, written by the Codex `SessionStart` / `UserPromptSubmit` hooks. If that registry is missing or stale and the skill shell command has `CODEX_THREAD_ID`, the helper refreshes it with that host-provided session id so the Stop hook can associate the run with Codex's `session_id`; without either registry state or `CODEX_THREAD_ID`, start a new Codex session and verify the hooks are installed.
+When running under Codex, the Cerberus binary resolves the active run key from the current host environment and hook-maintained runtime state. If that state is missing or stale, start a new Codex session and verify the hooks are installed.
 
 Examples:
 ```bash

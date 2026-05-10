@@ -3,6 +3,8 @@ package integration_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -10,10 +12,27 @@ import (
 const (
 	resolverStartMarker = "# --- shared resolver (canonical body; identical across all callers) ---"
 	resolverEndMarker   = "# --- shared resolver above; per-caller exec below (allowed to diverge) ---"
+	skillExecLine       = `exec "$bin" "$@"`
 )
 
+var survivingSkillBootstraps = []string{
+	"architecture-review",
+	"ask",
+	"clear-gate",
+	"create-plan",
+	"create-spec",
+	"create-tasks",
+	"healthcheck",
+	"review-code",
+	"review-plan",
+	"review-spec",
+	"review-tasks",
+	"status",
+	"verify-epic",
+}
+
 func TestSkillBootstrapDriftCanonicalParses(t *testing.T) {
-	repoRoot := integrationRepoRoot(t)
+	repoRoot := skillBootstrapDriftRepoRoot(t)
 	path := filepath.Join(repoRoot, "prompts", "host-neutral-bootstrap.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -33,6 +52,71 @@ func TestSkillBootstrapDriftCanonicalParses(t *testing.T) {
 	if !strings.Contains(string(data), `exec "$bin" hook <name>`) {
 		t.Fatalf("canonical bootstrap must document the hook exec form")
 	}
+}
+
+func TestSurvivingSkillBootstrapsMatchCanonicalResolver(t *testing.T) {
+	repoRoot := skillBootstrapDriftRepoRoot(t)
+	canonicalPath := filepath.Join(repoRoot, "prompts", "host-neutral-bootstrap.md")
+	canonicalData, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", canonicalPath, err)
+	}
+
+	canonicalBody, err := ExtractResolverBody(string(canonicalData))
+	if err != nil {
+		t.Fatalf("ExtractResolverBody(%s) error = %v", canonicalPath, err)
+	}
+
+	for _, skill := range survivingSkillBootstraps {
+		t.Run(skill, func(t *testing.T) {
+			path := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", path, err)
+			}
+			content := string(data)
+
+			body, err := ExtractResolverBody(content)
+			if err != nil {
+				t.Fatalf("ExtractResolverBody(%s) error = %v", path, err)
+			}
+			if body != canonicalBody {
+				t.Fatalf("resolver body in %s drifted from %s", path, canonicalPath)
+			}
+			if !strings.Contains(content, resolverEndMarker+"\n"+skillExecLine) {
+				t.Fatalf("%s must use skill exec line %q immediately after resolver", path, skillExecLine)
+			}
+			assertNoLegacySkillBootstrapReferences(t, path, content)
+		})
+	}
+}
+
+func assertNoLegacySkillBootstrapReferences(t *testing.T, path, content string) {
+	t.Helper()
+
+	for _, forbidden := range []string{
+		"bin/review-gate-models.sh",
+		"bin/review-gate",
+		"bin/cerberus-skill-env",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not reference legacy bootstrap path %q", path, forbidden)
+		}
+	}
+
+	if regexp.MustCompile(`\bREVIEW_GATE_`).MatchString(content) {
+		t.Fatalf("%s must not reference REVIEW_GATE_* aliases", path)
+	}
+}
+
+func skillBootstrapDriftRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	_, path, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(path), "..", ".."))
 }
 
 func ExtractResolverBody(input string) (string, error) {
