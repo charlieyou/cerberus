@@ -4,7 +4,13 @@
   "plugins": [
     {
       "name": "cerberus",
+      "version": "2.0.0",
       "source": "./"
+    },
+    {
+      "name": "cerberus",
+      "version": "1.54.16",
+      "source": "https://github.com/charlieyou/cerberus.git#v1.54.16"
     }
   ]
 }
