@@ -33,7 +33,7 @@ Use `bin/cerberus` through the configured plugin root when invoking Cerberus com
 Run:
 
 ```bash
-CERBERUS_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}" "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" resolve --reason "manual clear"
+root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" resolve --reason "manual clear"
 ```
 
 This resolves the active review gate, allowing you to stop the session without completing the review cycle.

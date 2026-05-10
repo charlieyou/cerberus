@@ -121,7 +121,6 @@ func TestStatusSkillRunBlockSupportsPluginRoot(t *testing.T) {
 func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 	repoRoot := skillBootstrapDriftRepoRoot(t)
 	fallbackBin := "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus"
-	exportResolvedRoot := `CERBERUS_ROOT="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"`
 	for _, skill := range survivingSkillBootstraps {
 		t.Run(skill, func(t *testing.T) {
 			path := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
@@ -140,8 +139,8 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 				}
 			}
 			for lineNumber, line := range strings.Split(content, "\n") {
-				if strings.Contains(line, fallbackBin) && !strings.Contains(line, exportResolvedRoot) {
-					t.Fatalf("%s:%d must export resolved root before invoking %s", path, lineNumber+1, fallbackBin)
+				if strings.Contains(line, fallbackBin) {
+					t.Fatalf("%s:%d must use the lazy-build resolver instead of invoking %s directly", path, lineNumber+1, fallbackBin)
 				}
 			}
 		})
@@ -159,8 +158,11 @@ func TestReviewCodeCommandsExportResolvedRoot(t *testing.T) {
 	if strings.Contains(content, `"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}/bin/cerberus" spawn-code-review`) {
 		t.Fatalf("%s must not invoke spawn-code-review through a fallback path without exporting the resolved root", path)
 	}
-	if got := strings.Count(content, `CERBERUS_ROOT="$cerberus_root" "$cerberus_root/bin/cerberus" spawn-code-review`); got != 6 {
-		t.Fatalf("%s has %d review-code commands exporting resolved root, want 6", path, got)
+	if got := strings.Count(content, `make -q -C "$root" build`); got < 6 {
+		t.Fatalf("%s has %d review-code commands on the lazy-build path, want at least 6", path, got)
+	}
+	if got := strings.Count(content, `"$bin" spawn-code-review`); got != 6 {
+		t.Fatalf("%s has %d review-code commands using resolved bin, want 6", path, got)
 	}
 }
 
