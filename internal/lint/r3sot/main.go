@@ -118,6 +118,8 @@ func stringExprValue(expr ast.Expr) (string, bool) {
 			return "", false
 		}
 		return left + right, true
+	case *ast.ParenExpr:
+		return stringExprValue(typed.X)
 	default:
 		return "", false
 	}
