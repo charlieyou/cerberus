@@ -72,6 +72,7 @@ func TestDefaultRosterDegradesMissingGeminiToTwoSlots(t *testing.T) {
 		t.Fatalf("output = %q, want only gemini degradation warning", out)
 	}
 	runRoot := filepath.Join(stateRoot, "default-degrade", "missing-gemini")
+	waitForResolvedGate(t, runRoot)
 	waitForIntegrationFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "claude#1", "telemetry.json"))
 	waitForIntegrationFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
 	if _, err := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "gemini#1", "telemetry.json")); !errors.Is(err, os.ErrNotExist) {

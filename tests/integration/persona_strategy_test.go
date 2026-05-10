@@ -40,8 +40,12 @@ rosters:
 		"PATH="+integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"XDG_CONFIG_HOME="+xdgConfigHome,
 	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("spawn-code-review failed: %v\n%s", err, output)
+	output, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(output), "no fixture for prompt+instance") {
+		t.Fatalf("spawn-code-review failed before prompt capture: %v\n%s", err, output)
+	}
+	if err == nil {
+		waitForResolvedGate(t, filepath.Join(stateRoot, "persona-strategy", "capture"))
 	}
 
 	waitForIntegrationFile(t, filepath.Join(recordDir, "codex.args"))
