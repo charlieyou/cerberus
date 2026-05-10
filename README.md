@@ -157,7 +157,7 @@ The skills call the binary for you. Direct use is mainly for automation:
 ${CERBERUS_ROOT}/bin/cerberus spawn-code-review --mode smart
 ${CERBERUS_ROOT}/bin/cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
 ${CERBERUS_ROOT}/bin/cerberus status --json
-${CERBERUS_ROOT}/bin/cerberus clear-gate --reason "manual clear"
+${CERBERUS_ROOT}/bin/cerberus resolve --reason "manual clear"
 ${CERBERUS_ROOT}/bin/cerberus generate --type create-plan --prompt-file prompt.md
 ```
 
@@ -198,22 +198,20 @@ falling back silently.
 version: 1
 defaults:
   mode: smart
-  consensus: majority
+  max_rounds: 3
 rosters:
   name:
-    defaults:
-      mode: smart
-      consensus: majority
     reviewers:
       - provider: codex
         model: gpt-5.5
         strategy: verification-first
         mode: smart
-        persona_path: prompts/personas/security.md
+        persona: personas/security.md
 ```
 
 Allowed providers are `claude`, `codex`, and `gemini`. `strategy`, `mode`, and
-`persona_path` are optional. Persona files are loaded from disk and must exist.
+`persona` are optional. Persona files are resolved relative to the roster file
+and must exist. `consensus` is a CLI flag, not a roster YAML key.
 
 Cerberus assigns instance IDs after resolving the roster:
 
@@ -235,7 +233,7 @@ Create `~/.cerberus/rosters.yaml`:
 version: 1
 defaults:
   mode: smart
-  consensus: majority
+  max_rounds: 3
 rosters:
   default:
     reviewers:
@@ -264,7 +262,7 @@ Create `./.cerberus/rosters.yaml` in a project:
 version: 1
 defaults:
   mode: smart
-  consensus: majority
+  max_rounds: 3
 rosters:
   diverse-codex:
     reviewers:
