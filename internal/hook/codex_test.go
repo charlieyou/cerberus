@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
+	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
 	"github.com/charlieyou/cerberus/internal/telemetry"
 )
@@ -179,7 +181,8 @@ func TestHandleCodexStopPollsUntilGateStateResolves(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- handleCodexStopWithWait(payload, env, 10*time.Millisecond, time.Second)
+		_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, time.Second)
+		done <- err
 	}()
 
 	time.Sleep(30 * time.Millisecond)
@@ -206,6 +209,106 @@ func TestHandleCodexStopPollsUntilGateStateResolves(t *testing.T) {
 	}
 }
 
+func TestHandleCodexStopResponseEmitsClaudeStyleMessageOnce(t *testing.T) {
+	payload := readCodexFixture(t, "hook-payload-stop.json")
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	runRoot := filepath.Join(env.StateRoot, "codex-fixture-project", "codex-fixture-session")
+	gatePath := state.GateStatePath(runRoot)
+	severity := "blocking"
+	priority := 1
+	filePath := "internal/service.go"
+	line := 12
+	output, err := json.Marshal(reviewer.RawReviewerOutput{
+		Verdict: "FAIL",
+		Summary: "Reviewer found a blocking issue.",
+		Findings: []reviewer.RawFinding{{
+			Title:     "Missing validation",
+			Body:      "The handler trusts user input.",
+			Severity:  &severity,
+			Priority:  &priority,
+			FilePath:  &filePath,
+			LineStart: &line,
+			LineEnd:   &line,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal reviewer output: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "codex#1", output); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+	verdict := state.VerdictFail
+	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusResolved, Verdict: &verdict}); err != nil {
+		t.Fatalf("seed resolved gate: %v", err)
+	}
+
+	response, err := HandleCodexStopResponse(payload, env)
+	if err != nil {
+		t.Fatalf("HandleCodexStopResponse() error = %v", err)
+	}
+	var body map[string]string
+	if err := json.Unmarshal([]byte(response), &body); err != nil {
+		t.Fatalf("response is not JSON: %v\n%s", err, response)
+	}
+	if body["decision"] != "block" {
+		t.Fatalf("decision = %q, want block", body["decision"])
+	}
+	for _, want := range []string{"## Revision Required", "Missing validation", "internal/service.go:12", "You MUST fix"} {
+		if !strings.Contains(body["reason"], want) {
+			t.Fatalf("reason missing %q:\n%s", want, body["reason"])
+		}
+	}
+
+	second, err := HandleCodexStopResponse(payload, env)
+	if err != nil {
+		t.Fatalf("second HandleCodexStopResponse() error = %v", err)
+	}
+	if second != "" {
+		t.Fatalf("second response = %q, want empty after marker", second)
+	}
+}
+
+func TestStopHookResponseClaimsMarkerAtomically(t *testing.T) {
+	runRoot := t.TempDir()
+	verdict := state.VerdictPass
+	result := &PollResult{
+		RunRoot: runRoot,
+		Gate:    &state.GateState{Status: state.StatusResolved, Verdict: &verdict},
+	}
+
+	const calls = 16
+	responses := make(chan string, calls)
+	errs := make(chan error, calls)
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response, err := stopHookResponse(result)
+			if err != nil {
+				errs <- err
+				return
+			}
+			responses <- response
+		}()
+	}
+	wg.Wait()
+	close(responses)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("stopHookResponse() error = %v", err)
+	}
+	emitted := 0
+	for response := range responses {
+		if response != "" {
+			emitted++
+		}
+	}
+	if emitted != 1 {
+		t.Fatalf("emitted responses = %d, want 1", emitted)
+	}
+}
+
 func TestHandleCodexStopReturnsErrorAfterMaxWait(t *testing.T) {
 	payload := readCodexFixture(t, "hook-payload-stop.json")
 	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
@@ -214,7 +317,7 @@ func TestHandleCodexStopReturnsErrorAfterMaxWait(t *testing.T) {
 		t.Fatalf("seed pending gate: %v", err)
 	}
 
-	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
 	if err == nil {
 		t.Fatal("HandleCodexStop() error = nil, want timeout")
 	}
@@ -244,7 +347,7 @@ func TestHandleCodexStopIgnoresStaleCachedRunForDifferentSession(t *testing.T) {
 	}
 
 	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
-	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
 	if err != nil {
 		t.Fatalf("HandleCodexStop() error = %v, want session-b to ignore stale session-a gate", err)
 	}
@@ -276,7 +379,7 @@ func TestHandleCodexStopIgnoresPoisonedCachePointingAtDifferentSessionGate(t *te
 	}
 
 	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
-	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
 	if err != nil {
 		t.Fatalf("HandleCodexStop() error = %v, want session-b to ignore stale session-a gate", err)
 	}
@@ -310,7 +413,8 @@ func TestHandleCodexStopWaitsOnCachedRunWhenSameSessionGateUnreadable(t *testing
 	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
 	done := make(chan error, 1)
 	go func() {
-		done <- handleCodexStopWithWait(payload, env, 10*time.Millisecond, time.Second)
+		_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, time.Second)
+		done <- err
 	}()
 
 	select {
@@ -348,7 +452,7 @@ func TestHandleCodexStopReturnsErrorForMalformedGateState(t *testing.T) {
 		t.Fatalf("write malformed gate: %v", err)
 	}
 
-	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	_, err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
 	if err == nil {
 		t.Fatal("HandleCodexStop() error = nil, want malformed gate error")
 	}

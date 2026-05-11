@@ -90,6 +90,9 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "reviewer", err)
 		return nil, err
 	}
+	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
+		return nil, err
+	}
 
 	startedAt := time.Now().UTC()
 	consensus := params.Consensus

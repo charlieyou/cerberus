@@ -202,6 +202,38 @@ func TestStartDebateTelemetryFailureResolvesGate(t *testing.T) {
 	}
 }
 
+func TestStartDebateResetsAttemptScopedArtifacts(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(runRoot) error = %v", err)
+	}
+	if err := os.WriteFile(state.StopMessageMarkerPath(runRoot), []byte(`{"emitted_at":"old"}`), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 2, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+
+	_, err := (Orchestrator{Env: env}).StartDebate(Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+			{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartDebate() error = %v", err)
+	}
+	if _, err := os.Stat(state.StopMessageMarkerPath(runRoot)); !os.IsNotExist(err) {
+		t.Fatalf("marker stat err = %v, want marker removed", err)
+	}
+	if _, err := os.Stat(state.IterationsDir(runRoot)); !os.IsNotExist(err) {
+		t.Fatalf("iterations stat err = %v, want previous iterations removed", err)
+	}
+}
+
 func assertReviewerEventRoundCount(t *testing.T, events []map[string]any, eventName string, round int, want int) {
 	t.Helper()
 	got := 0

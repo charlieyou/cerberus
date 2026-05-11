@@ -25,8 +25,8 @@ func TestPluginManifestsAdvertiseV2Version(t *testing.T) {
 		if err := json.Unmarshal(data, &manifest); err != nil {
 			t.Fatalf("Unmarshal(%s) error = %v", path, err)
 		}
-		if manifest.Version != "2.0.0" {
-			t.Fatalf("%s version = %q, want 2.0.0", path, manifest.Version)
+		if manifest.Version != "2.0.1" {
+			t.Fatalf("%s version = %q, want 2.0.1", path, manifest.Version)
 		}
 	}
 }
@@ -54,7 +54,7 @@ func TestClaudeMarketplacePinsV2AndV1Rollback(t *testing.T) {
 		if plugin.Name != "cerberus" {
 			continue
 		}
-		if plugin.Version == "2.0.0" {
+		if plugin.Version == "2.0.1" {
 			hasV2 = true
 		}
 		if strings.HasPrefix(plugin.Version, "1.54.") {
@@ -63,7 +63,7 @@ func TestClaudeMarketplacePinsV2AndV1Rollback(t *testing.T) {
 		}
 	}
 	if !hasV2 {
-		t.Fatalf("%s missing cerberus marketplace entry for version 2.0.0", path)
+		t.Fatalf("%s missing cerberus marketplace entry for version 2.0.1", path)
 	}
 	if !hasV1Rollback {
 		t.Fatalf("%s missing cerberus marketplace rollback entry for version 1.54.x", path)

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-const gaPluginVersion = "2.0.0"
+const gaPluginVersion = "2.0.1"
 
 func TestManifestVersionsE2E(t *testing.T) {
 	repoRoot := manifestVersionsE2ERepoRoot(t)

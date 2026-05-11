@@ -10,6 +10,8 @@ const gateStateFilename = "gate-state.json"
 
 const sessionCacheFilename = "active-session.json"
 
+const stopMessageMarkerFilename = "stop-message-emitted.json"
+
 // GateStateFilename returns the canonical gate state file name.
 func GateStateFilename() string {
 	return gateStateFilename
@@ -36,6 +38,11 @@ func GateStatePath(runRoot string) string {
 	return filepath.Join(runRoot, gateStateFilename)
 }
 
+// StopMessageMarkerPath returns the per-attempt Stop-hook message marker path.
+func StopMessageMarkerPath(runRoot string) string {
+	return filepath.Join(runRoot, stopMessageMarkerFilename)
+}
+
 // EnsureRunDir creates the canonical run directory.
 func EnsureRunDir(runRoot string) error {
 	if err := os.MkdirAll(runRoot, 0o755); err != nil {
@@ -47,6 +54,23 @@ func EnsureRunDir(runRoot string) error {
 // IterationDir returns the canonical iteration directory for a 1-based index.
 func IterationDir(runRoot string, n int) string {
 	return filepath.Join(runRoot, "iterations", fmt.Sprintf("%d", n))
+}
+
+// IterationsDir returns the directory containing all attempt iteration state.
+func IterationsDir(runRoot string) string {
+	return filepath.Join(runRoot, "iterations")
+}
+
+// ResetReviewAttemptArtifacts removes state that must not leak between
+// consecutive review attempts that reuse the same run root.
+func ResetReviewAttemptArtifacts(runRoot string) error {
+	if err := os.Remove(StopMessageMarkerPath(runRoot)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stop message marker: %w", err)
+	}
+	if err := os.RemoveAll(IterationsDir(runRoot)); err != nil {
+		return fmt.Errorf("remove previous iterations: %w", err)
+	}
+	return nil
 }
 
 // RoundDir returns the canonical round directory for 1-based indexes.

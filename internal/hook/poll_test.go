@@ -11,6 +11,7 @@ import (
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/host"
+	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
 )
 
@@ -115,6 +116,50 @@ func TestHandleClaudeSessionStartInitializesRunFromStdinPayload(t *testing.T) {
 	}
 }
 
+func TestHandleClaudeStopResponseEmitsClaudeStyleMessage(t *testing.T) {
+	env := &config.Env{
+		Host:       "claude",
+		StateRoot:  t.TempDir(),
+		ProjectKey: "project",
+	}
+	payload := []byte(`{"session_id":"session-123","transcript_path":"/tmp/transcript.jsonl"}`)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, "session-123")
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "claude#1", mustReviewerOutput(t, reviewer.RawReviewerOutput{
+		Verdict: "PASS",
+		Summary: "No blocking issues found.",
+	})); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+	verdict := state.VerdictPass
+	if err := state.WriteGateState(state.GateStatePath(runRoot), &state.GateState{Status: state.StatusResolved, Verdict: &verdict}); err != nil {
+		t.Fatalf("seed resolved gate: %v", err)
+	}
+
+	response, err := HandleClaudeStopResponse(payload, env)
+	if err != nil {
+		t.Fatalf("HandleClaudeStopResponse() error = %v", err)
+	}
+	var body map[string]string
+	if err := json.Unmarshal([]byte(response), &body); err != nil {
+		t.Fatalf("response is not JSON: %v\n%s", err, response)
+	}
+	if body["decision"] != "block" {
+		t.Fatalf("decision = %q, want block", body["decision"])
+	}
+	if !strings.Contains(body["reason"], "## Review Complete") || !strings.Contains(body["reason"], "Please provide a brief summary") {
+		t.Fatalf("reason = %q, want review-complete prompt", body["reason"])
+	}
+}
+
+func mustReviewerOutput(t *testing.T, output reviewer.RawReviewerOutput) []byte {
+	t.Helper()
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal reviewer output: %v", err)
+	}
+	return data
+}
+
 func TestHandleClaudeSessionStartPayloadOverridesStaleEnvRunIdentity(t *testing.T) {
 	env := &config.Env{
 		Host:           "generic",
@@ -160,7 +205,7 @@ func TestHandleClaudeStopIgnoresEnvRunKeyGateForDifferentSession(t *testing.T) {
 	}
 
 	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl"}`)
-	err := handleClaudeStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	_, err := handleClaudeStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
 	if err != nil {
 		t.Fatalf("HandleClaudeStop() error = %v, want session-b to ignore stale session-a gate", err)
 	}

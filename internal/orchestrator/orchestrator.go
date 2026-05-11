@@ -89,6 +89,9 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if existing, err := state.ReadGateState(gatePath); err == nil && existing.Status == state.StatusPending {
 		fmt.Fprintf(os.Stderr, "warning: %s is already pending at %s; starting another review may overwrite active state\n", state.GateStateFilename(), gatePath)
 	}
+	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
+		return nil, err
+	}
 
 	startedAt := time.Now().UTC()
 	mode := params.Mode

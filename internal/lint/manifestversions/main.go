@@ -30,8 +30,8 @@ func run() error {
 			failures = append(failures, fmt.Sprintf("%s: %v", path, err))
 			continue
 		}
-		if manifest.Version != "2.0.0" {
-			failures = append(failures, fmt.Sprintf("%s: version = %q, want 2.0.0", path, manifest.Version))
+		if manifest.Version != "2.0.1" {
+			failures = append(failures, fmt.Sprintf("%s: version = %q, want 2.0.1", path, manifest.Version))
 		}
 	}
 	if len(failures) > 0 {

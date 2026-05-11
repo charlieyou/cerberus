@@ -182,6 +182,31 @@ func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	}
 }
 
+func TestStartSinglePassResetsAttemptScopedArtifacts(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(runRoot) error = %v", err)
+	}
+	if err := os.WriteFile(state.StopMessageMarkerPath(runRoot), []byte(`{"emitted_at":"old"}`), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+
+	if _, err := StartSinglePass(env, testParams()); err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+	if _, err := os.Stat(state.StopMessageMarkerPath(runRoot)); !os.IsNotExist(err) {
+		t.Fatalf("marker stat err = %v, want marker removed", err)
+	}
+	if _, err := os.Stat(state.IterationsDir(runRoot)); !os.IsNotExist(err) {
+		t.Fatalf("iterations stat err = %v, want previous iterations removed", err)
+	}
+}
+
 func TestRunSinglePassUsesRosterDefaultsWhenParamsOmitted(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

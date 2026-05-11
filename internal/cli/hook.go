@@ -20,13 +20,14 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	env := config.Resolve()
+	response := ""
 	switch args[0] {
 	case "claude-stop":
-		err = hook.HandleClaudeStop(payload, env)
+		response, err = hook.HandleClaudeStopResponse(payload, env)
 	case "claude-session-start":
 		err = hook.HandleClaudeSessionStart(payload, env)
 	case "codex-stop":
-		err = hook.HandleCodexStop(payload, env)
+		response, err = hook.HandleCodexStopResponse(payload, env)
 	case "codex-session-start":
 		err = hook.HandleCodexSessionStart(payload, env)
 	case "codex-prompt-submit":
@@ -39,6 +40,8 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	_ = stdout
+	if response != "" {
+		fmt.Fprint(stdout, response)
+	}
 	return 0
 }

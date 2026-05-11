@@ -20,15 +20,24 @@ type claudePayload struct {
 }
 
 func HandleClaudeStop(stdinPayload []byte, env *config.Env) error {
+	_, err := handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	return err
+}
+
+func HandleClaudeStopResponse(stdinPayload []byte, env *config.Env) (string, error) {
 	return handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
 }
 
-func handleClaudeStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) error {
+func handleClaudeStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) (string, error) {
 	_, runRoot, err := resolveHookRun(stdinPayload, env)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return PollGateState(state.GateStatePath(runRoot), pollInterval, maxWait)
+	result, err := PollGateStateResult(state.GateStatePath(runRoot), pollInterval, maxWait)
+	if err != nil {
+		return "", err
+	}
+	return stopHookResponse(result)
 }
 
 func HandleClaudeSessionStart(stdinPayload []byte, env *config.Env) error {
