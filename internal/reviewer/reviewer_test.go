@@ -179,21 +179,29 @@ func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
 
 func TestParseRejectsMissingRequiredFields(t *testing.T) {
 	for name, input := range map[string]string{
-		"missing summary":            `{"findings":[],"verdict":"PASS","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"missing overall confidence": `{"findings":[],"verdict":"PASS","summary":"ok","strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"missing peer responses":     `{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8,"strategy":"mock","round":1}`,
-		"missing finding fields":     `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"missing confidence":         `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null priority":              `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null summary":               `{"findings":[],"verdict":"PASS","summary":null,"overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null title":                 `{"findings":[{"title":null,"body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null body":                  `{"findings":[{"title":"x","body":null,"priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing summary":        `{"findings":[],"verdict":"PASS","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing finding fields": `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing confidence":     `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null priority":          `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null summary":           `{"findings":[],"verdict":"PASS","summary":null,"overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null title":             `{"findings":[{"title":null,"body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"null body":              `{"findings":[{"title":"x","body":null,"priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse() error = nil, want required field error")
 			}
 		})
+	}
+}
+
+func TestParseAcceptsOptionalDebateMetadata(t *testing.T) {
+	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "ok" {
+		t.Fatalf("Parse() = %#v, want PASS", got)
 	}
 }
 
@@ -214,6 +222,54 @@ func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
 	}
 	if got.Verdict != "PASS" || got.Summary != "ok" {
 		t.Fatalf("Parse() = %#v, want unwrapped PASS result", got)
+	}
+}
+
+func TestParseUnwrapsGeminiResponseJSON(t *testing.T) {
+	got, err := Parse([]byte("{\"session_id\":\"gemini-session\",\"response\":\"```json\\n{\\\"findings\\\":[],\\\"verdict\\\":\\\"PASS\\\",\\\"summary\\\":\\\"ok\\\",\\\"overall_confidence\\\":0.8}\\n```\",\"stats\":{}}"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "ok" {
+		t.Fatalf("Parse() = %#v, want unwrapped PASS response", got)
+	}
+}
+
+func TestParseUnwrapsCodexJSONLAgentMessage(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"working"}}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\n  \"findings\": [],\n  \"verdict\": \"PASS\",\n  \"summary\": \"ok\",\n  \"overall_confidence\": 0.8\n}"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
+	}, "\n")
+	got, err := Parse([]byte(stdout))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "ok" {
+		t.Fatalf("Parse() = %#v, want unwrapped PASS agent message", got)
+	}
+}
+
+func TestParseRejectsCodexJSONLWithoutAgentMessage(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread"}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
+	}, "\n")
+	_, err := Parse([]byte(stdout))
+	if err == nil || !strings.Contains(err.Error(), "no completed agent_message found") {
+		t.Fatalf("Parse() error = %v, want missing agent_message error", err)
+	}
+}
+
+func TestParseRejectsMalformedCodexJSONLAfterEvent(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread"}`,
+		`{"type":"item.completed",`,
+	}, "\n")
+	_, err := Parse([]byte(stdout))
+	if err == nil || !strings.Contains(err.Error(), "parse codex JSONL") {
+		t.Fatalf("Parse() error = %v, want malformed codex JSONL error", err)
 	}
 }
 

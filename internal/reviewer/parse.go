@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Parse strictly decodes reviewer stdout as JSON and validates the raw verdict.
@@ -15,21 +16,122 @@ func Parse(stdout []byte) (*RawReviewerOutput, error) {
 
 	output, err := parseRaw(stdout)
 	if err != nil {
-		var wrapper struct {
-			Result string `json:"result"`
+		providerOutput, ok, providerErr := parseProviderOutput(stdout)
+		if providerErr != nil {
+			return nil, providerErr
 		}
-		if wrapperErr := json.Unmarshal(stdout, &wrapper); wrapperErr != nil || wrapper.Result == "" {
+		if !ok {
 			return nil, err
 		}
-		output, err = parseRaw([]byte(wrapper.Result))
-		if err != nil {
-			return nil, fmt.Errorf("parse claude result JSON: %w", err)
+		if providerOutput == nil {
+			return nil, fmt.Errorf("parse reviewer JSON: provider output parser returned no reviewer output")
 		}
+		output = providerOutput
 	}
 	if err := validate(output); err != nil {
 		return nil, err
 	}
 	return output, nil
+}
+
+func parseProviderOutput(stdout []byte) (*RawReviewerOutput, bool, error) {
+	if output, ok, err := parseClaudeResult(stdout); ok {
+		return output, true, err
+	}
+	if output, ok, err := parseGeminiResponse(stdout); ok {
+		return output, true, err
+	}
+	if output, ok, err := parseCodexJSONL(stdout); ok {
+		return output, true, err
+	}
+	return nil, false, nil
+}
+
+func parseClaudeResult(stdout []byte) (*RawReviewerOutput, bool, error) {
+	var wrapper struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(stdout, &wrapper); err != nil || wrapper.Result == "" {
+		return nil, false, nil
+	}
+	output, err := parseRaw([]byte(wrapper.Result))
+	if err != nil {
+		return nil, true, fmt.Errorf("parse claude result JSON: %w", err)
+	}
+	return output, true, nil
+}
+
+func parseGeminiResponse(stdout []byte) (*RawReviewerOutput, bool, error) {
+	var wrapper struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal(stdout, &wrapper); err != nil || wrapper.Response == "" {
+		return nil, false, nil
+	}
+	output, err := parseRaw([]byte(stripMarkdownFence(wrapper.Response)))
+	if err != nil {
+		return nil, true, fmt.Errorf("parse gemini response JSON: %w", err)
+	}
+	return output, true, nil
+}
+
+func parseCodexJSONL(stdout []byte) (*RawReviewerOutput, bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(stdout))
+	var lastAgentMessage string
+	seenEvent := false
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				break
+			}
+			if seenEvent {
+				return nil, true, fmt.Errorf("parse codex JSONL: %w", err)
+			}
+			return nil, false, nil
+		}
+		if event.Type == "" {
+			return nil, false, nil
+		}
+		seenEvent = true
+		if event.Type == "item.completed" && event.Item.Type == "agent_message" && strings.TrimSpace(event.Item.Text) != "" {
+			lastAgentMessage = event.Item.Text
+		}
+	}
+	if lastAgentMessage == "" {
+		if seenEvent {
+			return nil, true, fmt.Errorf("parse codex JSONL: no completed agent_message found")
+		}
+		return nil, false, nil
+	}
+	output, err := parseRaw([]byte(stripMarkdownFence(lastAgentMessage)))
+	if err != nil {
+		return nil, true, fmt.Errorf("parse codex agent_message JSON: %w", err)
+	}
+	return output, true, nil
+}
+
+func stripMarkdownFence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 2 {
+		return trimmed
+	}
+	if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+		lines = lines[1 : len(lines)-1]
+	} else {
+		lines = lines[1:]
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func parseRaw(stdout []byte) (*RawReviewerOutput, error) {
@@ -53,7 +155,7 @@ func validateRequiredFields(stdout []byte) error {
 	if err := json.Unmarshal(stdout, &raw); err != nil {
 		return fmt.Errorf("parse reviewer JSON fields: %w", err)
 	}
-	for _, key := range []string{"findings", "verdict", "summary", "overall_confidence", "strategy", "round", "peer_responses_seen"} {
+	for _, key := range []string{"findings", "verdict", "summary"} {
 		if _, ok := raw[key]; !ok {
 			return fmt.Errorf("reviewer %s is required", key)
 		}
