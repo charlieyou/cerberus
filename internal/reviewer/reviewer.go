@@ -29,10 +29,12 @@ type ProviderInvocation struct {
 	Root               string
 	ClaudeOutputFormat string
 	ClaudeModelFlag    bool
+	OnStart            func(pid int)
 }
 
 // ProviderOutput is the raw captured output from one provider CLI subprocess.
 type ProviderOutput struct {
+	PID    int
 	Stdout []byte
 	Stderr []byte
 }

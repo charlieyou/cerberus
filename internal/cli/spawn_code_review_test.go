@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -686,8 +687,90 @@ func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
 	if !strings.Contains(gate.ResolutionReason, "single-pass runtime failed") {
 		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
 	}
+	events := readSpawnEventLog(t)
+	findSpawnEvent(t, events, telemetry.EventRuntimeStarted)
+	findSpawnEvent(t, events, telemetry.EventRuntimeFailed)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessLaunching)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessStarted)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessFailed)
 	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
 		t.Fatalf("PollGateState() error = %v", err)
+	}
+}
+
+func TestSinglePassRuntimeSuccessRecordsLifecycleEvents(t *testing.T) {
+	setSpawnTestEnv(t)
+	started, err := orchestrator.StartSinglePass(nil, orchestrator.Params{
+		Prompt: []byte("review this"),
+		Reviewers: []orchestrator.ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
+	data, err := json.Marshal(started)
+	if err != nil {
+		t.Fatalf("Marshal(started) error = %v", err)
+	}
+	if err := os.WriteFile(requestPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(request) error = %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := runSinglePassRuntime([]string{requestPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("runSinglePassRuntime exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	gate := readSpawnGate(t)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want resolved", gate.Status)
+	}
+	events := readSpawnEventLog(t)
+	findSpawnEvent(t, events, telemetry.EventRuntimeStarted)
+	findSpawnEvent(t, events, telemetry.EventRuntimeCompleted)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessLaunching)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessStarted)
+	findSpawnEvent(t, events, telemetry.EventReviewerProcessCompleted)
+}
+
+func TestStartRuntimeProcessRecordsLaunchEvents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows explicitly blocks detached runtime launch")
+	}
+	setSpawnTestEnv(t)
+	started, err := orchestrator.StartSinglePass(nil, orchestrator.Params{
+		Prompt: []byte("review this"),
+		Reviewers: []orchestrator.ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+	fakeRuntime := filepath.Join(t.TempDir(), "fake-runtime")
+	if err := os.WriteFile(fakeRuntime, []byte("#!/bin/sh\necho fake runtime $1\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake runtime) error = %v", err)
+	}
+	oldExecutable := runtimeExecutable
+	runtimeExecutable = func() (string, error) { return fakeRuntime, nil }
+	t.Cleanup(func() { runtimeExecutable = oldExecutable })
+	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
+
+	if err := startRuntimeProcess(started, requestPath, "run-single-pass", "single-pass"); err != nil {
+		t.Fatalf("startRuntimeProcess() error = %v", err)
+	}
+
+	events := readSpawnEventLog(t)
+	launching := findSpawnEvent(t, events, telemetry.EventRuntimeLaunching)
+	launched := findSpawnEvent(t, events, telemetry.EventRuntimeLaunched)
+	if launching["request_path"] != requestPath || launched["request_path"] != requestPath {
+		t.Fatalf("runtime launch events request_path = %v / %v, want %q", launching["request_path"], launched["request_path"], requestPath)
+	}
+	if _, ok := launched["pid"]; !ok {
+		t.Fatalf("runtime launched event missing pid: %#v", launched)
 	}
 }
 

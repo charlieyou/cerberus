@@ -12,10 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/orchestrator"
 	"github.com/charlieyou/cerberus/internal/roster"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 type repeatString []string
@@ -179,6 +181,7 @@ func exitCodeForError(err error, fallback int) int {
 
 var startReviewRuntime = startReviewRuntimeProcess
 var startDebateRuntime = startDebateRuntimeProcess
+var runtimeExecutable = os.Executable
 
 func startReviewRuntimeProcess(started *orchestrator.StartedRun) error {
 	requestPath := filepath.Join(started.RunRoot, "single-pass-request.json")
@@ -200,26 +203,66 @@ func startRuntimeProcess(started *orchestrator.StartedRun, requestPath, subcomma
 		return fmt.Errorf("write %s request: %w", logPrefix, err)
 	}
 
-	exe, err := os.Executable()
+	exe, err := runtimeExecutable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 	cmd := exec.Command(exe, subcommand, requestPath)
-	stdout, err := os.OpenFile(filepath.Join(started.RunRoot, logPrefix+".stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	stdoutPath := filepath.Join(started.RunRoot, logPrefix+".stdout.log")
+	stderrPath := filepath.Join(started.RunRoot, logPrefix+".stderr.log")
+	stdout, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open %s stdout log: %w", logPrefix, err)
 	}
 	defer stdout.Close()
-	stderr, err := os.OpenFile(filepath.Join(started.RunRoot, logPrefix+".stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	stderr, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open %s stderr log: %w", logPrefix, err)
 	}
 	defer stderr.Close()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if err := configureDetachedRuntime(cmd); err != nil {
+		recordRuntimeEvent(started, telemetry.EventRuntimeLaunchFailed, map[string]any{
+			"subcommand":   subcommand,
+			"log_prefix":   logPrefix,
+			"executable":   exe,
+			"request_path": requestPath,
+			"stdout_path":  stdoutPath,
+			"stderr_path":  stderrPath,
+			"error":        err.Error(),
+		})
+		return err
+	}
+	recordRuntimeEvent(started, telemetry.EventRuntimeLaunching, map[string]any{
+		"subcommand":   subcommand,
+		"log_prefix":   logPrefix,
+		"executable":   exe,
+		"request_path": requestPath,
+		"stdout_path":  stdoutPath,
+		"stderr_path":  stderrPath,
+	})
 	if err := cmd.Start(); err != nil {
+		recordRuntimeEvent(started, telemetry.EventRuntimeLaunchFailed, map[string]any{
+			"subcommand":   subcommand,
+			"log_prefix":   logPrefix,
+			"executable":   exe,
+			"request_path": requestPath,
+			"stdout_path":  stdoutPath,
+			"stderr_path":  stderrPath,
+			"error":        err.Error(),
+		})
 		return fmt.Errorf("start %s runtime: %w", logPrefix, err)
 	}
+	recordRuntimeEvent(started, telemetry.EventRuntimeLaunched, map[string]any{
+		"subcommand":   subcommand,
+		"log_prefix":   logPrefix,
+		"executable":   exe,
+		"request_path": requestPath,
+		"stdout_path":  stdoutPath,
+		"stderr_path":  stderrPath,
+		"pid":          cmd.Process.Pid,
+	})
 	return cmd.Process.Release()
 }
 
@@ -238,7 +281,19 @@ func runSinglePassRuntime(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	recordRuntimeEvent(&started, telemetry.EventRuntimeStarted, map[string]any{
+		"subcommand":   "run-single-pass",
+		"request_path": args[0],
+		"pid":          os.Getpid(),
+		"ppid":         os.Getppid(),
+	})
 	if err := orchestrator.CompleteSinglePass(context.Background(), &started, nil); err != nil {
+		recordRuntimeEvent(&started, telemetry.EventRuntimeFailed, map[string]any{
+			"subcommand":   "run-single-pass",
+			"request_path": args[0],
+			"pid":          os.Getpid(),
+			"error":        err.Error(),
+		})
 		if resolveErr := orchestrator.ResolveSinglePassFailure(&started, err); resolveErr != nil {
 			fmt.Fprintf(stderr, "%v\nfailed to resolve gate after runtime error: %v\n", err, resolveErr)
 		} else {
@@ -246,6 +301,11 @@ func runSinglePassRuntime(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	recordRuntimeEvent(&started, telemetry.EventRuntimeCompleted, map[string]any{
+		"subcommand":   "run-single-pass",
+		"request_path": args[0],
+		"pid":          os.Getpid(),
+	})
 	_ = stdout
 	return 0
 }
@@ -265,7 +325,19 @@ func runDebateRuntime(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	recordRuntimeEvent(&started, telemetry.EventRuntimeStarted, map[string]any{
+		"subcommand":   "run-debate",
+		"request_path": args[0],
+		"pid":          os.Getpid(),
+		"ppid":         os.Getppid(),
+	})
 	if _, err := (orchestrator.Orchestrator{}).CompleteDebate(context.Background(), &started); err != nil {
+		recordRuntimeEvent(&started, telemetry.EventRuntimeFailed, map[string]any{
+			"subcommand":   "run-debate",
+			"request_path": args[0],
+			"pid":          os.Getpid(),
+			"error":        err.Error(),
+		})
 		if resolveErr := orchestrator.ResolveDebateFailure(&started, err); resolveErr != nil {
 			fmt.Fprintf(stderr, "%v\nfailed to resolve gate after debate runtime error: %v\n", err, resolveErr)
 		} else {
@@ -273,8 +345,31 @@ func runDebateRuntime(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	recordRuntimeEvent(&started, telemetry.EventRuntimeCompleted, map[string]any{
+		"subcommand":   "run-debate",
+		"request_path": args[0],
+		"pid":          os.Getpid(),
+	})
 	_ = stdout
 	return 0
+}
+
+func recordRuntimeEvent(started *orchestrator.StartedRun, eventName string, payload map[string]any) {
+	if started == nil || started.RunRoot == "" {
+		return
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["run_key"] = started.Env.RunKey
+	payload["host"] = started.Env.Host
+	payload["project_key"] = started.Env.ProjectKey
+	payload["session_id"] = started.Env.SessionID
+	_ = telemetry.WriteEvent(started.RunRoot, telemetry.Event{
+		Event:     eventName,
+		Timestamp: time.Now().UTC(),
+		Payload:   payload,
+	})
 }
 
 type spawnCodeReviewOptions struct {

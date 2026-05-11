@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/roster"
 	"github.com/charlieyou/cerberus/internal/state"
+	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
 // Runner spawns provider CLIs and persists per-reviewer artifacts.
@@ -79,6 +81,17 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		}
 	}
 
+	stdoutPath := ""
+	stderrPath := ""
+	if reviewerDir != "" {
+		stdoutPath = filepath.Join(reviewerDir, "stdout.log")
+		stderrPath = filepath.Join(reviewerDir, "stderr.log")
+	}
+	processStartedAt := time.Now().UTC()
+	writeReviewerProcessEvent(runRoot, telemetry.EventReviewerProcessLaunching, request, iteration, round, processStartedAt, map[string]any{
+		"stdout_path": stdoutPath,
+		"stderr_path": stderrPath,
+	})
 	output, runErr := RunProvider(ctx, ProviderInvocation{
 		Label:              "reviewer " + request.ID,
 		InstanceID:         request.ID,
@@ -90,18 +103,42 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		Root:               firstNonEmpty(request.Root, runner.Root),
 		ClaudeOutputFormat: "json",
 		ClaudeModelFlag:    true,
+		OnStart: func(pid int) {
+			writeReviewerProcessEvent(runRoot, telemetry.EventReviewerProcessStarted, request, iteration, round, time.Now().UTC(), map[string]any{
+				"pid":         pid,
+				"stdout_path": stdoutPath,
+				"stderr_path": stderrPath,
+			})
+		},
 	})
 	if reviewerDir != "" {
-		if err := os.WriteFile(filepath.Join(reviewerDir, "stdout.log"), output.Stdout, 0o644); err != nil {
+		if err := os.WriteFile(stdoutPath, output.Stdout, 0o644); err != nil {
 			return Response{}, fmt.Errorf("write reviewer stdout log: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(reviewerDir, "stderr.log"), output.Stderr, 0o644); err != nil {
+		if err := os.WriteFile(stderrPath, output.Stderr, 0o644); err != nil {
 			return Response{}, fmt.Errorf("write reviewer stderr log: %w", err)
 		}
 	}
 	if runErr != nil {
+		writeReviewerProcessEvent(runRoot, telemetry.EventReviewerProcessFailed, request, iteration, round, time.Now().UTC(), map[string]any{
+			"pid":          output.PID,
+			"stdout_path":  stdoutPath,
+			"stderr_path":  stderrPath,
+			"stdout_bytes": len(output.Stdout),
+			"stderr_bytes": len(output.Stderr),
+			"duration_ms":  time.Since(processStartedAt).Milliseconds(),
+			"error":        runErr.Error(),
+		})
 		return Response{}, runErr
 	}
+	writeReviewerProcessEvent(runRoot, telemetry.EventReviewerProcessCompleted, request, iteration, round, time.Now().UTC(), map[string]any{
+		"pid":          output.PID,
+		"stdout_path":  stdoutPath,
+		"stderr_path":  stderrPath,
+		"stdout_bytes": len(output.Stdout),
+		"stderr_bytes": len(output.Stderr),
+		"duration_ms":  time.Since(processStartedAt).Milliseconds(),
+	})
 
 	tokens, costUSD := extractUsage(output.Stdout)
 	parsed, err := Parse(output.Stdout)
@@ -133,10 +170,38 @@ func RunProvider(ctx context.Context, invocation ProviderInvocation) (ProviderOu
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 
-	if err := command.Run(); err != nil {
-		return ProviderOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("%s failed: %w; stderr: %s", firstNonEmpty(invocation.Label, invocation.Provider), err, stderr.String())
+	if err := command.Start(); err != nil {
+		return ProviderOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("%s failed to start: %w; stderr: %s", firstNonEmpty(invocation.Label, invocation.Provider), err, stderr.String())
 	}
-	return ProviderOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
+	pid := command.Process.Pid
+	if invocation.OnStart != nil {
+		invocation.OnStart(pid)
+	}
+	if err := command.Wait(); err != nil {
+		return ProviderOutput{PID: pid, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("%s failed: %w; stderr: %s", firstNonEmpty(invocation.Label, invocation.Provider), err, stderr.String())
+	}
+	return ProviderOutput{PID: pid, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
+}
+
+func writeReviewerProcessEvent(runRoot string, eventName string, request Request, iteration, round int, at time.Time, extra map[string]any) {
+	if runRoot == "" {
+		return
+	}
+	payload := map[string]any{
+		"reviewer_id": request.ID,
+		"provider":    request.Provider,
+		"model":       request.Model,
+		"iteration":   firstPositive(iteration, 1),
+		"round":       firstPositive(round, 1),
+	}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	_ = telemetry.WriteEvent(runRoot, telemetry.Event{
+		Event:     eventName,
+		Timestamp: at,
+		Payload:   payload,
+	})
 }
 
 func extractUsage(stdout []byte) (Tokens, float64) {
