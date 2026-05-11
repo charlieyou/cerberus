@@ -11,8 +11,8 @@ are documented in the main [README](../README.md):
 
 - Install prerequisites and build behavior: [README install](../README.md#install)
 - Host-neutral environment variables: [README env contract](../README.md#environment-contract)
-- Roster file locations and schema: [README roster configuration](../README.md#roster-configuration)
-- Code-review invocation flags: [README review-code](../README.md#review-code)
+- Roster file locations and schema: [README reviewer rosters](../README.md#reviewer-rosters)
+- Code-review invocation flags: [README code review](../README.md#code-review)
 
 ## Install And Enable
 
@@ -125,7 +125,7 @@ manually resolve a gate that you intentionally want to clear.
 
 Roster files are shared across hosts. The schema, search order, and merge rules
 are shared Cerberus behavior; see
-[README roster configuration](../README.md#roster-configuration) for the
+[README reviewer rosters](../README.md#reviewer-rosters) for the
 canonical roster contract.
 
 This Codex-only roster runs three independent Codex reviewers with distinct
@@ -178,8 +178,9 @@ rosters:
 ```
 
 Gemini reviewers run under the same read-only policy on Codex as they do on
-Claude Code. The policy file and environment override are documented in
-[README environment contract](../README.md#environment-contract).
+Claude Code. Cerberus derives that policy path from the plugin root:
+`$CERBERUS_ROOT/config/gemini-readonly-policy.toml`. If the file is missing,
+Gemini preflight fails instead of running without the read-only policy.
 
 ## Default Roster Degradation
 
@@ -285,10 +286,9 @@ provider CLI.
 
 Gemini appears to have write access
 
-Confirm the Gemini policy path in the shared
-[README environment contract](../README.md#environment-contract) and
-verify that your custom environment has not overridden or removed the policy
-file. Cerberus expects the same Gemini read-only policy under Codex and Claude.
+Confirm that `$CERBERUS_ROOT/config/gemini-readonly-policy.toml` exists in the
+plugin or checkout root. Cerberus expects the same Gemini read-only policy under
+Codex and Claude, and Gemini preflight fails if the policy file is missing.
 
 First hook invocation is slow
 
