@@ -41,10 +41,12 @@ func TestCodexDefaultRosterDegradesToCodexOnlyAndRuns(t *testing.T) {
 	if !strings.Contains(out, "review spawned") {
 		t.Fatalf("output = %q, want review spawned", out)
 	}
-	if _, err := os.Stat(filepath.Join(stateRoot, "codex-degrade", "codex-only", "gate-state.json")); err != nil {
+	runRoot := filepath.Join(stateRoot, "codex-degrade", "codex-only")
+	if _, err := os.Stat(filepath.Join(runRoot, "gate-state.json")); err != nil {
 		t.Fatalf("gate-state.json not created for degraded codex-only run: %v", err)
 	}
-	waitForIntegrationFile(t, filepath.Join(stateRoot, "codex-degrade", "codex-only", "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
+	waitForResolvedGate(t, runRoot)
+	waitForIntegrationFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
 }
 
 func TestDefaultRosterDegradesMissingGeminiToTwoSlots(t *testing.T) {

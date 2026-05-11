@@ -146,6 +146,34 @@ func TestHandleClaudeSessionStartPayloadOverridesStaleEnvRunIdentity(t *testing.
 	}
 }
 
+func TestHandleClaudeStopIgnoresEnvRunKeyGateForDifferentSession(t *testing.T) {
+	env := &config.Env{
+		Host:       "generic",
+		StateRoot:  t.TempDir(),
+		ProjectKey: "project",
+		RunKey:     "run-a",
+		SessionID:  "session-a",
+	}
+	staleGatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, "run-a"))
+	if err := state.WriteGateState(staleGatePath, &state.GateState{Status: state.StatusPending, SessionID: "session-a"}); err != nil {
+		t.Fatalf("seed stale pending gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl"}`)
+	err := handleClaudeStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	if err != nil {
+		t.Fatalf("HandleClaudeStop() error = %v, want session-b to ignore stale session-a gate", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "event-log.jsonl")); err != nil {
+		t.Fatalf("session-b allowed event missing: %v", err)
+	}
+	staleEventsPath := filepath.Join(env.StateRoot, env.ProjectKey, "run-a", "event-log.jsonl")
+	if _, err := os.Stat(staleEventsPath); !os.IsNotExist(err) {
+		t.Fatalf("stale run was polled; stat %s err = %v", staleEventsPath, err)
+	}
+}
+
 func TestHandleClaudeSessionStartPayloadCWDOverridesProcessCWDAndStaleProjectKey(t *testing.T) {
 	pluginRoot := t.TempDir()
 	projectRoot := t.TempDir()
@@ -193,7 +221,7 @@ func TestHandleClaudeSessionStartPayloadCWDOverridesProcessCWDAndStaleProjectKey
 	}
 }
 
-func TestHandleCodexPromptSubmitPreservesActiveEnvRunKeyAcrossSessionRefresh(t *testing.T) {
+func TestHandleCodexPromptSubmitIgnoresEnvRunKeyGateForDifferentSession(t *testing.T) {
 	env := &config.Env{
 		Host:       "generic",
 		StateRoot:  t.TempDir(),
@@ -210,23 +238,23 @@ func TestHandleCodexPromptSubmitPreservesActiveEnvRunKeyAcrossSessionRefresh(t *
 		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "session-a", "session.json"))
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "session.json"))
 	if err != nil {
-		t.Fatalf("read preserved session.json: %v", err)
+		t.Fatalf("read current session.json: %v", err)
 	}
 	var got map[string]string
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal session.json: %v", err)
 	}
-	if got["run_key"] != "session-a" || got["session_id"] != "session-b" || got["transcript_path"] != "/tmp/current.jsonl" {
-		t.Fatalf("session.json = %#v, want preserved run key with refreshed Codex session id", got)
+	if got["run_key"] != "session-b" || got["session_id"] != "session-b" || got["transcript_path"] != "/tmp/current.jsonl" {
+		t.Fatalf("session.json = %#v, want current session run key", got)
 	}
-	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("refreshed Codex session id was incorrectly used as run key; stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-a", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale env run was incorrectly refreshed; stat err = %v", err)
 	}
 }
 
-func TestHandleCodexPromptSubmitPreservesActiveRunKeyWithoutEnvRunKey(t *testing.T) {
+func TestHandleCodexPromptSubmitIgnoresProjectPendingGateForDifferentSession(t *testing.T) {
 	env := &config.Env{
 		Host:       "generic",
 		StateRoot:  t.TempDir(),
@@ -242,23 +270,23 @@ func TestHandleCodexPromptSubmitPreservesActiveRunKeyWithoutEnvRunKey(t *testing
 		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "session-a", "session.json"))
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "session.json"))
 	if err != nil {
-		t.Fatalf("read preserved session.json: %v", err)
+		t.Fatalf("read current session.json: %v", err)
 	}
 	var got map[string]string
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal session.json: %v", err)
 	}
-	if got["run_key"] != "session-a" || got["session_id"] != "session-b" {
-		t.Fatalf("session.json = %#v, want discovered active run key with refreshed Codex session id", got)
+	if got["run_key"] != "session-b" || got["session_id"] != "session-b" {
+		t.Fatalf("session.json = %#v, want current session run key", got)
 	}
-	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-b", "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("refreshed Codex session id was incorrectly used as run key; stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(env.StateRoot, env.ProjectKey, "session-a", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("project pending gate was incorrectly refreshed; stat err = %v", err)
 	}
 }
 
-func TestHandleCodexPromptSubmitDiscoversProjectScopedCodexRunKey(t *testing.T) {
+func TestHandleCodexPromptSubmitIgnoresProjectScopedCodexRunKeyForDifferentSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -276,7 +304,7 @@ func TestHandleCodexPromptSubmitDiscoversProjectScopedCodexRunKey(t *testing.T) 
 		t.Fatalf("StateRoot() error = %v", err)
 	}
 	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, "active-run"))
-	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusPending}); err != nil {
+	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusPending, SessionID: "other-session"}); err != nil {
 		t.Fatalf("seed active gate: %v", err)
 	}
 
@@ -285,19 +313,19 @@ func TestHandleCodexPromptSubmitDiscoversProjectScopedCodexRunKey(t *testing.T) 
 		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(env.StateRoot, "active-run", "session.json"))
+	data, err := os.ReadFile(filepath.Join(env.StateRoot, "codex-session-refresh", "session.json"))
 	if err != nil {
-		t.Fatalf("read discovered session.json: %v", err)
+		t.Fatalf("read current session.json: %v", err)
 	}
 	var got map[string]string
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal session.json: %v", err)
 	}
-	if got["run_key"] != "active-run" || got["session_id"] != "codex-session-refresh" {
-		t.Fatalf("session.json = %#v, want discovered active run key with refreshed Codex session id", got)
+	if got["run_key"] != "codex-session-refresh" || got["session_id"] != "codex-session-refresh" {
+		t.Fatalf("session.json = %#v, want current session run key", got)
 	}
-	if _, err := os.Stat(filepath.Join(env.StateRoot, "codex-session-refresh", "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("refreshed Codex session id was incorrectly used as run key; stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "active-run", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("project-scoped active run was incorrectly refreshed; stat err = %v", err)
 	}
 }
 

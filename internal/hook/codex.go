@@ -2,6 +2,7 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -165,38 +166,29 @@ func writeCodexHookAllowed(runRoot string, env *config.Env) error {
 }
 
 func activeCodexRunKey(env *config.Env, payloadSessionID string) (string, bool) {
-	if env.StateRoot == "" || env.ProjectKey == "" {
+	if env.StateRoot == "" || env.ProjectKey == "" || payloadSessionID == "" {
 		return "", false
 	}
-	if hasGateState(env.StateRoot, env.ProjectKey, env.RunKey) {
+	if matchSessionGate(env, env.RunKey, payloadSessionID) == sessionGateMatches {
 		return env.RunKey, true
 	}
-	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
+	if matchSessionGate(env, payloadSessionID, payloadSessionID) == sessionGateMatches {
 		return payloadSessionID, true
 	}
-	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
-	if err == nil && cache.SessionID == payloadSessionID && cache.RunKey != "" {
-		return cache.RunKey, true
-	}
-	return scanCodexProjectRunKey(env.StateRoot, env.ProjectKey)
+	return cachedRunKeyForSession(env, payloadSessionID)
 }
 
 func activeCodexStopRunKey(env *config.Env, payloadSessionID string) (string, bool) {
-	if env.StateRoot == "" || env.ProjectKey == "" {
+	if env.StateRoot == "" || env.ProjectKey == "" || payloadSessionID == "" {
 		return "", false
 	}
-	if env.RunKey == payloadSessionID && hasGateState(env.StateRoot, env.ProjectKey, env.RunKey) {
+	if matchSessionGate(env, env.RunKey, payloadSessionID) == sessionGateMatches {
 		return env.RunKey, true
 	}
-	if hasGateState(env.StateRoot, env.ProjectKey, payloadSessionID) {
+	if matchSessionGate(env, payloadSessionID, payloadSessionID) == sessionGateMatches {
 		return payloadSessionID, true
 	}
-	if cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey)); err == nil {
-		if cache.SessionID == payloadSessionID && cache.RunKey != "" {
-			return cache.RunKey, true
-		}
-	}
-	return "", false
+	return cachedRunKeyForSession(env, payloadSessionID)
 }
 
 func hasGateState(stateRoot, projectKey, runKey string) bool {
@@ -207,24 +199,44 @@ func hasGateState(stateRoot, projectKey, runKey string) bool {
 	return err == nil
 }
 
-func scanCodexProjectRunKey(stateRoot, projectKey string) (string, bool) {
-	pattern := state.GateStatePath(state.RunDir(stateRoot, projectKey, "*"))
-	matches, err := filepath.Glob(pattern)
+type sessionGateMatch int
+
+const (
+	sessionGateMissing sessionGateMatch = iota
+	sessionGateMatches
+	sessionGateDifferent
+	sessionGateUnreadable
+)
+
+func matchSessionGate(env *config.Env, runKey, sessionID string) sessionGateMatch {
+	if runKey == "" || sessionID == "" {
+		return sessionGateMissing
+	}
+	gate, err := state.ReadGateState(state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, runKey)))
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return sessionGateMissing
+		}
+		if runKey == sessionID && hasGateState(env.StateRoot, env.ProjectKey, runKey) {
+			return sessionGateMatches
+		}
+		return sessionGateUnreadable
+	}
+	if runKey == sessionID || gate.SessionID == sessionID {
+		return sessionGateMatches
+	}
+	return sessionGateDifferent
+}
+
+func cachedRunKeyForSession(env *config.Env, sessionID string) (string, bool) {
+	cache, err := state.ReadSessionCache(state.SessionCachePath(env.StateRoot, env.ProjectKey))
+	if err != nil || cache.SessionID != sessionID || cache.RunKey == "" {
 		return "", false
 	}
-
-	for _, path := range matches {
-		gate, err := state.ReadGateState(path)
-		if err != nil {
-			continue
-		}
-		runKey := filepath.Base(filepath.Dir(path))
-		if gate.Status == state.StatusPending {
-			return runKey, true
-		}
+	if matchSessionGate(env, cache.RunKey, sessionID) == sessionGateDifferent {
+		return "", false
 	}
-	return "", false
+	return cache.RunKey, true
 }
 
 func decodeCodexPayload(stdinPayload []byte) (codexPayload, error) {

@@ -81,6 +81,39 @@ func TestCodexSessionInitPreservesCachedRunKeyForSameSession(t *testing.T) {
 	}
 }
 
+func TestCodexSessionInitPreservesCachedRunWhenSameSessionGateUnreadable(t *testing.T) {
+	payload := []byte(`{"session_id":"codex-session","transcript_path":"/tmp/current.jsonl","project_key":"project"}`)
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "codex-session",
+		CodexSessionID: "codex-session",
+		RunKey:         "existing-run",
+		TranscriptPath: "/tmp/old.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	gatePath := filepath.Join(env.StateRoot, "project", "existing-run", "gate-state.json")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatalf("create gate dir: %v", err)
+	}
+	if err := os.WriteFile(gatePath, []byte(`{"status":`), 0o644); err != nil {
+		t.Fatalf("write malformed gate: %v", err)
+	}
+
+	if err := HandleCodexPromptSubmit(payload, env); err != nil {
+		t.Fatalf("HandleCodexPromptSubmit() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "existing-run", "session.json")); err != nil {
+		t.Fatalf("cached run session.json missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "codex-session", "session.json")); !os.IsNotExist(err) {
+		t.Fatalf("payload session run was incorrectly used; stat err = %v", err)
+	}
+}
+
 func TestCodexSessionInitIgnoresStaleCachedRunKeyForNewSession(t *testing.T) {
 	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
 	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
@@ -222,6 +255,85 @@ func TestHandleCodexStopIgnoresStaleCachedRunForDifferentSession(t *testing.T) {
 	staleEventsPath := filepath.Join(env.StateRoot, "project", "run-a", "event-log.jsonl")
 	if _, err := os.Stat(staleEventsPath); !os.IsNotExist(err) {
 		t.Fatalf("stale run was polled; stat %s err = %v", staleEventsPath, err)
+	}
+}
+
+func TestHandleCodexStopIgnoresPoisonedCachePointingAtDifferentSessionGate(t *testing.T) {
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "session-b",
+		CodexSessionID: "session-b",
+		RunKey:         "run-a",
+		TranscriptPath: "/tmp/session-b.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	staleGatePath := filepath.Join(env.StateRoot, "project", "run-a", "gate-state.json")
+	if err := state.WriteGateState(staleGatePath, &state.GateState{Status: state.StatusPending, SessionID: "session-a"}); err != nil {
+		t.Fatalf("seed stale pending gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
+	err := handleCodexStopWithWait(payload, env, 10*time.Millisecond, 30*time.Millisecond)
+	if err != nil {
+		t.Fatalf("HandleCodexStop() error = %v, want session-b to ignore stale session-a gate", err)
+	}
+
+	staleEventsPath := filepath.Join(env.StateRoot, "project", "run-a", "event-log.jsonl")
+	if _, err := os.Stat(staleEventsPath); !os.IsNotExist(err) {
+		t.Fatalf("stale run was polled; stat %s err = %v", staleEventsPath, err)
+	}
+}
+
+func TestHandleCodexStopWaitsOnCachedRunWhenSameSessionGateUnreadable(t *testing.T) {
+	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}
+	if err := state.WriteSessionCache(state.SessionCachePath(env.StateRoot, "project"), &state.SessionCache{
+		Host:           "codex",
+		ProjectKey:     "project",
+		SessionID:      "session-b",
+		CodexSessionID: "session-b",
+		RunKey:         "run-b",
+		TranscriptPath: "/tmp/session-b.jsonl",
+	}); err != nil {
+		t.Fatalf("WriteSessionCache() error = %v", err)
+	}
+	gatePath := filepath.Join(env.StateRoot, "project", "run-b", "gate-state.json")
+	if err := os.MkdirAll(filepath.Dir(gatePath), 0o755); err != nil {
+		t.Fatalf("create gate dir: %v", err)
+	}
+	if err := os.WriteFile(gatePath, []byte(`{"status":`), 0o644); err != nil {
+		t.Fatalf("write malformed gate: %v", err)
+	}
+
+	payload := []byte(`{"session_id":"session-b","transcript_path":"/tmp/session-b.jsonl","project_key":"project"}`)
+	done := make(chan error, 1)
+	go func() {
+		done <- handleCodexStopWithWait(payload, env, 10*time.Millisecond, time.Second)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("HandleCodexStop() returned before same-session gate became readable: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	verdict := state.VerdictPass
+	if err := state.WriteGateState(gatePath, &state.GateState{Status: state.StatusResolved, SessionID: "session-b", Verdict: &verdict}); err != nil {
+		t.Fatalf("write resolved gate: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("HandleCodexStop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HandleCodexStop() did not return after same-session gate resolved")
+	}
+
+	if _, err := os.Stat(filepath.Join(env.StateRoot, "project", "session-b", "event-log.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("payload session run was incorrectly polled; stat err = %v", err)
 	}
 }
 
