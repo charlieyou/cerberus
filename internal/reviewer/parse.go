@@ -54,7 +54,7 @@ func parseClaudeResult(stdout []byte) (*RawReviewerOutput, bool, error) {
 	if err := json.Unmarshal(stdout, &wrapper); err != nil || wrapper.Result == "" {
 		return nil, false, nil
 	}
-	output, err := parseRaw([]byte(wrapper.Result))
+	output, err := parseRawOrEmbedded([]byte(wrapper.Result))
 	if err != nil {
 		return nil, true, fmt.Errorf("parse claude result JSON: %w", err)
 	}
@@ -115,6 +115,54 @@ func parseCodexJSONL(stdout []byte) (*RawReviewerOutput, bool, error) {
 		return nil, true, fmt.Errorf("parse codex agent_message JSON: %w", err)
 	}
 	return output, true, nil
+}
+
+func parseRawOrEmbedded(stdout []byte) (*RawReviewerOutput, error) {
+	trimmed := []byte(stripMarkdownFence(string(stdout)))
+	if output, err := parseRaw(trimmed); err == nil {
+		return output, nil
+	}
+	var lastOutput *RawReviewerOutput
+	var lastCandidateErr error
+	for offset, char := range trimmed {
+		if char != '{' {
+			continue
+		}
+		decoder := json.NewDecoder(bytes.NewReader(trimmed[offset:]))
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			continue
+		}
+		if !looksLikeReviewerObject(raw) {
+			continue
+		}
+		output, err := parseRaw(raw)
+		if err == nil {
+			lastOutput = output
+		} else {
+			lastCandidateErr = err
+		}
+	}
+	if lastOutput != nil {
+		return lastOutput, nil
+	}
+	if lastCandidateErr != nil {
+		return nil, lastCandidateErr
+	}
+	return parseRaw(trimmed)
+}
+
+func looksLikeReviewerObject(raw []byte) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return false
+	}
+	for _, key := range []string{"findings", "verdict", "summary"} {
+		if _, ok := object[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func stripMarkdownFence(text string) string {

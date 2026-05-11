@@ -225,6 +225,46 @@ func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
 	}
 }
 
+func TestParseUnwrapsClaudeResultJSONAfterProse(t *testing.T) {
+	got, err := Parse([]byte(`{"type":"result","result":"I checked the plan first.\n\n{\n  \"findings\": [],\n  \"verdict\": \"PASS\",\n  \"summary\": \"ok after prose\",\n  \"overall_confidence\": 0.8\n}"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "ok after prose" {
+		t.Fatalf("Parse() = %#v, want embedded PASS result", got)
+	}
+}
+
+func TestParseUnwrapsLastClaudeResultJSONAfterProse(t *testing.T) {
+	got, err := Parse([]byte(`{"type":"result","result":"Draft:\n{\"findings\":[],\"verdict\":\"FAIL\",\"summary\":\"draft\",\"overall_confidence\":0.1}\n\nFinal:\n{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"final\",\"overall_confidence\":0.9}"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.Verdict != "PASS" || got.Summary != "final" {
+		t.Fatalf("Parse() = %#v, want final embedded PASS result", got)
+	}
+}
+
+func TestParseClaudeResultWithMalformedEmbeddedJSONReturnsValidationError(t *testing.T) {
+	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[],\"verdict\":\"PASS\",\"overall_confidence\":0.8}"}`))
+	if err == nil {
+		t.Fatal("Parse() error = nil, want embedded validation error")
+	}
+	if !strings.Contains(err.Error(), "reviewer summary is required") {
+		t.Fatalf("Parse() error = %q, want embedded validation error", err)
+	}
+}
+
+func TestParseClaudeResultWithMalformedEmbeddedJSONIgnoresNestedFindingErrors(t *testing.T) {
+	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[{\"title\":\"x\",\"body\":\"y\",\"priority\":1,\"file_path\":null,\"line_start\":null,\"line_end\":null,\"confidence\":0.8}],\"verdict\":\"PASS\",\"overall_confidence\":0.8}"}`))
+	if err == nil {
+		t.Fatal("Parse() error = nil, want embedded validation error")
+	}
+	if !strings.Contains(err.Error(), "reviewer summary is required") {
+		t.Fatalf("Parse() error = %q, want top-level embedded validation error", err)
+	}
+}
+
 func TestParseUnwrapsGeminiResponseJSON(t *testing.T) {
 	got, err := Parse([]byte("{\"session_id\":\"gemini-session\",\"response\":\"```json\\n{\\\"findings\\\":[],\\\"verdict\\\":\\\"PASS\\\",\\\"summary\\\":\\\"ok\\\",\\\"overall_confidence\\\":0.8}\\n```\",\"stats\":{}}"))
 	if err != nil {
