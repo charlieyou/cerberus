@@ -173,7 +173,7 @@ rosters:
         model: gpt-5.4
         strategy: falsification-first
       - provider: gemini
-        model: gemini-3.1-pro
+        model: gemini-3.1-pro-preview
         strategy: decompose
 ```
 

@@ -68,7 +68,7 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 	}
 	assertNoRecordedModel(t, recordDir, "claude")
 	assertRecordedModel(t, recordDir, "codex", "gpt-5.5")
-	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
+	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertJSONOutputFlag(t, recordDir, "codex")
 	assertJSONOutputFlag(t, recordDir, "gemini")
 }

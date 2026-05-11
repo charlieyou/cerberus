@@ -154,7 +154,7 @@ func TestDefaultModelForProvider(t *testing.T) {
 	tests := map[string]string{
 		"claude": "claude-opus-4-7",
 		"codex":  "gpt-5.5",
-		"gemini": "gemini-3.1-pro",
+		"gemini": "gemini-3.1-pro-preview",
 	}
 	for provider, want := range tests {
 		got, ok := DefaultModelForProvider(provider)

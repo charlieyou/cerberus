@@ -26,7 +26,7 @@ func TestValidateInvocationAcceptsCerberusProviderArgs(t *testing.T) {
 		{
 			name:     "gemini reviewer",
 			provider: "gemini",
-			args:     []string{"--output-format", "json", "--model", "gemini-3.1-pro", "--prompt", "system", "--policy", "config/gemini-readonly-policy.toml"},
+			args:     []string{"--output-format", "json", "--model", "gemini-3.1-pro-preview", "--prompt", "system", "--policy", "config/gemini-readonly-policy.toml"},
 		},
 		{
 			name:     "direct mock smoke",
@@ -58,7 +58,7 @@ func TestValidateInvocationRejectsStaleProviderArgs(t *testing.T) {
 		{
 			name:     "gemini removed json and policy-file flags",
 			provider: "gemini",
-			args:     []string{"--json", "--model", "gemini-3.1-pro", "--append-system-prompt", "system", "--policy-file", "config/gemini-readonly-policy.toml"},
+			args:     []string{"--json", "--model", "gemini-3.1-pro-preview", "--append-system-prompt", "system", "--policy-file", "config/gemini-readonly-policy.toml"},
 		},
 	}
 

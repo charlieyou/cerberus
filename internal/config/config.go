@@ -5,7 +5,7 @@ import "os"
 const (
 	DefaultClaudeModel = "claude-opus-4-7"
 	DefaultCodexModel  = "gpt-5.5"
-	DefaultGeminiModel = "gemini-3.1-pro"
+	DefaultGeminiModel = "gemini-3.1-pro-preview"
 )
 
 // Env contains the Cerberus environment contract consumed by v2 commands.

@@ -38,7 +38,7 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	}
 	assertRecordedModel(t, "claude", "claude-opus-4-7")
 	assertRecordedModel(t, "codex", "gpt-5.5")
-	assertRecordedModel(t, "gemini", "gemini-3.1-pro")
+	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }
 
 func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
@@ -59,7 +59,7 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 	}
 	assertRecordedModel(t, "claude", "claude-opus-4-7")
 	assertRecordedModel(t, "codex", "gpt-5.5")
-	assertRecordedModel(t, "gemini", "gemini-3.1-pro")
+	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }
 
 func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {

@@ -241,7 +241,7 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 	}
 	assertGenerateNoRecordedModel(t, recordDir, "claude")
 	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.5")
-	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro")
+	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertGenerateJSONOutputFlag(t, recordDir, "codex")
 	assertGenerateJSONOutputFlag(t, recordDir, "gemini")
 }

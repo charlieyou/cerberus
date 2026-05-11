@@ -267,7 +267,7 @@ rosters:
       - provider: codex
         model: gpt-5.5
       - provider: gemini
-        model: gemini-3.1-pro
+        model: gemini-3.1-pro-preview
 ```
 
 Then run:
@@ -301,7 +301,7 @@ rosters:
         model: gpt-5.3-codex
         strategy: decompose
       - provider: gemini
-        model: gemini-3.1-pro
+        model: gemini-3.1-pro-preview
       - provider: claude
         model: opus
         strategy: synthesis
