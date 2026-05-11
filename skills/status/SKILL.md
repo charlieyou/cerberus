@@ -10,10 +10,28 @@ Before running any Bash snippet in this skill, run the shared Cerberus resolver 
 
 ```bash
 # --- shared resolver (canonical body; identical across all callers) ---
-root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+set +u
+root="${CERBERUS_ROOT:-}"
+[ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"
+[ -n "$root" ] || root="${PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+    skill_dir="${CLAUDE_SKILL_DIR}"
+    if [ -n "$skill_dir" ]; then
+        root="$(cd "$skill_dir/../.." && pwd)"
+    fi
+fi
 bin="$root/bin/cerberus"
 [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
 export CERBERUS_ROOT="$root"
+claude_session="${CLAUDE_SESSION_ID}"
+if [ "${CERBERUS_HOST:-}" = claude-code ]; then
+    export CERBERUS_HOST=claude
+fi
+if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then
+    export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"
+elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then
+    export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"
+fi
 command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
 if ! make -q -C "$root" build >/dev/null 2>&1; then
     command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }
@@ -48,10 +66,28 @@ Use the Bash tool to run the backend status command:
 
 ```bash
 # --- shared resolver (canonical body; identical across all callers) ---
-root="${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}"
+set +u
+root="${CERBERUS_ROOT:-}"
+[ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"
+[ -n "$root" ] || root="${PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+    skill_dir="${CLAUDE_SKILL_DIR}"
+    if [ -n "$skill_dir" ]; then
+        root="$(cd "$skill_dir/../.." && pwd)"
+    fi
+fi
 bin="$root/bin/cerberus"
 [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
 export CERBERUS_ROOT="$root"
+claude_session="${CLAUDE_SESSION_ID}"
+if [ "${CERBERUS_HOST:-}" = claude-code ]; then
+    export CERBERUS_HOST=claude
+fi
+if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then
+    export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"
+elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then
+    export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"
+fi
 command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
 if ! make -q -C "$root" build >/dev/null 2>&1; then
     command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }

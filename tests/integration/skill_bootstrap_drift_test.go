@@ -49,6 +49,18 @@ func TestSkillBootstrapDriftCanonicalParses(t *testing.T) {
 	if !strings.Contains(body, `export CERBERUS_ROOT="$root"`) {
 		t.Fatalf("canonical resolver body must export the resolved root for the child process")
 	}
+	for _, want := range []string{
+		`root="${CLAUDE_PLUGIN_ROOT}"`,
+		`skill_dir="${CLAUDE_SKILL_DIR}"`,
+		`claude_session="${CLAUDE_SESSION_ID}"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("canonical resolver body must use documented Claude Code substitution %q", want)
+		}
+	}
+	if strings.Contains(body, `${CLAUDE_PLUGIN_ROOT:-`) {
+		t.Fatalf("canonical resolver body must not hide CLAUDE_PLUGIN_ROOT inside shell-default expansion; Claude substitutes exact placeholders")
+	}
 	if !strings.Contains(string(data), `exec "$bin" "$@"`) {
 		t.Fatalf("canonical bootstrap must document the skill exec form")
 	}
@@ -131,6 +143,8 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 			content := string(data)
 			for _, forbidden := range []string{
 				"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}",
+				"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}}",
+				"${CLAUDE_PLUGIN_ROOT:-",
 				"$CERBERUS_ROOT/bin/cerberus",
 				`make -C "$CERBERUS_ROOT"`,
 			} {
@@ -141,6 +155,48 @@ func TestSkillCommandExamplesUsePluginRootFallback(t *testing.T) {
 			for lineNumber, line := range strings.Split(content, "\n") {
 				if strings.Contains(line, fallbackBin) {
 					t.Fatalf("%s:%d must use the lazy-build resolver instead of invoking %s directly", path, lineNumber+1, fallbackBin)
+				}
+			}
+		})
+	}
+}
+
+func TestRevisionPromptsAuthorContextExportResolvedHostState(t *testing.T) {
+	repoRoot := skillBootstrapDriftRepoRoot(t)
+	paths, err := filepath.Glob(filepath.Join(repoRoot, "prompts", "revisions", "*.md"))
+	if err != nil {
+		t.Fatalf("Glob(revision prompts) error = %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no revision prompts found")
+	}
+
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", path, err)
+			}
+			content := string(data)
+			if !strings.Contains(content, `"$bin" author-context`) {
+				t.Fatalf("%s author-context snippet must invoke the resolved bin", path)
+			}
+			for _, want := range []string{
+				`export CERBERUS_ROOT="$root"`,
+				`export CERBERUS_HOST=claude CERBERUS_SESSION_ID=`,
+				`export CERBERUS_HOST=codex CERBERUS_SESSION_ID=`,
+				`claude_session="${CLAUDE_SESSION_ID}"`,
+			} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("%s author-context snippet must include %q", path, want)
+				}
+			}
+			for _, forbidden := range []string{
+				"${CLAUDE_PLUGIN_ROOT}/bin/cerberus author-context",
+				"${CLAUDE_PLUGIN_ROOT:-",
+			} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s author-context snippet must not use %q", path, forbidden)
 				}
 			}
 		})
