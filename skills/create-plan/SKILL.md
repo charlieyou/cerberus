@@ -7,49 +7,46 @@ argument-hint: '[--mode <fast|smart|max>] [--max-rounds <N>] [--from-spec <path/
 
 ## Host-Neutral Execution
 
-Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
+Before running any Bash snippet in this skill, run the shared Cerberus resolver below. It lazily builds and executes `bin/cerberus` from the configured plugin root.
 
 ```bash
-cerberus_root=""
-cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
-case "$cerberus_plugin_root" in
-    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
-esac
-cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
-case "$cerberus_skill_dir" in
-    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
-esac
-
-cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
-if [ -n "$cerberus_skill_dir" ]; then
-    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
-fi
-cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -n "$cerberus_git_root" ]; then
-    cerberus_candidates+=("$cerberus_git_root")
-fi
-for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] \
-        && [[ "$cerberus_candidate" == /* ]] \
-        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
-        cerberus_root="$cerberus_candidate"
-        break
+# --- shared resolver (canonical body; identical across all callers) ---
+set +u
+root="${CERBERUS_ROOT:-}"
+[ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"
+[ -n "$root" ] || root="${PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+    skill_dir="${CLAUDE_SKILL_DIR}"
+    if [ -n "$skill_dir" ]; then
+        root="$(cd "$skill_dir/../.." && pwd)"
     fi
-done
-if [ -z "$cerberus_root" ]; then
-    echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
-    exit 127
 fi
-export CERBERUS_ROOT="$cerberus_root"
-# shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env"
+bin="$root/bin/cerberus"
+[ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
+export CERBERUS_ROOT="$root"
+claude_session="${CLAUDE_SESSION_ID}"
+if [ "${CERBERUS_HOST:-}" = claude-code ]; then
+    export CERBERUS_HOST=claude
+fi
+if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then
+    export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"
+elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then
+    export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"
+fi
+command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
+if ! make -q -C "$root" build >/dev/null 2>&1; then
+    command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }
+    echo "cerberus: building... (this happens once after clone or upgrade)" >&2
+    start=$(date +%s)
+    make -C "$root" build >&2 || exit $?
+    end=$(date +%s)
+    echo "cerberus: build complete in $((end-start))s" >&2
+fi
+# --- shared resolver above; per-caller exec below (allowed to diverge) ---
+exec "$bin" "$@"
 ```
 
-Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
+Use `bin/cerberus` through the configured plugin root when invoking Cerberus commands below.
 
 
 # Create Plan (Interview/Autonomous + Multi-Model Generator)
@@ -90,7 +87,7 @@ You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**, e
 
 ✅ **Follow the workflow when user asks to skip without the flag** — If user says "just generate the plan" but did not pass `--skip-interview`, explain the workflow and proceed with skeleton + interview.
 
-✅ **Write generator drafts to files** — Call the generate script which writes drafts to disk; pass file paths to the synthesis subagent.
+✅ **Write generator drafts to files** — Call `cerberus generate`, which writes drafts to disk; pass file paths to the synthesis subagent.
 
 ✅ **Delegate synthesis to a subagent** — Use the Task tool for synthesis to preserve your main context for the review gate.
 
@@ -386,7 +383,7 @@ After this pass, proceed directly to Phase 3 in the same turn.
 
 If `SKIP_INTERVIEW=false`, run the interview below.
 
-**Load the interview engine:** Read `${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/prompts/interview-engine.md` for the full mechanism. Key principles below.
+**Load the interview engine:** Read `${CLAUDE_PLUGIN_ROOT}/prompts/interview-engine.md` for the full mechanism. Key principles below.
 
 **IMPORTANT: Use the `AskUserQuestion` tool for ALL interview questions.** Put coverage + numbered questions + off-ramp in a single tool call. Plain text questions are not interactive.
 
@@ -535,7 +532,7 @@ Record the printed `PROMPT_TMP=...` value. Bash variables may not persist across
 Then populate the file:
 
 ```bash
-cat "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/prompts/generators/create-plan.md" > "$PROMPT_TMP" && cat >> "$PROMPT_TMP" <<'EOF'
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; cat "$root/prompts/generators/create-plan.md" > "$PROMPT_TMP" && cat >> "$PROMPT_TMP" <<'EOF'
 
 ## Context
 
@@ -544,20 +541,20 @@ EOF
 
 Now append the Phase 3 context (skeleton + findings + user answers or autonomous decisions) to `$PROMPT_TMP`.
 
-Spawn generators with the mode flag. The generate script requires an output directory as the first argument and writes drafts to files, returning their paths:
+Spawn generators with the mode flag. The `cerberus generate` subcommand requires an output directory as the first argument and writes drafts to files, returning their paths:
 - `fast`: ~5 minutes
 - `smart`: ~10 minutes
 - `max`: ~15 minutes
 
-If `--skip-interview` was passed to this command, add `--skip-interview` to the `bin/generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
+If `--skip-interview` was passed to this command, add `--skip-interview` to the `cerberus generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else "${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/generate" "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
+export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
 ```
 
-Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by the generate script. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
+Record the printed `OUTPUT_DIR=...` value and the exact draft paths printed by `cerberus generate`. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory. The expected draft paths are:
 - `$OUTPUT_DIR/codex/draft.md`
 - `$OUTPUT_DIR/gemini/draft.md`
 - `$OUTPUT_DIR/claude/draft.md`
@@ -574,7 +571,7 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the plan file.
 
 Draft files to read:
-[Paste the actual draft paths printed by `bin/generate`; include only existing `draft.md` files from successful generators.]
+[Paste the actual draft paths printed by `cerberus generate`; include only existing `draft.md` files from successful generators.]
 - /actual/output/dir/codex/draft.md
 - /actual/output/dir/gemini/draft.md
 - /actual/output/dir/claude/draft.md
@@ -620,9 +617,10 @@ Spawn external reviewers on the plan file. Pass `--max-rounds` so the daemon's a
 
 - If `--max-rounds <N>` was passed to this command, forward that N.
 - Otherwise forward the mode default: `fast=2`, `smart=3`, `max=5`.
+- When running under Codex, ensure `CERBERUS_HOST=codex` and `CERBERUS_SESSION_ID=$CODEX_THREAD_ID` are exported before spawning if the host variables are not already set; the command below does this automatically when `CODEX_THREAD_ID` is present and `CERBERUS_HOST` is unset or already `codex`.
 
 ```bash
-${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT}}/bin/review-gate spawn-plan-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.

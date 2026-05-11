@@ -63,7 +63,15 @@ Task review should use multi-models
 * Config-driven validation, more triggers
 * File locking + enable parallel implementers
 
+## v2.x Backlog
+
+* **D8 - Strategy / mode rotation across rounds.** Keep v2.0 fixed to one strategy per reviewer for the whole run; revisit per-round rotation after GA. Source: [spec D8](docs/2026-05-08-rebuild-spec.md#L335), [plan out of scope](docs/2026-05-08-rebuild-plan.md#L43).
+* **Q14 - K* / alpha-K telemetry.** Evaluate whether to compute effective-channel-count diagnostics as v2.x telemetry, not a v2.0 feature. Source: [spec Q14](docs/2026-05-08-rebuild-spec.md#L347), [plan Q14](docs/2026-05-08-rebuild-plan.md#L909).
+* **Q15 - Debate sparsification.** Revisit CortexDebate / S2-MAD-style sparsified communication after the v2.0 parity surface ships. Source: [spec Q15](docs/2026-05-08-rebuild-spec.md#L348), [plan Q15](docs/2026-05-08-rebuild-plan.md#L910).
+* **OQ-Plan-4 - Concurrent runs in the same project.** Add advisory-lock infrastructure if users regularly hit `gate-state.json` clobbering. Source: [plan OQ-Plan-4](docs/2026-05-08-rebuild-plan.md#L914).
+* **OQ-Plan-5 - Anonymization sophistication.** Replace the heuristic free-text scrub with a more linguistically aware scrub if debate runs show sycophancy drift. Source: [plan OQ-Plan-5](docs/2026-05-08-rebuild-plan.md#L915).
+* **OQ-Plan-6 - update-plugin replacement ergonomics.** Consider a `cerberus dev install` maintainer workflow if `make install` creates friction. Source: [plan OQ-Plan-6](docs/2026-05-08-rebuild-plan.md#L916).
+
 ## Debate
 
 * Can specify multiple of one model, or arbitrary mix
-* Mode where Reasoning strategies are rotated across rounds

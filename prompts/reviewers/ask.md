@@ -16,7 +16,7 @@ ${ASK_CONTENT}
 ${CONTEXT}
 </context>
 
-${PEER_BLOCK}
+{{{{PEER_BROADCAST}}}}
 ${PRIOR_ROUND_SELF_BLOCK}
 ### What to Do
 

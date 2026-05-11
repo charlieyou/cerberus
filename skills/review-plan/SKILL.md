@@ -7,49 +7,46 @@ argument-hint: '[--debate] [--mode <fast|smart|max>] [--consensus <majority|all|
 
 ## Host-Neutral Execution
 
-Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
+Before running any Bash snippet in this skill, run the shared Cerberus resolver below. It lazily builds and executes `bin/cerberus` from the configured plugin root.
 
 ```bash
-cerberus_root=""
-cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
-case "$cerberus_plugin_root" in
-    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
-esac
-cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
-case "$cerberus_skill_dir" in
-    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
-esac
-
-cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
-if [ -n "$cerberus_skill_dir" ]; then
-    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
-fi
-cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -n "$cerberus_git_root" ]; then
-    cerberus_candidates+=("$cerberus_git_root")
-fi
-for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] \
-        && [[ "$cerberus_candidate" == /* ]] \
-        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
-        cerberus_root="$cerberus_candidate"
-        break
+# --- shared resolver (canonical body; identical across all callers) ---
+set +u
+root="${CERBERUS_ROOT:-}"
+[ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"
+[ -n "$root" ] || root="${PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+    skill_dir="${CLAUDE_SKILL_DIR}"
+    if [ -n "$skill_dir" ]; then
+        root="$(cd "$skill_dir/../.." && pwd)"
     fi
-done
-if [ -z "$cerberus_root" ]; then
-    echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
-    exit 127
 fi
-export CERBERUS_ROOT="$cerberus_root"
-# shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env" || exit $?
+bin="$root/bin/cerberus"
+[ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
+export CERBERUS_ROOT="$root"
+claude_session="${CLAUDE_SESSION_ID}"
+if [ "${CERBERUS_HOST:-}" = claude-code ]; then
+    export CERBERUS_HOST=claude
+fi
+if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then
+    export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"
+elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then
+    export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"
+fi
+command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
+if ! make -q -C "$root" build >/dev/null 2>&1; then
+    command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }
+    echo "cerberus: building... (this happens once after clone or upgrade)" >&2
+    start=$(date +%s)
+    make -C "$root" build >&2 || exit $?
+    end=$(date +%s)
+    echo "cerberus: build complete in $((end-start))s" >&2
+fi
+# --- shared resolver above; per-caller exec below (allowed to diverge) ---
+exec "$bin" "$@"
 ```
 
-Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
+Use `bin/cerberus` through the configured plugin root when invoking Cerberus commands below.
 
 
 # Plan Review (Iterative)
@@ -68,36 +65,36 @@ Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.
 
 ```bash
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review $ARGUMENTS
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review $ARGUMENTS
 ```
 
 **IMPORTANT: After running the spawn command, STOP IMMEDIATELY.** Do not poll, wait, or run any further commands. The Stop hook will automatically check for reviewer consensus when you stop.
 
-When running under Codex, `bin/cerberus-skill-env` reads the active run key from `~/.cerberus/runtime/codex/<project-key>/active-session.json`, written by the Codex `SessionStart` / `UserPromptSubmit` hooks. If that registry is missing or stale and the skill shell command has `CODEX_THREAD_ID`, the helper refreshes it with that host-provided session id so the Stop hook can associate the run with Codex's `session_id`; without either registry state or `CODEX_THREAD_ID`, start a new Codex session and verify the hooks are installed.
+When running under Claude Code, use the documented skill substitutions `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`, and `${CLAUDE_SESSION_ID}` rather than embedding it inside shell-default expansion forms. When running under Codex, set `CERBERUS_HOST=codex` and `CERBERUS_SESSION_ID` to the current `CODEX_THREAD_ID` before spawning if they are not already exported. The command above does that automatically when `CODEX_THREAD_ID` is present and `CERBERUS_HOST` is unset or already `codex`. If host state is still missing or stale, start a new host session and verify the hooks are installed.
 
 Examples:
 ```bash
 # User: /review-plan path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review path/to/plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review path/to/plan.md
 
 # User: /review-plan "focus on error handling"
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --focus "focus on error handling"
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --focus "focus on error handling"
 
 # User: /review-plan --mode max plan.md "check dependencies"
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --mode max --focus "check dependencies" plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --mode max --focus "check dependencies" plan.md
 
 # User: /review-plan --agents codex,gemini path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --agents codex,gemini path/to/plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --agents codex,gemini path/to/plan.md
 
 # User: /review-plan --max-rounds 3 path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 3 path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --max-rounds 3 path/to/plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --max-rounds 0 path/to/plan.md  # Disable auto-respawn
 
 # User: /review-plan --consensus any path/to/plan.md
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review --consensus any path/to/plan.md
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review --consensus any path/to/plan.md
 
 # User: /review-plan plan.md focus on error handling
-"$CERBERUS_ROOT/bin/review-gate" spawn-plan-review plan.md focus on error handling
+set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" spawn-plan-review plan.md focus on error handling
 ```
 
 If no path is provided, the most recent plan from `~/.claude/plans/` will be used.
@@ -139,6 +136,6 @@ Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) â
 The iterative review continues until:
 - Consensus is reached (per `--consensus` mode, default: majority)
 - Maximum iterations (default 3, configurable via --max-rounds; set `0` to disable auto-respawn) are reached
-- You manually resolve with `"$CERBERUS_ROOT/bin/review-gate" resolve`
+- You manually resolve with `set +u; root="${CERBERUS_ROOT:-}"; [ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; if [ -z "$root" ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; bin="$root/bin/cerberus"; [ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "${CERBERUS_HOST:-}" = claude-code ]; then export CERBERUS_HOST=claude; fi; if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"; elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; if ! make -q -C "$root" build >/dev/null 2>&1; then make -C "$root" build >&2 || exit $?; fi; "$bin" resolve`
 
 Note: FAIL verdicts and P0/P1 findings always block regardless of consensus mode.

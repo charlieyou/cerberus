@@ -10,7 +10,7 @@ ${STRATEGY_DIRECTIVE}
 ${SPEC_CONTENT}
 </spec>
 
-${PEER_BLOCK}
+{{{{PEER_BROADCAST}}}}
 ${PRIOR_ROUND_SELF_BLOCK}
 ### What to Evaluate
 

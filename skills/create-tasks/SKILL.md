@@ -1,60 +1,57 @@
 ---
 name: create-tasks
 disable-model-invocation: true
-description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear), agent-team tasks (--agent-team), or TODO.md
-argument-hint: '[--beads | --linear [project] | --agent-team] [--linear-team <team>] [--from-plan <path/to/plan.md>]'
+description: Generate actionable tasks from a plan, outputting to Beads issues (--beads), Linear project issues (--linear), or TODO.md
+argument-hint: '[--beads | --linear [project]] [--linear-team <team>] [--from-plan <path/to/plan.md>]'
 ---
 
 ## Host-Neutral Execution
 
-Before running any Bash snippet in this skill, source the shared Cerberus skill environment helper. This keeps the same skill usable from Claude, Codex, or a generic shell by resolving `CERBERUS_ROOT`, `CERBERUS_HOST`, and the active run key when the host exposes one.
+Before running any Bash snippet in this skill, run the shared Cerberus resolver below. It lazily builds and executes `bin/cerberus` from the configured plugin root.
 
 ```bash
-cerberus_root=""
-cerberus_plugin_root='${CLAUDE_PLUGIN_ROOT}'
-case "$cerberus_plugin_root" in
-    '$'{CLAUDE_PLUGIN_ROOT}) cerberus_plugin_root="${CLAUDE_PLUGIN_ROOT:-}" ;;
-esac
-cerberus_skill_dir='${CLAUDE_SKILL_DIR}'
-case "$cerberus_skill_dir" in
-    '$'{CLAUDE_SKILL_DIR}) cerberus_skill_dir="${CLAUDE_SKILL_DIR:-}" ;;
-esac
-
-cerberus_candidates=("${CERBERUS_ROOT:-}" "$cerberus_plugin_root")
-if [ -n "$cerberus_skill_dir" ]; then
-    cerberus_candidates+=("$(cd -P "$cerberus_skill_dir/../.." 2>/dev/null && pwd || true)")
-fi
-cerberus_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -n "$cerberus_git_root" ]; then
-    cerberus_candidates+=("$cerberus_git_root")
-fi
-for cerberus_candidate in "${cerberus_candidates[@]}"; do
-    if [ -n "$cerberus_candidate" ] \
-        && [[ "$cerberus_candidate" == /* ]] \
-        && [ -r "$cerberus_candidate/bin/cerberus-skill-env" ] \
-        && [ -x "$cerberus_candidate/bin/review-gate" ] \
-        && [ -r "$cerberus_candidate/bin/review-gate-models.sh" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-settings.json" ] \
-        && [ -r "$cerberus_candidate/config/gemini-readonly-policy.toml" ]; then
-        cerberus_root="$cerberus_candidate"
-        break
+# --- shared resolver (canonical body; identical across all callers) ---
+set +u
+root="${CERBERUS_ROOT:-}"
+[ -n "$root" ] || root="${CLAUDE_PLUGIN_ROOT}"
+[ -n "$root" ] || root="${PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+    skill_dir="${CLAUDE_SKILL_DIR}"
+    if [ -n "$skill_dir" ]; then
+        root="$(cd "$skill_dir/../.." && pwd)"
     fi
-done
-if [ -z "$cerberus_root" ]; then
-    echo "cerberus skill: cannot find Cerberus backend; set CERBERUS_ROOT to the checkout root" >&2
-    exit 127
 fi
-export CERBERUS_ROOT="$cerberus_root"
-# shellcheck source=/dev/null
-. "$cerberus_root/bin/cerberus-skill-env"
+bin="$root/bin/cerberus"
+[ -n "$root" ] || { echo "cerberus: plugin root not set" >&2; exit 127; }
+export CERBERUS_ROOT="$root"
+claude_session="${CLAUDE_SESSION_ID}"
+if [ "${CERBERUS_HOST:-}" = claude-code ]; then
+    export CERBERUS_HOST=claude
+fi
+if [ -n "${CODEX_THREAD_ID:-}" ] && { [ -z "${CERBERUS_HOST:-}" ] || [ "${CERBERUS_HOST:-}" = codex ]; }; then
+    export CERBERUS_HOST=codex CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$CODEX_THREAD_ID}"
+elif [ -z "${CERBERUS_HOST:-}" ] && [ -n "$claude_session" ]; then
+    export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"
+fi
+command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }
+if ! make -q -C "$root" build >/dev/null 2>&1; then
+    command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }
+    echo "cerberus: building... (this happens once after clone or upgrade)" >&2
+    start=$(date +%s)
+    make -C "$root" build >&2 || exit $?
+    end=$(date +%s)
+    echo "cerberus: build complete in $((end-start))s" >&2
+fi
+# --- shared resolver above; per-caller exec below (allowed to diverge) ---
+exec "$bin" "$@"
 ```
 
-Use `${CERBERUS_ROOT}` when invoking Cerberus binaries below.
+Use `bin/cerberus` through the configured plugin root when invoking Cerberus commands below.
 
 
 # Create Tasks (Plan → Execution Artifacts)
 
-Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear`), an **agent-team task file** (with `--agent-team` flag), or a **TODO.md** file (default).
+Convert a stable implementation plan into actionable, dependency-ordered tasks. Output to **Beads issues** (with `--beads` flag), **Linear issues in a project** (with `--linear`), or a **TODO.md** file (default).
 
 > **Upstream**: This command accepts output from `/create-plan`.
 > **Downstream**: Output is validated by `/review-tasks` for local/Beads artifacts, or by applying the same validation checks before creating Linear issues.
@@ -63,7 +60,7 @@ Convert a stable implementation plan into actionable, dependency-ordered tasks. 
 
 ### Outcome
 
-Generate a validated execution task graph from a stable plan and write it to the requested target (`TODO.md`, Beads, Linear, or agent-team tasks).
+Generate a validated execution task graph from a stable plan and write it to the requested target (`TODO.md`, Beads, or Linear).
 
 ### What good means
 
@@ -83,7 +80,7 @@ Generate a validated execution task graph from a stable plan and write it to the
 
 ### Verification
 
-Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, project/issue/dependency re-listing for Linear, and parser-contract checks for agent-team tasks.
+Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, and project/issue/dependency re-listing for Linear.
 
 ### Final response
 
@@ -104,9 +101,8 @@ Return the Phase 7 summary: output location or tracker target, task count, phase
 | (default) | `TODO.md` in plan directory | Quick projects, no issue tracker |
 | `--beads` | Beads issues with dependencies | Multi-agent parallelization, tracked work |
 | `--linear [project]` | Linear issues in an existing or newly confirmed Linear project | Teams coordinating work in Linear |
-| `--agent-team` | `*-team-tasks.md` next to the plan | Autonomous implementer/reviewer team loop via `/cerberus:run-team` |
 
-Output modes are mutually exclusive. If more than one of `--beads`, `--linear`, or `--agent-team` is supplied, abort before generating output.
+Output modes are mutually exclusive. If more than one of `--beads` or `--linear` is supplied, abort before generating output.
 
 Linear mode details:
 - `--linear` enables Linear output. With no project value, derive the project name from the plan title.
@@ -754,31 +750,6 @@ Use the available Linear integration (MCP tools, CLI, or API client configured i
    - Confirm all generated dependencies are represented as Linear blocking relations or explicit dependency links in descriptions.
    - Confirm the project URL/ID, issue count, updated issue count, and created issue count for Phase 7.
 
-#### If `--agent-team` flag is set:
-
-Generate a `*-team-tasks.md` file in the same directory as the plan, using the plan filename prefix so multiple plans do not collide. Examples:
-- `docs/auth-system-plan.md` → `docs/auth-system-team-tasks.md`
-- `~/.claude/plans/search-plan.md` → `~/.claude/plans/search-team-tasks.md`
-
-Use `templates/team-tasks-template.md` as the canonical schema. This format is intentionally Markdown with a YAML frontmatter block and a fenced `meta` block under each task heading so `/cerberus:run-team` can parse it cleanly.
-
-**Team task format requirements:**
-- Header frontmatter includes `plan`, `spec` (or `N/A`), and `generated`.
-- The Task Summary table's `Tasks` column lists task IDs for each execution phase, not just counts, so `/cerberus:run-team` can recover phase membership if needed.
-- Each task heading is exactly `## T### — <subject>`.
-- The first fenced block immediately under each task heading is always ```meta.
-- The `meta` block includes `phase`, `files`, `depends`, `acceptance`, and `plan_link`.
-- `phase` must match the task's execution phase label from the Task Summary table, such as `Setup`, `Foundation`, `System Wiring`, `US1: Login`, or `Polish`.
-- `depends` is always an explicit list, even when empty: `depends: []`.
-- The task body after the `meta` fence contains the full task spec from Phase 4, equivalent to the default TODO.md collapsible task detail content.
-
-**Parser contract:** Task bodies may contain additional fenced code blocks. The runner treats only the first fenced block immediately under the `## T###` heading as metadata; body parsing continues from after that first fence until the next `## ` heading at column 0 or EOF. Do not place narrative text between a task heading and its `meta` block.
-
-**Output path handling:**
-- If the target file already exists, ask whether to overwrite it before writing.
-- Include all source document links, sizing notes, dependencies, verification steps, and acceptance criteria from the validated Phase 4 task specs.
-- Report the output path and total task count in Phase 7.
-
 #### If no output flag is set (default):
 
 Generate `TODO.md` in the same directory as the plan.
@@ -803,7 +774,7 @@ Output summary:
 ```
 ## Tasks Generated
 
-**Output**: [TODO.md path] or [team-tasks.md path] or [Beads epic ID] or [Linear project URL/ID]
+**Output**: [TODO.md path] or [Beads epic ID] or [Linear project URL/ID]
 **Linear Issues**: Created X, updated Y (only for Linear output)
 **Total Tasks**: N
 **Phases**: X

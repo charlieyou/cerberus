@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "title": "decomposer accepted anonymized consensus",
+      "body": "peer context resolved the decomposition concern",
+      "severity": "info",
+      "priority": 4,
+      "file_path": "internal/anonymize/anonymize.go",
+      "line_start": 53,
+      "line_end": 53,
+      "confidence": 0.93,
+      "evidence": "round two preserved stable peer identifiers",
+      "recommendation": "accept the debate result"
+    }
+  ],
+  "verdict": "PASS",
+  "summary": "peer context resolved my decomposition concern",
+  "overall_confidence": 0.93,
+  "strategy": "decompose",
+  "round": 2,
+  "peer_responses_seen": ["peer_1", "peer_2", "peer_3", "peer_4"]
+}

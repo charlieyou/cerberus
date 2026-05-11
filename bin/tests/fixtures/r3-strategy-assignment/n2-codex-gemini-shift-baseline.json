@@ -1,9 +1,0 @@
-{
-  "label": "N=2 collision-driven shift baseline (codex+gemini on artifact-6; gemini gets falsification-first because codex_idx (0) != gemini_idx (1))",
-  "artifact_id": "artifact-6",
-  "reviewers": ["codex", "gemini"],
-  "expected": [
-    ["codex", "verification-first"],
-    ["gemini", "falsification-first"]
-  ]
-}

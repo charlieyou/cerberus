@@ -1,9 +1,0 @@
-{
-  "label": "N=2 no-collision swap (codex→claude on artifact-1; gemini KEEPS decompose because claude_idx (1) != gemini_idx (2))",
-  "artifact_id": "artifact-1",
-  "reviewers": ["claude", "gemini"],
-  "expected": [
-    ["claude", "falsification-first"],
-    ["gemini", "decompose"]
-  ]
-}

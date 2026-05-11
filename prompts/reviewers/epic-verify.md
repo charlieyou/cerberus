@@ -94,7 +94,7 @@ If Author Context contains questions, answer them in the `summary` field. Do not
 ${EPIC_CONTEXT}
 </epic_context>
 
-${PEER_BLOCK}
+{{{{PEER_BROADCAST}}}}
 ${PRIOR_ROUND_SELF_BLOCK}
 The above contains either:
 - **A file path** (single line, looks like a path) — read it with your tools to find acceptance criteria

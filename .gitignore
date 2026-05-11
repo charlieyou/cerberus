@@ -1,0 +1,5 @@
+bin/cerberus
+*.exe
+*.test
+*.out
+coverage.out

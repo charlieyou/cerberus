@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "title": "gemini policy check needs debate",
+      "body": "I, gemini, recommend preserving the read-only policy through debate",
+      "severity": "info",
+      "priority": 3,
+      "file_path": "config/gemini-readonly-policy.toml",
+      "line_start": 44,
+      "line_end": 44,
+      "confidence": 0.64,
+      "evidence": "gemini-3.1-pro saw the policy flag in the command",
+      "recommendation": "keep gemini policy active in round two"
+    }
+  ],
+  "verdict": "NEEDS_WORK",
+  "summary": "I, gemini, recommend a second round using gemini-3.1-pro policy context",
+  "overall_confidence": 0.64,
+  "strategy": "gemini-policy",
+  "round": 1,
+  "peer_responses_seen": []
+}

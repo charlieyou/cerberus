@@ -1,0 +1,71 @@
+commands:
+  build:
+    command: >-
+      if [ -f Makefile ]; then make build; elif [ -f go.mod ]; then go build -tags netgo ./cmd/cerberus; else bash -n bin/review-gate bin/generate bin/*-hook* bin/*session-init bin/review-gate-*.sh bin/telemetry-lib.sh bin/tests/test-*.sh; fi
+    timeout: 600
+  test:
+    command: >-
+      if [ -f Makefile ]; then make test; elif [ -f go.mod ]; then go test ./...; else for t in bin/tests/test-*.sh; do bash "$t"; done; fi
+    timeout: 1200
+  lint:
+    command: >-
+      if [ -f Makefile ]; then make lint; elif [ -f go.mod ]; then test -z "$(gofmt -l cmd internal 2>/dev/null)" && go vet ./...; else if command -v shellcheck >/dev/null 2>&1; then shellcheck bin/* bin/tests/test-*.sh; else bash -n bin/review-gate bin/generate bin/*-hook* bin/*session-init bin/review-gate-*.sh bin/telemetry-lib.sh bin/tests/test-*.sh; fi; python3 -m json.tool .claude-plugin/plugin.json >/dev/null; python3 -m json.tool .claude-plugin/marketplace.json >/dev/null; python3 -m json.tool .codex-plugin/plugin.json >/dev/null; fi
+    timeout: 600
+  typecheck:
+    command: >-
+      if [ -f Makefile ]; then make test; elif [ -f go.mod ]; then go test ./...; else bash -n bin/review-gate bin/generate bin/*-hook* bin/*session-init bin/review-gate-*.sh bin/telemetry-lib.sh bin/tests/test-*.sh; fi
+    timeout: 1200
+  v2-structural:
+    command: >-
+      if [ ! -f go.mod ]; then echo "v2 structural checks skipped until Go scaffold exists"; exit 0; fi; test "$(find bin -type f \( -name '*.sh' -o -name '*.bash' \) | wc -l | tr -d ' ')" = "0"; ! grep -RIl 'task-completed-hook\|teammate-idle-hook\|run-team' skills hooks agents bin templates 2>/dev/null; grep -qx 'bin/cerberus' .gitignore; test -x bin/cerberus
+    timeout: 300
+
+code_patterns:
+  - "**/*.go"
+  - "**/*.sh"
+  - "bin/**"
+  - "hooks/**/*.json"
+  - "skills/**/SKILL.md"
+  - "prompts/**/*.md"
+  - "config/**/*.toml"
+  - "config/**/*.json"
+  - "docs/**/*.md"
+  - "README.md"
+
+config_files:
+  - "mala.yaml"
+  - "Makefile"
+  - ".github/workflows/*.yml"
+  - ".github/workflows/*.yaml"
+  - ".gitignore"
+
+setup_files:
+  - "go.mod"
+  - "go.sum"
+
+evidence_check:
+  required: [build, test, lint, typecheck]
+
+validation_triggers:
+  epic_completion:
+    epic_depth: all
+    fire_on: both
+    failure_mode: remediate
+    max_retries: 5
+    commands:
+      - ref: build
+      - ref: test
+      - ref: lint
+      - ref: typecheck
+      - ref: v2-structural
+
+per_issue_review:
+  enabled: true
+  max_retries: 10
+  reviewer_type: cerberus
+
+epic_verification:
+  enabled: true
+  reviewer_type: cerberus
+
+coder: codex
