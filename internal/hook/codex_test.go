@@ -253,7 +253,7 @@ func TestHandleCodexStopResponseEmitsClaudeStyleMessageOnce(t *testing.T) {
 	if body["decision"] != "block" {
 		t.Fatalf("decision = %q, want block", body["decision"])
 	}
-	for _, want := range []string{"## Revision Required", "Missing validation", "internal/service.go:12", "You MUST fix"} {
+	for _, want := range []string{"## Revision Required", "Missing validation", "internal/service.go:12", "You MUST use subagents", "You MUST fix"} {
 		if !strings.Contains(body["reason"], want) {
 			t.Fatalf("reason missing %q:\n%s", want, body["reason"])
 		}

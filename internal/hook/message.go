@@ -80,7 +80,9 @@ func resolvedGateMessage(runRoot string, gate *state.GateState) string {
 		if findings != "" {
 			b.WriteString("## Review Findings\n\n")
 			b.WriteString(findings)
-			b.WriteString("\n\nPlease address any advisory issues above, then provide a brief summary of the review outcome. You may stop after that summary.")
+			b.WriteString("\n\n## Context Preservation Requirement\n\n")
+			b.WriteString("If you investigate or address advisory findings, you MUST delegate that work to subagents so the main thread preserves context for coordination, edits, verification, and the final summary.\n\n")
+			b.WriteString("Please address any advisory issues above, then provide a brief summary of the review outcome. You may stop after that summary.")
 		} else {
 			b.WriteString("Please provide a brief summary of the review outcome, then you may stop.")
 		}
@@ -103,6 +105,8 @@ func resolvedGateMessage(runRoot string, gate *state.GateState) string {
 			b.WriteString(summaries)
 			b.WriteString("\n\n")
 		}
+		b.WriteString("## Context Preservation Requirement\n\n")
+		b.WriteString("You MUST use subagents for investigation, debugging, and review follow-up before making or validating fixes. Keep the main thread focused on coordination, applying the chosen edits, running verification, and summarizing the outcome.\n\n")
 		b.WriteString("You MUST fix the blocking issues above before stopping. After making changes, run Cerberus review again or explain why the remaining issues are safe to proceed with.")
 	default:
 		b.WriteString("## Review Gate Resolved\n\n")
