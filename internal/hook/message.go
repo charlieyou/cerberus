@@ -15,6 +15,14 @@ import (
 )
 
 func stopHookResponse(result *PollResult) (string, error) {
+	message, err := stopHookMessage(result)
+	if err != nil || message == "" {
+		return message, err
+	}
+	return decisionBlockResponse(message)
+}
+
+func stopHookMessage(result *PollResult) (string, error) {
 	if result == nil || result.Missing || result.Gate == nil || result.Gate.Status != state.StatusResolved {
 		return "", nil
 	}
@@ -26,7 +34,7 @@ func stopHookResponse(result *PollResult) (string, error) {
 		return "", nil
 	}
 	message := resolvedGateMessage(result.RunRoot, result.Gate)
-	return claudeStyleBlockResponse(message)
+	return message, nil
 }
 
 func claimStopMessageEmission(runRoot string) (bool, error) {
@@ -54,7 +62,7 @@ func claimStopMessageEmission(runRoot string) (bool, error) {
 	return true, nil
 }
 
-func claudeStyleBlockResponse(reason string) (string, error) {
+func decisionBlockResponse(reason string) (string, error) {
 	data, err := json.Marshal(map[string]string{
 		"decision": "block",
 		"reason":   reason,

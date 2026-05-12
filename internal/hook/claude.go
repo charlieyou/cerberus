@@ -37,7 +37,7 @@ func handleClaudeStopWithWait(stdinPayload []byte, env *config.Env, pollInterval
 	if err != nil {
 		return "", err
 	}
-	return stopHookResponse(result)
+	return stopHookMessage(result)
 }
 
 func HandleClaudeSessionStart(stdinPayload []byte, env *config.Env) error {

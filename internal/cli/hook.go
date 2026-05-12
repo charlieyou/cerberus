@@ -21,9 +21,11 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 	}
 	env := config.Resolve()
 	response := ""
+	claudeStopFeedback := false
 	switch args[0] {
 	case "claude-stop":
 		response, err = hook.HandleClaudeStopResponse(payload, env)
+		claudeStopFeedback = response != ""
 	case "claude-session-start":
 		err = hook.HandleClaudeSessionStart(payload, env)
 	case "codex-stop":
@@ -39,6 +41,13 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if claudeStopFeedback {
+		// Claude Stop hooks feed exit-code-2 stderr back to the agent as
+		// "Stop hook feedback". JSON decision/reason output is treated as hook
+		// control metadata and is not surfaced as review instructions here.
+		fmt.Fprintln(stderr, response)
+		return 2
 	}
 	if response != "" {
 		fmt.Fprint(stdout, response)

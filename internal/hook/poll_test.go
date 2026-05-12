@@ -116,7 +116,7 @@ func TestHandleClaudeSessionStartInitializesRunFromStdinPayload(t *testing.T) {
 	}
 }
 
-func TestHandleClaudeStopResponseEmitsClaudeStyleMessage(t *testing.T) {
+func TestHandleClaudeStopResponseEmitsFeedbackText(t *testing.T) {
 	env := &config.Env{
 		Host:       "claude",
 		StateRoot:  t.TempDir(),
@@ -139,15 +139,11 @@ func TestHandleClaudeStopResponseEmitsClaudeStyleMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleClaudeStopResponse() error = %v", err)
 	}
-	var body map[string]string
-	if err := json.Unmarshal([]byte(response), &body); err != nil {
-		t.Fatalf("response is not JSON: %v\n%s", err, response)
+	if strings.HasPrefix(strings.TrimSpace(response), "{") {
+		t.Fatalf("response = %q, want plain Stop-hook feedback text for Claude", response)
 	}
-	if body["decision"] != "block" {
-		t.Fatalf("decision = %q, want block", body["decision"])
-	}
-	if !strings.Contains(body["reason"], "## Review Complete") || !strings.Contains(body["reason"], "Please provide a brief summary") {
-		t.Fatalf("reason = %q, want review-complete prompt", body["reason"])
+	if !strings.Contains(response, "## Review Complete") || !strings.Contains(response, "Please provide a brief summary") {
+		t.Fatalf("response = %q, want review-complete prompt", response)
 	}
 }
 
