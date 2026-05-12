@@ -8,6 +8,5 @@
   "repository": "https://github.com/charlieyou/cerberus",
   "license": "MIT",
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "keywords": ["code-review", "plan-review", "multi-model", "quality-gate", "cerberus"]
 }
