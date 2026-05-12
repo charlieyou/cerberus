@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/prompts"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/roster"
+	"github.com/charlieyou/cerberus/internal/state"
 	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
@@ -35,6 +37,12 @@ type roundPrompts struct {
 type roundReviewerResult struct {
 	Output reviewer.RawReviewerOutput
 	Row    telemetry.ReviewerRow
+	Failed bool
+}
+
+type roundSlotResult struct {
+	Result roundReviewerResult
+	Err    error
 }
 
 func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawner, prompts roundPrompts) ([]roundReviewerResult, aggregate.Result, error) {
@@ -47,11 +55,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 	iteration := firstPositive(prompts.Iteration, 1)
 	round := firstPositive(prompts.Round, 1)
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	outputs := make([]roundReviewerResult, len(slots))
-	errs := make(chan roundError, len(slots))
+	slotResults := make([]roundSlotResult, len(slots))
 	var wg sync.WaitGroup
 
 	for i, slot := range slots {
@@ -62,14 +66,12 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 
 			system, user, err := promptsForSlot(slot, prompts)
 			if err != nil {
-				errs <- roundError{err: err}
-				cancel()
+				slotResults[i] = reviewerFailureSlotResult(prompts.RunRoot, iteration, round, slot, i, prompts.RuntimeMode, time.Now().UTC(), err)
 				return
 			}
 			startedAt := time.Now().UTC()
 			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerSpawned, slot, i, round, startedAt, nil); err != nil {
-				errs <- roundError{err: err}
-				cancel()
+				slotResults[i] = roundSlotResult{Err: err}
 				return
 			}
 			response, err := spawner.Spawn(ctx, reviewer.Request{
@@ -85,8 +87,11 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				Round:     round,
 			})
 			if err != nil {
-				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
-				cancel()
+				if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+					slotResults[i] = roundSlotResult{Err: err}
+					return
+				}
+				slotResults[i] = reviewerFailureSlotResult(prompts.RunRoot, iteration, round, slot, i, prompts.RuntimeMode, startedAt, err)
 				return
 			}
 			endedAt := time.Now().UTC()
@@ -94,69 +99,186 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 			if parsed == nil {
 				parsed, err = reviewer.Parse(response.Output)
 				if err != nil {
-					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
-					cancel()
+					slotResults[i] = reviewerFailureSlotResult(prompts.RunRoot, iteration, round, slot, i, prompts.RuntimeMode, startedAt, err)
 					return
 				}
 			}
 			row, err := reviewerTelemetryRow(slot, i, prompts.RuntimeMode, response, parsed, startedAt, endedAt)
 			if err != nil {
-				errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
-				cancel()
+				slotResults[i] = reviewerFailureSlotResult(prompts.RunRoot, iteration, round, slot, i, prompts.RuntimeMode, startedAt, err)
 				return
 			}
 			if prompts.RunRoot != "" {
+				if err := writeReviewerOutput(prompts.RunRoot, iteration, round, slot.ID, *parsed); err != nil {
+					slotResults[i] = roundSlotResult{Err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
+					return
+				}
 				if err := telemetry.WriteReviewerRow(prompts.RunRoot, iteration, round, &row); err != nil {
-					errs <- roundError{err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
-					cancel()
+					slotResults[i] = roundSlotResult{Err: withReviewerFailureEvent(prompts.RunRoot, slot, i, round, err)}
 					return
 				}
 			}
 			if err := writeReviewerEvent(prompts.RunRoot, telemetry.EventReviewerCompleted, slot, i, round, endedAt, map[string]any{
 				"verdict": row.Verdict,
 			}); err != nil {
-				errs <- roundError{err: err}
-				cancel()
+				slotResults[i] = roundSlotResult{Err: err}
 				return
 			}
-			outputs[i] = roundReviewerResult{Output: *parsed, Row: row}
+			slotResults[i] = roundSlotResult{Result: roundReviewerResult{Output: *parsed, Row: row}}
 		}()
 	}
 
 	wg.Wait()
-	close(errs)
-	var canceled error
-	for result := range errs {
-		if result.err == nil {
-			continue
+	outputs := make([]roundReviewerResult, 0, len(slots))
+	for _, slotResult := range slotResults {
+		if slotResult.Err != nil {
+			return nil, aggregate.Result{}, slotResult.Err
 		}
-		if errors.Is(result.err, context.Canceled) {
-			if canceled == nil {
-				canceled = result.err
-			}
-			continue
-		}
-		return nil, aggregate.Result{}, result.err
+		outputs = append(outputs, slotResult.Result)
 	}
-	if canceled != nil {
-		return nil, aggregate.Result{}, canceled
-	}
-	rawOutputs := make([]reviewer.RawReviewerOutput, len(outputs))
-	for i, output := range outputs {
-		rawOutputs[i] = output.Output
-	}
-	result, err := aggregate.Compute(rawOutputs, prompts.Consensus)
+	result, err := aggregateRoundOutputs(outputs, prompts.Consensus)
 	if err != nil {
 		return nil, aggregate.Result{}, err
 	}
 	return outputs, result, nil
 }
 
-func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
+func aggregateRoundOutputs(outputs []roundReviewerResult, consensus aggregate.Mode) (aggregate.Result, error) {
+	successful := make([]reviewer.RawReviewerOutput, 0, len(outputs))
+	successfulIndexes := make([]int, 0, len(outputs))
+	for i, output := range outputs {
+		if output.Failed {
+			continue
+		}
+		successful = append(successful, output.Output)
+		successfulIndexes = append(successfulIndexes, i)
+	}
+
+	var result aggregate.Result
+	if len(successful) == 0 {
+		result = aggregate.Result{Verdict: aggregate.VerdictRequiresDecision}
+	} else {
+		var err error
+		result, err = aggregate.Compute(successful, consensus)
+		if err != nil {
+			return aggregate.Result{}, err
+		}
+		for i := range result.Blockers {
+			filteredIndex := result.Blockers[i].ReviewerIndex
+			if filteredIndex < 0 || filteredIndex >= len(successfulIndexes) {
+				return aggregate.Result{}, fmt.Errorf("aggregate blocker reviewer index %d out of range", filteredIndex)
+			}
+			result.Blockers[i].ReviewerIndex = successfulIndexes[filteredIndex]
+		}
+	}
+	if roundFailureCount(outputs) > 0 && result.Verdict == aggregate.VerdictPass {
+		result.Verdict = aggregate.VerdictRequiresDecision
+	}
+	return result, nil
+}
+
+func reviewerFailureSlotResult(runRoot string, iteration, round int, slot ReviewerSlot, slotIndex int, runtimeMode string, startedAt time.Time, original error) roundSlotResult {
+	if err := writeReviewerFailureEvent(runRoot, slot, slotIndex, round, original); err != nil {
+		return roundSlotResult{Err: err}
+	}
+	endedAt := time.Now().UTC()
+	output := failedReviewerOutput(slot, round, original)
+	row := failedReviewerTelemetryRow(slot, slotIndex, runtimeMode, round, startedAt, endedAt)
+	if runRoot != "" {
+		if err := writeReviewerOutput(runRoot, iteration, round, slot.ID, output); err != nil {
+			return roundSlotResult{Err: err}
+		}
+		if err := telemetry.WriteReviewerRow(runRoot, iteration, round, &row); err != nil {
+			return roundSlotResult{Err: fmt.Errorf("write failed reviewer telemetry: %w", err)}
+		}
+	}
+	return roundSlotResult{Result: roundReviewerResult{Output: output, Row: row, Failed: true}}
+}
+
+func failedReviewerOutput(slot ReviewerSlot, round int, original error) reviewer.RawReviewerOutput {
+	confidence := 0.0
+	roundValue := firstPositive(round, 1)
+	strategy := (*string)(nil)
+	if slot.Strategy != "" {
+		value := slot.Strategy
+		strategy = &value
+	}
+	reviewerID := firstNonEmpty(slot.ID, slot.Provider)
+	return reviewer.RawReviewerOutput{
+		Findings:          []reviewer.RawFinding{},
+		Verdict:           "NEEDS_WORK",
+		Summary:           fmt.Sprintf("Reviewer %s failed: %v", reviewerID, original),
+		OverallConfidence: &confidence,
+		Strategy:          strategy,
+		Round:             &roundValue,
+		PeerResponsesSeen: []string{},
+	}
+}
+
+func failedReviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode string, round int, startedAt, endedAt time.Time) telemetry.ReviewerRow {
+	instanceIndex := reviewerInstanceIndex(slot, slotIndex)
+	return telemetry.ReviewerRow{
+		ReviewerID:        slot.ID,
+		InstanceIndex:     instanceIndex,
+		Provider:          slot.Provider,
+		Model:             slot.Model,
+		Strategy:          slot.Strategy,
+		PersonaName:       personaName(slot.PersonaPath),
+		Mode:              firstNonEmpty(slot.Mode, runtimeMode),
+		Tokens:            telemetry.Tokens{},
+		CostUSD:           0,
+		PeerID:            fmt.Sprintf("peer_%d", instanceIndex),
+		Verdict:           aggregate.VerdictRequiresDecision,
+		OverallConfidence: 0,
+		Round:             round,
+		TimeToFinishMS:    endedAt.Sub(startedAt).Milliseconds(),
+		StartedAt:         startedAt,
+		EndedAt:           &endedAt,
+	}
+}
+
+func writeReviewerOutput(runRoot string, iteration, round int, reviewerID string, output reviewer.RawReviewerOutput) error {
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal failed reviewer output: %w", err)
+	}
+	data = append(data, '\n')
+	return state.WriteReviewerOutput(runRoot, iteration, round, reviewerID, data)
+}
+
+func roundFailureCount(results []roundReviewerResult) int {
+	failures := 0
+	for _, result := range results {
+		if result.Failed {
+			failures++
+		}
+	}
+	return failures
+}
+
+func reviewerFailureResolutionReason(results []roundReviewerResult) string {
+	failures := roundFailureCount(results)
+	if failures == 0 {
+		return ""
+	}
+	if failures == 1 {
+		return "1 reviewer failed; see reviewer summaries and logs"
+	}
+	return fmt.Sprintf("%d reviewers failed; see reviewer summaries and logs", failures)
+}
+
+func writeReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
 	if eventErr := writeReviewerEvent(runRoot, telemetry.EventReviewerFailed, slot, slotIndex, round, time.Now().UTC(), map[string]any{
 		"error": original.Error(),
 	}); eventErr != nil {
 		return fmt.Errorf("%w; record reviewer failure event: %v", original, eventErr)
+	}
+	return nil
+}
+
+func withReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
+	if err := writeReviewerFailureEvent(runRoot, slot, slotIndex, round, original); err != nil {
+		return err
 	}
 	return original
 }
@@ -301,10 +423,6 @@ func appendPrompt(base, extra []byte) []byte {
 		return base
 	}
 	return bytes.Join([][]byte{base, extra}, []byte("\n\n"))
-}
-
-type roundError struct {
-	err error
 }
 
 func firstNonEmpty(values ...string) string {

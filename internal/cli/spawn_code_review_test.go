@@ -650,7 +650,7 @@ func TestSpawnCodeReviewRuntimeLaunchFailureResolvesPendingGate(t *testing.T) {
 	}
 }
 
-func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
+func TestSinglePassReviewerFailureResolvesPendingGate(t *testing.T) {
 	setSpawnTestEnv(t)
 	t.Setenv("CERBERUS_MOCK_EXIT", "1")
 	started, err := orchestrator.StartSinglePass(nil, orchestrator.Params{
@@ -674,8 +674,8 @@ func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
 
 	code := runSinglePassRuntime([]string{requestPath}, &stdout, &stderr)
 
-	if code == 0 {
-		t.Fatal("runSinglePassRuntime exit code = 0, want non-zero")
+	if code != 0 {
+		t.Fatalf("runSinglePassRuntime exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	gate := readSpawnGate(t)
 	if gate.Status != state.StatusResolved {
@@ -684,15 +684,16 @@ func TestSinglePassRuntimeFailureResolvesPendingGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
 	}
-	if !strings.Contains(gate.ResolutionReason, "single-pass runtime failed") {
-		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
+	if !strings.Contains(gate.ResolutionReason, "1 reviewer failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failure", gate.ResolutionReason)
 	}
 	events := readSpawnEventLog(t)
 	findSpawnEvent(t, events, telemetry.EventRuntimeStarted)
-	findSpawnEvent(t, events, telemetry.EventRuntimeFailed)
+	findSpawnEvent(t, events, telemetry.EventRuntimeCompleted)
 	findSpawnEvent(t, events, telemetry.EventReviewerProcessLaunching)
 	findSpawnEvent(t, events, telemetry.EventReviewerProcessStarted)
 	findSpawnEvent(t, events, telemetry.EventReviewerProcessFailed)
+	findSpawnEvent(t, events, telemetry.EventReviewerFailed)
 	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
 		t.Fatalf("PollGateState() error = %v", err)
 	}
@@ -774,7 +775,7 @@ func TestStartRuntimeProcessRecordsLaunchEvents(t *testing.T) {
 	}
 }
 
-func TestDebateRuntimeFailureResolvesPendingGate(t *testing.T) {
+func TestDebateReviewerFailureResolvesPendingGate(t *testing.T) {
 	setSpawnTestEnv(t)
 	t.Setenv("CERBERUS_MOCK_EXIT", "1")
 	started, err := (orchestrator.Orchestrator{}).StartDebate(orchestrator.Params{
@@ -799,8 +800,8 @@ func TestDebateRuntimeFailureResolvesPendingGate(t *testing.T) {
 
 	code := runDebateRuntime([]string{requestPath}, &stdout, &stderr)
 
-	if code == 0 {
-		t.Fatal("runDebateRuntime exit code = 0, want non-zero")
+	if code != 0 {
+		t.Fatalf("runDebateRuntime exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	gate := readSpawnGate(t)
 	if gate.Status != state.StatusResolved {
@@ -809,8 +810,8 @@ func TestDebateRuntimeFailureResolvesPendingGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
 	}
-	if !strings.Contains(gate.ResolutionReason, "debate runtime failed") {
-		t.Fatalf("resolution reason = %q, want runtime failure", gate.ResolutionReason)
+	if !strings.Contains(gate.ResolutionReason, "2 reviewers failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failures", gate.ResolutionReason)
 	}
 	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
 		t.Fatalf("PollGateState() error = %v", err)

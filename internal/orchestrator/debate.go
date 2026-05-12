@@ -264,6 +264,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 		if err != nil {
 			return Verdict{}, err
 		}
+		failures := roundFailureCount(roundResults)
 		outputs := make([]reviewer.RawReviewerOutput, len(roundResults))
 		for i, result := range roundResults {
 			outputs[i] = result.Output
@@ -282,7 +283,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			Round:         round,
 			ReviewerCount: len(roundResults),
 			ConsensusPct:  consensusPct(roundResults, result.Verdict),
-			Abstentions:   0,
+			Abstentions:   failures,
 			KStarEstimate: nil,
 			StartedAt:     roundStartedAt,
 			EndedAt:       &endedAt,
@@ -296,9 +297,13 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 				"round":         round,
 				"verdict":       result.Verdict,
 				"consensus_pct": consensusPct(roundResults, result.Verdict),
+				"abstentions":   failures,
 			},
 		}); err != nil {
 			return Verdict{}, err
+		}
+		if failures > 0 {
+			break
 		}
 		if round > 1 && (result.Verdict == aggregate.VerdictPass || result.Verdict == aggregate.VerdictFail) {
 			break
@@ -323,7 +328,11 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	}); err != nil {
 		return Verdict{}, err
 	}
-	state.MarkResolved(gate, final.Verdict, endedAt)
+	if reason := reviewerFailureResolutionReason(finalRoundResults); reason != "" {
+		state.MarkResolved(gate, final.Verdict, endedAt, reason)
+	} else {
+		state.MarkResolved(gate, final.Verdict, endedAt)
+	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return Verdict{}, err
 	}

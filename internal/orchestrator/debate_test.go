@@ -153,7 +153,7 @@ func TestRunDebateRunsAllRoundsWhenVerdictRequiresDecision(t *testing.T) {
 	}
 }
 
-func TestRunDebateRoundTwoReviewerFailureReturnsError(t *testing.T) {
+func TestRunDebateRoundTwoReviewerFailureResolvesRequiresDecision(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	spawner := &verdictByRoundSpawner{
@@ -162,12 +162,25 @@ func TestRunDebateRoundTwoReviewerFailureReturnsError(t *testing.T) {
 		failMessage: "round two failed",
 	}
 
-	_, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
 		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
 		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
 	}, []byte("review this"), 3)
-	if err == nil || !strings.Contains(err.Error(), "round two failed") {
-		t.Fatalf("RunDebate() error = %v, want round two failure", err)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v, want nil", err)
+	}
+	if verdict.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictRequiresDecision)
+	}
+	if got, want := spawner.roundCalls(3), 0; got != want {
+		t.Fatalf("round 3 call count = %d, want %d", got, want)
+	}
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if !strings.Contains(gate.ResolutionReason, "2 reviewers failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failures", gate.ResolutionReason)
 	}
 }
 

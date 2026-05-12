@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 	"github.com/charlieyou/cerberus/internal/state"
@@ -37,7 +39,7 @@ func TestRunSinglePassTransitionsPendingToResolvedPass(t *testing.T) {
 	}
 }
 
-func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
+func TestRunSinglePassReviewerFailureResolvesRequiresDecision(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	wantErr := errors.New("reviewer failed")
@@ -48,16 +50,25 @@ func TestRunSinglePassReviewerFailureLeavesGatePending(t *testing.T) {
 			{ID: "codex#1", Provider: "codex", Model: "stub"},
 		},
 	}, errorSpawner{err: wantErr})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("RunSinglePass() error = %v, want %v", err, wantErr)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v, want nil", err)
 	}
 
 	gate := readGate(t, env)
-	if gate.Status != state.StatusPending {
-		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusPending)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
 	}
-	if gate.Verdict != nil {
-		t.Fatalf("gate verdict = %v, want nil", gate.Verdict)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
+	}
+	if !strings.Contains(gate.ResolutionReason, "1 reviewer failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failure", gate.ResolutionReason)
+	}
+
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	failed := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "output.json"))
+	if !strings.Contains(fmt.Sprint(failed["summary"]), wantErr.Error()) {
+		t.Fatalf("failed output summary = %v, want reviewer error", failed["summary"])
 	}
 	events := readEventLog(t, env)
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
@@ -399,15 +410,95 @@ func TestRunSinglePassExplicitMissingCLIFailsBeforePendingGate(t *testing.T) {
 	}
 }
 
-func TestRunRoundReturnsOriginalErrorBeforeCancellationNoise(t *testing.T) {
-	wantErr := errors.New("reviewer command failed")
-	_, _, err := runRound(context.Background(), []ReviewerSlot{
-		{ID: "codex#1", Provider: "codex", Model: "stub"},
-		{ID: "claude#1", Provider: "claude", Model: "stub"},
-	}, noisyCancelSpawner{err: wantErr}, roundPrompts{Root: repoRoot(t)})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("runRound() error = %v, want original error %v", err, wantErr)
+func TestRunSinglePassReviewerFailureDoesNotCancelOtherReviewers(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &partialFailureSpawner{
+		failed: make(chan struct{}),
+		err:    errors.New("claude parse failed"),
 	}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v, want nil", err)
+	}
+
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
+	}
+
+	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
+	assertEventCount(t, events, telemetry.EventReviewerCompleted, 1)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	passed := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "output.json"))
+	if got, want := passed["verdict"], "PASS"; got != want {
+		t.Fatalf("codex output verdict = %v, want %q", got, want)
+	}
+}
+
+func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		consensus aggregate.Mode
+		outputs   []roundReviewerResult
+		want      string
+	}{
+		{
+			name:      "all mode pass plus failure requires decision",
+			consensus: aggregate.ModeAll,
+			outputs:   []roundReviewerResult{roundOutput("PASS"), failedRoundOutput()},
+			want:      aggregate.VerdictRequiresDecision,
+		},
+		{
+			name:      "any mode fail plus failure fails",
+			consensus: aggregate.ModeAny,
+			outputs:   []roundReviewerResult{roundOutput("FAIL"), failedRoundOutput()},
+			want:      aggregate.VerdictFail,
+		},
+		{
+			name:      "majority mode counts only successful reviewer votes",
+			consensus: aggregate.ModeMajority,
+			outputs: []roundReviewerResult{
+				roundOutput("FAIL"),
+				roundOutput("FAIL"),
+				roundOutput("PASS"),
+				failedRoundOutput(),
+				failedRoundOutput(),
+			},
+			want: aggregate.VerdictFail,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := aggregateRoundOutputs(tc.outputs, tc.consensus)
+			if err != nil {
+				t.Fatalf("aggregateRoundOutputs() error = %v", err)
+			}
+			if got.Verdict != tc.want {
+				t.Fatalf("verdict = %q, want %q", got.Verdict, tc.want)
+			}
+		})
+	}
+}
+
+func roundOutput(verdict string) roundReviewerResult {
+	return roundReviewerResult{Output: reviewer.RawReviewerOutput{Findings: []reviewer.RawFinding{}, Verdict: verdict}}
+}
+
+func failedRoundOutput() roundReviewerResult {
+	output := roundOutput("NEEDS_WORK")
+	output.Failed = true
+	return output
 }
 
 func TestRunSinglePassPassesSlotStrategyAsSystemPrompt(t *testing.T) {
@@ -494,17 +585,6 @@ func (spawner errorSpawner) Spawn(ctx context.Context, request reviewer.Request)
 	return reviewer.Response{}, spawner.err
 }
 
-type noisyCancelSpawner struct {
-	err error
-}
-
-func (spawner noisyCancelSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
-	if request.ID == "codex#1" {
-		return reviewer.Response{}, context.Canceled
-	}
-	return reviewer.Response{}, spawner.err
-}
-
 type systemPromptSpawner struct {
 	want string
 }
@@ -558,6 +638,25 @@ func (usageSpawner) Spawn(ctx context.Context, request reviewer.Request) (review
 		response.CostUSD = 0.02
 	}
 	return response, nil
+}
+
+type partialFailureSpawner struct {
+	failed chan struct{}
+	err    error
+}
+
+func (spawner *partialFailureSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if request.ID == "claude#1" {
+		close(spawner.failed)
+		return reviewer.Response{}, spawner.err
+	}
+	<-spawner.failed
+	select {
+	case <-time.After(20 * time.Millisecond):
+		return passResponse(request.ID)
+	case <-ctx.Done():
+		return reviewer.Response{}, ctx.Err()
+	}
 }
 
 func passResponse(id string) (reviewer.Response, error) {

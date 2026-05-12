@@ -225,7 +225,7 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 		Round:         1,
 		ReviewerCount: len(roundResults),
 		ConsensusPct:  consensusPct(roundResults, result.Verdict),
-		Abstentions:   0,
+		Abstentions:   roundFailureCount(roundResults),
 		KStarEstimate: nil,
 		StartedAt:     roundStartedAt,
 		EndedAt:       &endedAt,
@@ -238,7 +238,7 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 		Payload: map[string]any{
 			"round":           1,
 			"consensus_pct":   consensusPct(roundResults, result.Verdict),
-			"abstentions":     0,
+			"abstentions":     roundFailureCount(roundResults),
 			"k_star_estimate": nil,
 		},
 	}); err != nil {
@@ -260,7 +260,11 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	}); err != nil {
 		return err
 	}
-	state.MarkResolved(gate, result.Verdict, endedAt)
+	if reason := reviewerFailureResolutionReason(roundResults); reason != "" {
+		state.MarkResolved(gate, result.Verdict, endedAt, reason)
+	} else {
+		state.MarkResolved(gate, result.Verdict, endedAt)
+	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return err
 	}
