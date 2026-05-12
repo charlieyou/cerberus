@@ -17,6 +17,8 @@ import (
 	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
+const geminiToolNameDirective = "Gemini tool-use constraint: when calling local tools, use only the exact function names `glob`, `grep_search`, or `read_file`; do not add trailing punctuation such as a colon to the tool/function name."
+
 // Runner spawns provider CLIs and persists per-reviewer artifacts.
 type Runner struct {
 	Root      string
@@ -311,6 +313,7 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 		if _, err := os.Stat(policyPath); err != nil {
 			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
 		}
+		system = withGeminiToolNameDirective(system)
 		args = []string{"--output-format", "json", "--model", invocation.Model, "--prompt", string(system), "--policy", policyPath}
 	default:
 		return nil, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
@@ -331,6 +334,16 @@ func systemPromptWithMode(system []byte, mode string) []byte {
 		return directive
 	}
 	return bytes.Join([][]byte{system, directive}, []byte("\n\n"))
+}
+
+func withGeminiToolNameDirective(system []byte) []byte {
+	if bytes.Contains(system, []byte(geminiToolNameDirective)) {
+		return system
+	}
+	if len(bytes.TrimSpace(system)) == 0 {
+		return []byte(geminiToolNameDirective)
+	}
+	return bytes.Join([][]byte{system, []byte(geminiToolNameDirective)}, []byte("\n\n"))
 }
 
 func firstNonEmpty(values ...string) string {

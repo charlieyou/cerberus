@@ -85,6 +85,20 @@ func TestOutputWriteSuccessClearsStaleArtifacts(t *testing.T) {
 
 func TestOutputWriteFailureWritesParentMarkerAndStats(t *testing.T) {
 	outputDir := t.TempDir()
+	providerDir := filepath.Join(outputDir, "gemini")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(providerDir, "draft.md"),
+		filepath.Join(providerDir, "raw.json"),
+		filepath.Join(providerDir, "gemini.done"),
+		filepath.Join(outputDir, "gemini.done"),
+	} {
+		if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
 
 	if err := WriteFailure(outputDir, "gemini", 9, "boom"); err != nil {
 		t.Fatalf("WriteFailure() error = %v", err)
@@ -106,6 +120,16 @@ func TestOutputWriteFailureWritesParentMarkerAndStats(t *testing.T) {
 	}
 	if !strings.Contains(stats.ErrorMessage, "boom") {
 		t.Fatalf("stats error_message = %q, want boom", stats.ErrorMessage)
+	}
+	for _, path := range []string{
+		filepath.Join(providerDir, "draft.md"),
+		filepath.Join(providerDir, "raw.json"),
+		filepath.Join(providerDir, "gemini.done"),
+		filepath.Join(outputDir, "gemini.done"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s stat err = %v, want not exist", path, err)
+		}
 	}
 }
 

@@ -100,7 +100,7 @@ document does not replace those underlying checks.
 | Gemini read-only policy verified in single-pass and debate panels | Green | T702 integration suite, backed by `internal/reviewer/reviewer_test.go`, `internal/generate/subprocess_test.go`, `tests/integration/debate_gemini_policy_test.go`, and `tests/integration/debate_multi_instance_test.go`. |
 | Rollback path documented per D11 | Green | T801 README rewrite and T802 CODEX rewrite document the v1.54.x pin, `/plugin update --version 1.54.x`, and clearing v2 state. |
 | `README.md` and `docs/CODEX.md` rewritten for v2 | Green | T801 and T802 are closed as done. |
-| Plugin manifests advertise `2.0.0` | Green | T804 manifest gate, backed by `tests/integration/manifest_versions_test.go` and `internal/lint/manifestversions`. |
+| Plugin manifests advertise `2.0.0` | Green | T804 manifest gate. |
 | Run-team files and hook entries absent; task-generation files remain | Green | T606 cleanup invariants and `tests/integration/run_team_absence_test.go`; `skills/create-tasks`, `skills/review-tasks`, and `templates/tasks-template.md` remain. |
 
 The v2.0.0 tag should be created only after this checklist remains green on

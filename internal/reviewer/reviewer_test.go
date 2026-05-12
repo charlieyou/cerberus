@@ -71,6 +71,14 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				if !strings.Contains(args, "--prompt\nsystem prompt") {
 					t.Fatalf("gemini argv = %q, want prompt flag", args)
 				}
+				if !strings.Contains(args, "use only the exact function names `glob`, `grep_search`, or `read_file`") {
+					t.Fatalf("gemini argv = %q, want tool-name directive", args)
+				}
+				for _, unsupported := range []string{"list_directory", "read_many_files"} {
+					if strings.Contains(args, unsupported) {
+						t.Fatalf("gemini argv = %q, must not advertise unsupported tool %q", args, unsupported)
+					}
+				}
 				if !strings.Contains(args, "--policy\n"+wantPolicy) {
 					t.Fatalf("gemini argv = %q, want policy file %s", args, wantPolicy)
 				}

@@ -33,6 +33,16 @@ func WriteFailure(outputDir, provider string, exitCode int, errMsg string) error
 	if err := os.MkdirAll(providerDir, 0o755); err != nil {
 		return fmt.Errorf("create %s output directory: %w", provider, err)
 	}
+	for _, path := range []string{
+		filepath.Join(providerDir, "draft.md"),
+		filepath.Join(providerDir, "raw.json"),
+		filepath.Join(providerDir, provider+".done"),
+		filepath.Join(outputDir, provider+".done"),
+	} {
+		if err := removeIfExists(path); err != nil {
+			return fmt.Errorf("remove stale %s success artifact: %w", provider, err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(outputDir, provider+".failed"), []byte(errMsg), 0o644); err != nil {
 		return fmt.Errorf("write %s failure marker: %w", provider, err)
 	}

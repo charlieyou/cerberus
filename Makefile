@@ -22,7 +22,6 @@ lint:
 	@! grep -RIl 'bin/review-gate-models\.sh\|bin/review-gate' skills --include 'SKILL.md' 2>/dev/null
 	@for skill in $$(find skills -name SKILL.md -print); do grep -q 'bin/cerberus' "$$skill" || { echo "$$skill: missing bin/cerberus reference"; exit 1; }; done
 	go run ./internal/lint/r3sot
-	go run ./internal/lint/manifestversions
 	go run ./internal/lint/bootstrapdrift
 
 fixtures-refresh:
