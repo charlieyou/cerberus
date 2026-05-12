@@ -8,7 +8,7 @@ build: $(BIN)
 
 $(BIN): $(GO_SOURCES) go.mod go.sum
 	@mkdir -p bin
-	go build -tags netgo -o $(BIN) ./cmd/cerberus
+	go build -buildvcs=false -tags netgo -o $(BIN) ./cmd/cerberus
 
 install:
 	@set -eu; \
