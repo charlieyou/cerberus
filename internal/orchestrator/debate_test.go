@@ -220,8 +220,63 @@ func TestRunDebateRoundTwoReviewerFailureResolvesRequiresDecision(t *testing.T) 
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
 	}
-	if !strings.Contains(gate.ResolutionReason, "2 reviewers failed") {
-		t.Fatalf("resolution reason = %q, want reviewer failures", gate.ResolutionReason)
+	if !strings.Contains(gate.ResolutionReason, "debate degraded below 2 active reviewers") {
+		t.Fatalf("resolution reason = %q, want degraded active reviewer count", gate.ResolutionReason)
+	}
+}
+
+func TestRunDebateRoundOneReviewerFailurePassesWithTwoActiveReviewers(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &partialFailureSpawner{
+		failed: make(chan struct{}),
+		err:    fmt.Errorf("claude crashed"),
+	}
+
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+		{ID: "claude#1", Provider: "claude", Model: "stub", InstanceIndex: 1},
+		{ID: "gemini#1", Provider: "gemini", Model: "stub", InstanceIndex: 1},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v, want nil", err)
+	}
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictPass)
+	}
+	gate := readGate(t, env)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictPass {
+		t.Fatalf("gate verdict = %v, want pass", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "1 reviewer failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failure", gate.ResolutionReason)
+	}
+}
+
+func TestRunDebateRoundOneReviewerFailureRequiresDecisionBelowQuorum(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &partialFailureSpawner{
+		failed: make(chan struct{}),
+		err:    fmt.Errorf("claude crashed"),
+	}
+
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+		{ID: "claude#1", Provider: "claude", Model: "stub", InstanceIndex: 1},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v, want nil", err)
+	}
+	if verdict.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictRequiresDecision)
+	}
+	gate := readGate(t, env)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "debate degraded below 2 active reviewers") {
+		t.Fatalf("resolution reason = %q, want degraded active reviewer count", gate.ResolutionReason)
 	}
 }
 

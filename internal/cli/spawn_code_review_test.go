@@ -852,8 +852,8 @@ func TestDebateReviewerFailureResolvesPendingGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
 	}
-	if !strings.Contains(gate.ResolutionReason, "2 reviewers failed") {
-		t.Fatalf("resolution reason = %q, want reviewer failures", gate.ResolutionReason)
+	if !strings.Contains(gate.ResolutionReason, "debate degraded below 2 active reviewers") {
+		t.Fatalf("resolution reason = %q, want degraded active reviewer count", gate.ResolutionReason)
 	}
 	if err := hook.PollGateState(spawnGatePath(), 10*time.Millisecond, time.Second); err != nil {
 		t.Fatalf("PollGateState() error = %v", err)

@@ -403,16 +403,21 @@ func telemetryTotals(results []roundReviewerResult) ([]telemetry.ReviewerSummary
 }
 
 func consensusPct(results []roundReviewerResult, verdict string) float64 {
-	if len(results) == 0 {
-		return 0
-	}
 	matching := 0
+	active := 0
 	for _, result := range results {
+		if result.Failed {
+			continue
+		}
+		active++
 		if result.Row.Verdict == verdict {
 			matching++
 		}
 	}
-	return float64(matching) / float64(len(results))
+	if active == 0 {
+		return 0
+	}
+	return float64(matching) / float64(active)
 }
 
 func resolveRun(env *config.Env) (*config.Env, string, error) {

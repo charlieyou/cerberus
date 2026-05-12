@@ -171,9 +171,6 @@ func aggregateRoundOutputs(outputs []roundReviewerResult, consensus aggregate.Mo
 			result.Blockers[i].ReviewerIndex = successfulIndexes[filteredIndex]
 		}
 	}
-	if roundFailureCount(outputs) > 0 && result.Verdict == aggregate.VerdictPass {
-		result.Verdict = aggregate.VerdictRequiresDecision
-	}
 	return result, nil
 }
 
@@ -254,6 +251,10 @@ func roundFailureCount(results []roundReviewerResult) int {
 		}
 	}
 	return failures
+}
+
+func activeReviewerCount(results []roundReviewerResult) int {
+	return len(results) - roundFailureCount(results)
 }
 
 func reviewerFailureResolutionReason(results []roundReviewerResult) string {

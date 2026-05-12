@@ -493,8 +493,8 @@ func TestRunSinglePassReviewerFailureDoesNotCancelOtherReviewers(t *testing.T) {
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
 	}
-	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
-		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictPass {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictPass)
 	}
 
 	events := readEventLog(t, env)
@@ -515,10 +515,10 @@ func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) 
 		want      string
 	}{
 		{
-			name:      "all mode pass plus failure requires decision",
+			name:      "all mode pass plus failure passes",
 			consensus: aggregate.ModeAll,
 			outputs:   []roundReviewerResult{roundOutput("PASS"), failedRoundOutput()},
-			want:      aggregate.VerdictRequiresDecision,
+			want:      aggregate.VerdictPass,
 		},
 		{
 			name:      "any mode fail plus failure fails",
@@ -551,12 +551,31 @@ func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) 
 	}
 }
 
+func TestConsensusPctExcludesReviewerFailures(t *testing.T) {
+	got := consensusPct([]roundReviewerResult{
+		roundOutput("PASS"),
+		roundOutput("PASS"),
+		failedRoundOutput(),
+	}, aggregate.VerdictPass)
+	if got != 1 {
+		t.Fatalf("consensusPct() = %v, want 1", got)
+	}
+}
+
 func roundOutput(verdict string) roundReviewerResult {
-	return roundReviewerResult{Output: reviewer.RawReviewerOutput{Findings: []reviewer.RawFinding{}, Verdict: verdict}}
+	gateVerdict, err := aggregate.NormalizeVerdict(verdict)
+	if err != nil {
+		panic(err)
+	}
+	return roundReviewerResult{
+		Output: reviewer.RawReviewerOutput{Findings: []reviewer.RawFinding{}, Verdict: verdict},
+		Row:    telemetry.ReviewerRow{Verdict: gateVerdict},
+	}
 }
 
 func failedRoundOutput() roundReviewerResult {
 	output := roundOutput("NEEDS_WORK")
+	output.Row.Verdict = aggregate.VerdictRequiresDecision
 	output.Failed = true
 	return output
 }

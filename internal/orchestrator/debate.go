@@ -220,6 +220,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	var totalCostUSD float64
 	roundsCompleted := 0
 	var peerBroadcast []byte
+	degradedReason := ""
 
 	for round := 1; round <= maxRounds; round++ {
 		if round > 1 {
@@ -312,6 +313,10 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			return Verdict{}, err
 		}
 		if failures > 0 {
+			if activeReviewerCount(roundResults) < 2 {
+				final.Verdict = aggregate.VerdictRequiresDecision
+				degradedReason = "debate degraded below 2 active reviewers in the final peer round"
+			}
 			break
 		}
 		if round > 1 && (result.Verdict == aggregate.VerdictPass || result.Verdict == aggregate.VerdictFail) {
@@ -337,7 +342,9 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	}); err != nil {
 		return Verdict{}, err
 	}
-	if reason := reviewerFailureResolutionReason(finalRoundResults); reason != "" {
+	if degradedReason != "" {
+		state.MarkResolved(gate, final.Verdict, endedAt, degradedReason)
+	} else if reason := reviewerFailureResolutionReason(finalRoundResults); reason != "" {
 		state.MarkResolved(gate, final.Verdict, endedAt, reason)
 	} else {
 		state.MarkResolved(gate, final.Verdict, endedAt)
