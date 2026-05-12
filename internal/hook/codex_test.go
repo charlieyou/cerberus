@@ -83,6 +83,49 @@ func TestCodexSessionInitPreservesCachedRunKeyForSameSession(t *testing.T) {
 	}
 }
 
+func TestCodexSessionInitWritesPluginRootCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	payload := []byte(`{"session_id":"codex-session","transcript_path":"/tmp/current.jsonl","project_key":"project"}`)
+	env := &config.Env{Host: "codex", Root: "/plugin/root", StateRoot: t.TempDir()}
+
+	if err := HandleCodexSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleCodexSessionStart() error = %v", err)
+	}
+
+	cachedRoot, err := config.ReadCodexPluginRootCache("codex-session")
+	if err != nil {
+		t.Fatalf("ReadCodexPluginRootCache() error = %v", err)
+	}
+	if cachedRoot != "/plugin/root" {
+		t.Fatalf("cached plugin root = %q, want /plugin/root", cachedRoot)
+	}
+}
+
+func TestCodexSessionInitIgnoresLeakedClaudeHost(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	payload := []byte(`{"session_id":"codex-session","transcript_path":"/tmp/current.jsonl","project_key":"project"}`)
+	env := &config.Env{Host: "claude", Root: "/plugin/root"}
+
+	if err := HandleCodexSessionStart(payload, env); err != nil {
+		t.Fatalf("HandleCodexSessionStart() error = %v", err)
+	}
+
+	codexSessionPath := filepath.Join(home, ".codex", "projects", "project", "cerberus", "codex-session", "session.json")
+	if _, err := os.Stat(codexSessionPath); err != nil {
+		t.Fatalf("codex session state missing: %v", err)
+	}
+	claudeSessionPath := filepath.Join(home, ".claude", "projects", "project", "cerberus", "codex-session", "session.json")
+	if _, err := os.Stat(claudeSessionPath); err == nil {
+		t.Fatalf("codex hook wrote state through leaked claude host at %s", claudeSessionPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat leaked claude state path: %v", err)
+	}
+}
+
 func TestCodexSessionInitPreservesCachedRunWhenSameSessionGateUnreadable(t *testing.T) {
 	payload := []byte(`{"session_id":"codex-session","transcript_path":"/tmp/current.jsonl","project_key":"project"}`)
 	env := &config.Env{Host: "codex", StateRoot: t.TempDir()}

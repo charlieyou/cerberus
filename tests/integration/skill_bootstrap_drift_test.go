@@ -50,12 +50,15 @@ func TestSkillBootstrapDriftCanonicalParses(t *testing.T) {
 		t.Fatalf("canonical resolver body must export the resolved root for the child process")
 	}
 	for _, want := range []string{
+		`host="${CERBERUS_HOST:-}"`,
+		`root="${PLUGIN_ROOT:-}"`,
 		`root="${CLAUDE_PLUGIN_ROOT}"`,
 		`skill_dir="${CLAUDE_SKILL_DIR}"`,
+		`cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"`,
 		`claude_session="${CLAUDE_SESSION_ID}"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("canonical resolver body must use documented Claude Code substitution %q", want)
+			t.Fatalf("canonical resolver body must include %q", want)
 		}
 	}
 	if strings.Contains(body, `${CLAUDE_PLUGIN_ROOT:-`) {

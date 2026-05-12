@@ -111,7 +111,8 @@ func compactCanonicalHookResolver(t *testing.T, path string) string {
 	}
 
 	resolver := strings.Join(lines, "; ")
-	return strings.ReplaceAll(resolver, "; then; ", "; then ")
+	resolver = strings.ReplaceAll(resolver, "; then; ", "; then ")
+	return strings.ReplaceAll(resolver, "; else; ", "; else ")
 }
 
 func onlyHookCommand(t *testing.T, path, event string, entries []hookEntry) hookCommand {

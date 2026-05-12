@@ -126,11 +126,21 @@ and troubleshooting details.
 
 Every skill and hook starts with the same resolver:
 
-1. Find the plugin root from `CERBERUS_ROOT`, `CLAUDE_PLUGIN_ROOT`, or
-   `PLUGIN_ROOT`.
+1. Find the plugin root. `CERBERUS_ROOT` is the manual override; Claude uses
+   `CLAUDE_PLUGIN_ROOT` or `CLAUDE_SKILL_DIR`; Codex uses hook-provided
+   `PLUGIN_ROOT` or Codex's session-scoped plugin-root cache.
 2. Check whether `bin/cerberus` is present and current with `make -q build`.
 3. If needed, run `make build`.
 4. Execute the requested `cerberus` subcommand.
+
+Codex hooks receive `PLUGIN_ROOT` and write it to
+`~/.codex/cerberus/sessions/<thread-id>/plugin-root` so Codex skill Bash
+snippets can find the matching plugin-local binary even though normal Codex Bash
+tool calls do not receive plugin-root environment variables. In Codex mode the
+resolver treats `CODEX_THREAD_ID`/`PLUGIN_ROOT` as authoritative over ambient
+`CERBERUS_HOST` or `CERBERUS_SESSION_ID`, and it fails closed if neither
+`PLUGIN_ROOT` nor the cache is available rather than falling back to a different
+host's plugin root.
 
 The first command after clone, install, or upgrade may print:
 

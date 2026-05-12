@@ -150,6 +150,10 @@ func normalizeShell(text string) string {
 			normalized = append(normalized, "then")
 			part = strings.TrimSpace(strings.TrimPrefix(part, "then "))
 		}
+		if strings.HasPrefix(part, "else ") {
+			normalized = append(normalized, "else")
+			part = strings.TrimSpace(strings.TrimPrefix(part, "else "))
+		}
 		normalized = append(normalized, part)
 	}
 	return strings.Join(nonEmpty(normalized), "\n")

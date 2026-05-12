@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveReadsCerberusEnv(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "/plugin/root")
@@ -10,7 +14,8 @@ func TestResolveReadsCerberusEnv(t *testing.T) {
 	t.Setenv("CERBERUS_STATE_ROOT", "/state/root")
 	t.Setenv("CERBERUS_PROJECT_KEY", "project-key")
 	t.Setenv("CERBERUS_TRANSCRIPT_PATH", "/tmp/transcript.jsonl")
-	t.Setenv("CLAUDE_PLUGIN_ROOT", "/fallback/root")
+	t.Setenv("PLUGIN_ROOT", "/fallback/root")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 
 	env := Resolve()
 
@@ -42,6 +47,7 @@ func TestResolveFallsBackToClaudePluginRootForRoot(t *testing.T) {
 	t.Setenv("CERBERUS_HOST", "")
 	t.Setenv("PLUGIN_ROOT", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "/claude/plugin")
+	t.Setenv("CODEX_THREAD_ID", "")
 
 	env := Resolve()
 
@@ -69,7 +75,7 @@ func TestResolveFallsBackToPluginRootAndInfersCodexHost(t *testing.T) {
 	}
 }
 
-func TestResolveWithBothPluginRootsInfersCodexHostAndUsesClaudeRootFallback(t *testing.T) {
+func TestResolveWithBothPluginRootsInfersCodexHostAndUsesPluginRoot(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "")
 	t.Setenv("CERBERUS_HOST", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "/claude/plugin")
@@ -77,23 +83,196 @@ func TestResolveWithBothPluginRootsInfersCodexHostAndUsesClaudeRootFallback(t *t
 
 	env := Resolve()
 
-	if env.Root != "/claude/plugin" {
-		t.Fatalf("Root = %q, want CLAUDE_PLUGIN_ROOT value", env.Root)
+	if env.Root != "/codex/plugin" {
+		t.Fatalf("Root = %q, want PLUGIN_ROOT value", env.Root)
 	}
 	if env.Host != "codex" {
 		t.Fatalf("Host = %q, want inferred codex host", env.Host)
 	}
 }
 
-func TestResolvePrefersExplicitHostOverPluginRootInference(t *testing.T) {
-	t.Setenv("CERBERUS_HOST", "generic")
-	t.Setenv("PLUGIN_ROOT", "/codex/plugin")
+func TestResolveNormalizesClaudeCodeHost(t *testing.T) {
+	t.Setenv("CERBERUS_HOST", "claude-code")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/claude/plugin")
+
+	env := Resolve()
+
+	if env.Host != "claude" {
+		t.Fatalf("Host = %q, want claude", env.Host)
+	}
+	if env.Root != "/claude/plugin" {
+		t.Fatalf("Root = %q, want claude plugin root", env.Root)
+	}
+}
+
+func TestResolveInfersCodexHostAndSessionFromThreadID(t *testing.T) {
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CERBERUS_SESSION_ID", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+
+	env := Resolve()
+
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want codex", env.Host)
+	}
+	if env.SessionID != "codex-thread" {
+		t.Fatalf("SessionID = %q, want CODEX_THREAD_ID", env.SessionID)
+	}
+}
+
+func TestResolveCodexSignalsOverrideLeakedCerberusHost(t *testing.T) {
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "claude")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/wrong/claude/plugin")
+	t.Setenv("PLUGIN_ROOT", "/codex/plugin")
+	t.Setenv("CODEX_THREAD_ID", "")
+
+	env := Resolve()
+
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want codex", env.Host)
+	}
+	if env.Root != "/codex/plugin" {
+		t.Fatalf("Root = %q, want PLUGIN_ROOT value", env.Root)
+	}
+}
+
+func TestResolveCodexThreadOverridesLeakedCerberusSession(t *testing.T) {
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "claude")
+	t.Setenv("CERBERUS_SESSION_ID", "claude-session")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/wrong/claude/plugin")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+
+	env := Resolve()
+
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want codex", env.Host)
+	}
+	if env.SessionID != "codex-thread" {
+		t.Fatalf("SessionID = %q, want CODEX_THREAD_ID", env.SessionID)
+	}
+}
+
+func TestResolveReadsCodexPluginRootCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+	if err := WriteCodexPluginRootCache("codex-thread", "/cached/plugin"); err != nil {
+		t.Fatalf("WriteCodexPluginRootCache() error = %v", err)
+	}
+
+	env := Resolve()
+
+	if env.Root != "/cached/plugin" {
+		t.Fatalf("Root = %q, want cached plugin root", env.Root)
+	}
+}
+
+func TestResolveCodexUsesCacheInsteadOfLeakedClaudePluginRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/wrong/claude/plugin")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+	if err := WriteCodexPluginRootCache("codex-thread", "/cached/plugin"); err != nil {
+		t.Fatalf("WriteCodexPluginRootCache() error = %v", err)
+	}
+
+	env := Resolve()
+
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want codex", env.Host)
+	}
+	if env.Root != "/cached/plugin" {
+		t.Fatalf("Root = %q, want cached plugin root", env.Root)
+	}
+}
+
+func TestResolveCodexDoesNotUseLeakedClaudePluginRootWithoutCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CERBERUS_ROOT", "")
+	t.Setenv("CERBERUS_HOST", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "/wrong/claude/plugin")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+
+	env := Resolve()
+
+	if env.Host != "codex" {
+		t.Fatalf("Host = %q, want codex", env.Host)
+	}
+	if env.Root != "" {
+		t.Fatalf("Root = %q, want empty without PLUGIN_ROOT or cache", env.Root)
+	}
+}
+
+func TestCodexPluginRootCachePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	path, err := CodexPluginRootCachePath("session-id")
+	if err != nil {
+		t.Fatalf("CodexPluginRootCachePath() error = %v", err)
+	}
+	want := filepath.Join(home, ".codex", "cerberus", "sessions", "session-id", "plugin-root")
+	if path != want {
+		t.Fatalf("CodexPluginRootCachePath() = %q, want %q", path, want)
+	}
+	if err := WriteCodexPluginRootCache("session-id", "/plugin/root"); err != nil {
+		t.Fatalf("WriteCodexPluginRootCache() error = %v", err)
+	}
+	data, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("ReadFile(cache) error = %v", err)
+	}
+	if string(data) != "/plugin/root\n" {
+		t.Fatalf("cache contents = %q, want plugin root", data)
+	}
+}
+
+func TestCodexPluginRootCachePathUsesUserProfileWhenHomeUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", home)
+
+	path, err := CodexPluginRootCachePath("session-id")
+	if err != nil {
+		t.Fatalf("CodexPluginRootCachePath() error = %v", err)
+	}
+	want := filepath.Join(home, ".codex", "cerberus", "sessions", "session-id", "plugin-root")
+	if path != want {
+		t.Fatalf("CodexPluginRootCachePath() = %q, want %q", path, want)
+	}
+}
+
+func TestResolveUsesExplicitHostWhenNoHostSignalsExist(t *testing.T) {
+	t.Setenv("CERBERUS_HOST", "generic")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
+	t.Setenv("CLAUDE_SKILL_DIR", "")
 
 	env := Resolve()
 
 	if env.Host != "generic" {
-		t.Fatalf("Host = %q, want explicit CERBERUS_HOST", env.Host)
+		t.Fatalf("Host = %q, want explicit CERBERUS_HOST fallback", env.Host)
 	}
 }
 
@@ -129,6 +308,8 @@ func TestResolveLeavesUnsetCerberusValuesEmpty(t *testing.T) {
 	t.Setenv("CERBERUS_TRANSCRIPT_PATH", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
 
 	env := Resolve()
 
@@ -141,6 +322,8 @@ func TestResolveDoesNotReadReviewGateRootAlias(t *testing.T) {
 	t.Setenv("CERBERUS_ROOT", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
 	t.Setenv("REVIEW_GATE_ROOT", "/review/gate")
 
 	env := Resolve()

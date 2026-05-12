@@ -60,6 +60,22 @@ func TestCodexHookTemplateRemoved(t *testing.T) {
 	}
 }
 
+func TestClaudePluginExposesHookManifest(t *testing.T) {
+	data, err := os.ReadFile("../.claude-plugin/plugin.json")
+	if err != nil {
+		t.Fatalf("read claude plugin manifest: %v", err)
+	}
+	var manifest struct {
+		Hooks string `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse claude plugin manifest: %v", err)
+	}
+	if manifest.Hooks != "./hooks/hooks.json" {
+		t.Fatalf("claude plugin hooks path = %q, want ./hooks/hooks.json", manifest.Hooks)
+	}
+}
+
 func TestCodexPluginExposesOnlySurvivingSkills(t *testing.T) {
 	data, err := os.ReadFile("../.codex-plugin/plugin.json")
 	if err != nil {

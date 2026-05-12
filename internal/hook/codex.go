@@ -59,6 +59,9 @@ func sessionInit(env *config.Env, stdinPayload []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := config.WriteCodexPluginRootCache(resolved.SessionID, resolved.Root); err != nil {
+		return fmt.Errorf("write codex plugin root cache: %w", err)
+	}
 	if err := state.EnsureRunDir(runRoot); err != nil {
 		return err
 	}
@@ -99,9 +102,7 @@ func resolveCodexHookRunWithPolicy(stdinPayload []byte, env *config.Env, runKeyP
 		env = config.Resolve()
 	}
 	resolved := *env
-	if resolved.Host == "" {
-		resolved.Host = "codex"
-	}
+	resolved.Host = "codex"
 
 	payload, err := decodeCodexPayload(stdinPayload)
 	if err != nil {

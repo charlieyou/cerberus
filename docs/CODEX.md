@@ -30,6 +30,16 @@ at `hooks/codex-hooks.json` for lifecycle hooks. The hook entries lazy-build
 `bin/cerberus` when needed, then execute the Codex hook subcommands described
 below.
 
+Codex exposes `PLUGIN_ROOT` to plugin hooks, not to normal skill Bash tool
+calls. The `SessionStart` and `UserPromptSubmit` hooks therefore write the
+resolved plugin root to `~/.codex/cerberus/sessions/<thread-id>/plugin-root`.
+Skill bootstraps read that cache via `CODEX_THREAD_ID` so they execute the
+matching plugin-local `bin/cerberus` binary. The cache key is the same Codex
+session/thread identity surfaced as hook payload `session_id` and Bash
+`CODEX_THREAD_ID`. Codex host signals override ambient `CERBERUS_HOST` and
+`CERBERUS_SESSION_ID` values so a mixed shell environment cannot route a Codex
+skill through Claude state.
+
 If your Codex install requires explicit hook feature flags, enable them in
 `~/.codex/config.toml`:
 
@@ -89,10 +99,10 @@ Within that tree, each run stores the same v2 state shape used by other hosts:
 telemetry. The host field in run state is `codex` for Codex-originated runs.
 
 The SessionStart and UserPromptSubmit hooks maintain the active Codex session
-pointer. Review skills use that hook-maintained state to connect
-`/cerberus:review-code` with the later `codex-stop` hook. If the hooks have not
-run in the current Codex session, start a new session after enabling the plugin
-instead of manually inventing a run key.
+pointer and the session-scoped plugin-root cache. Review skills use that
+hook-maintained state to connect `/cerberus:review-code` with the later
+`codex-stop` hook. If the hooks have not run in the current Codex session, start
+a new session after enabling the plugin instead of manually inventing a run key.
 
 Codex plugin installs normally provide `PLUGIN_ROOT`; Cerberus uses that to
 infer `CERBERUS_HOST=codex` when the host variable is not explicitly set. That
@@ -247,12 +257,16 @@ Operationally:
 
 ## Troubleshooting
 
-`cerberus: plugin root not set`
+`cerberus: plugin root not set; set CERBERUS_ROOT and retry`
 
-The hook resolver could not find `CERBERUS_ROOT`, `CLAUDE_PLUGIN_ROOT`, or
-`PLUGIN_ROOT`. In normal plugin installs, Codex provides `PLUGIN_ROOT`. For a
+The resolver could not find `CERBERUS_ROOT`, hook-provided plugin variables,
+or the Codex session plugin-root cache. In normal plugin installs, Codex
+provides `PLUGIN_ROOT` to hooks, and the hooks write the cache for skills. If
+you see this from a skill, start a new Codex session after trusting hooks; for a
 local checkout, export `CERBERUS_ROOT` to the Cerberus repository root before
-starting Codex.
+starting Codex. Codex skills do not fall back to Claude plugin variables; that
+prevents a mixed shell environment from selecting the wrong plugin-local binary
+or host/session identity.
 
 `cerberus: make not found on PATH; install make and retry.`
 

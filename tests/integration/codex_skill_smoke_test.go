@@ -150,7 +150,15 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 	hook := exec.Command(binary, "hook", "codex-session-start")
 	hook.Dir = projectRoot
 	hook.Stdin = bytes.NewReader(payloadData)
-	hook.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "CERBERUS_HOST=codex")
+	hook.Env = append(os.Environ(),
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CERBERUS_ROOT=",
+		"CERBERUS_HOST=claude",
+		"CERBERUS_SESSION_ID=claude-session",
+		"CLAUDE_PLUGIN_ROOT=",
+		"PLUGIN_ROOT="+pluginRoot,
+	)
 	if output, err := hook.CombinedOutput(); err != nil {
 		t.Fatalf("codex-session-start smoke failed: %v\n%s", err, output)
 	}
@@ -192,16 +200,19 @@ func runCodexSmokeScript(t *testing.T, binary, pluginRoot, projectRoot, skill, s
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
 		"USERPROFILE="+home,
-		"CERBERUS_ROOT="+pluginRoot,
-		"CERBERUS_HOST=codex",
+		"CERBERUS_ROOT=",
+		"CERBERUS_HOST=claude",
+		"CERBERUS_SESSION_ID=claude-session",
+		"CODEX_THREAD_ID="+sessionID,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
 		"GOFLAGS=-modcacherw",
 		"SMOKE_PROMPT_FILE="+promptFile,
 		"SMOKE_EPIC_FILE="+epicFile,
 		"SMOKE_REVIEW_DIR="+reviewDir,
 		"SMOKE_TMPDIR="+smokeDir,
-		"CLAUDE_PLUGIN_ROOT=",
-		"CLAUDE_SKILL_DIR="+filepath.Join(pluginRoot, "skills", skill),
+		"CLAUDE_PLUGIN_ROOT="+filepath.Join(smokeDir, "wrong-claude-plugin-root"),
+		"CLAUDE_SKILL_DIR="+filepath.Join(smokeDir, "wrong-claude-skill-dir"),
+		"PLUGIN_ROOT=",
 		"PATH="+integrationMockPath(t, integrationRepoRoot(t))+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, err := cmd.CombinedOutput()
