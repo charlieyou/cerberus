@@ -67,6 +67,7 @@ Output only the plan markdown. Do not include preamble, analysis, or clarifying 
    - Prefer using paths and modules that appear in the provided context.
    - If you are introducing a new file/module, label it clearly as **New** (e.g., "New: `path/to/file.ts`").
    - Do **not** claim a file/module already exists unless the context strongly supports it.
+   - Do **not** include line numbers or line-range anchors for files; they become stale quickly. Use paths, module names, and section names instead.
 8. Keep scope explicit:
    - Clearly distinguish MVP from follow-up/nice-to-have work when relevant.
    - Include clear **Non-Goals**.
@@ -272,3 +273,4 @@ Before finalizing AC, ask:
 The plan context will be appended below by the caller. Use it as your source of truth.
 - Use provided file/module references whenever possible.
 - If the context is silent, prefer generic descriptions plus explicit "New:" markers instead of guessing exact file paths.
+- Do not add file line numbers or `#L...` anchors to plan references; cite paths, modules, and section names instead.

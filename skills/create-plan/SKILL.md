@@ -195,6 +195,7 @@ Before asking implementation questions, understand how and where the work will l
 4. **Capture key files/modules**:
    - Build a list of concrete paths likely to be touched or extended.
    - Include relevant test files and config/infra files.
+   - Do not include line numbers or line-range anchors; paths and module/section names are enough and stay accurate longer.
 
 5. **Ownership hints**:
    - Infer which modules/areas "own" the behavior you're changing.
@@ -392,6 +393,8 @@ If `SKIP_INTERVIEW=true`, replace the interactive interview with this pass:
 4. **Document every autonomous decision** in `### Decision Log` with rationale, evidence, tradeoff, and risk/follow-up. Also mirror durable assumptions in `## Assumptions & Constraints`.
 5. **Do not hide uncertainty.** If a decision is product-owned, irreversible, security-sensitive, or unsafe to guess, leave it in `## Open Questions` and design the plan so implementation can pause at that boundary.
 6. **Declare Phase 2 complete** once the skeleton has no unexplained `[TBD]` placeholders except intentionally retained Open Questions.
+
+When citing evidence in the plan, use durable references such as file paths, module names, spec IDs, or section names. Do not include file line numbers or `#L...` anchors.
 
 Treat these as unsafe unknowns unless directly specified by the spec or strongly established by codebase patterns:
 
@@ -707,6 +710,7 @@ Reply "enough detail" to stop, or "skip P2/P3" to focus only on blockers.
 - Present all findings of current priority before asking about any
 - Offer 2-3 concrete options for resolving each ambiguous finding
 - Record decisions in Assumptions & Constraints section
+- Use durable references when summarizing findings or fixes: plan section names, file paths, and module names. Do not add file line numbers or `#L...` anchors.
 - After applying fixes, summarize changes in 2-3 bullets
 
 **Always ask for user input on:**

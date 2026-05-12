@@ -156,6 +156,8 @@ Reviewers evaluate the plan for:
 - **Testability & Verification** - Is there a clear testing strategy that maps to acceptance criteria?
 - **Scope** - Is the plan appropriately scoped (MVP vs follow-ups, clear non-goals)?
 
+When recording or applying review feedback, use durable references such as plan section names, file paths, and module names. Do not add file line numbers or `#L...` anchors; they become stale quickly.
+
 Note: Plans should NOT contain detailed task breakdowns (Task 1, Task 2, etc.) — that is handled separately by `/create-tasks`.
 
 ## Iteration Loop

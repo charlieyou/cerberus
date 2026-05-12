@@ -100,9 +100,10 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 2. Communicate severity appropriately - don't overstate.
 3. Keep comments brief (1 paragraph max).
 4. Reference specific plan sections and any referenced code areas when possible.
-5. Suggest concrete fixes or alternatives where possible.
-6. Maintain a matter-of-fact, helpful tone.
-7. Avoid flattery and unhelpful commentary.
+5. Do not ask for or provide file line numbers or line-range anchors; cite paths, modules, and plan section names instead.
+6. Suggest concrete fixes or alternatives where possible.
+7. Maintain a matter-of-fact, helpful tone.
+8. Avoid flattery and unhelpful commentary.
 
 ### Red Flags
 
@@ -280,7 +281,7 @@ ${DEBATE_OUTPUT_SHAPE}
 - PASS: No P0/P1 findings; P2/P3 allowed
 - NEEDS_WORK: At least one P1, or P2s that collectively prevent safe execution
 - FAIL: At least one P0
-- file_path, line_start, line_end: use null for plan reviews (not applicable)
+- file_path, line_start, line_end: use null for plan reviews (not applicable). Do not add line-number citations in finding bodies.
 - summary MUST state the highest priority level and justify the verdict
 
 If any guidance here conflicts with these output format rules, follow the output format rules above.
