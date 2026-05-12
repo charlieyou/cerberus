@@ -93,7 +93,7 @@ Generate a validated execution task graph from a stable plan and write it to the
 
 - Completing every generated task fully implements the plan with no remaining plan work.
 - Every plan objective, acceptance criterion, and MUST/SHALL/REQUIRED-style obligation has an owning task and verification.
-- Each task is a compact engineering ticket: source links, outcome, scope/constraints, concrete changes, observable acceptance criteria, verification, dependencies, and any task-specific notes.
+- Each task is a compact prompt to the implementation agent: source links, outcome, what-good-means, task-specific scope/constraints, concrete changes, observable acceptance criteria, focused verification, dependencies, and completion-response expectations.
 - Dependencies make parallel execution safe: tasks sharing files or logical prerequisites are ordered; unrelated tasks can run independently.
 - Output-mode side effects are complete and verified: the file is written, Beads graph is ready, Linear project/issues are synced, or team-task file follows the parser contract.
 
@@ -102,7 +102,8 @@ Generate a validated execution task graph from a stable plan and write it to the
 - Treat repo guidance files and skills as constraints and shortcuts, not as reasons to expand the task graph beyond the plan.
 - Use the sections below as the product contract and validation gates; do not narrate or mechanically follow a process when the outcome is already clear.
 - Ask one narrow clarifying question only when ambiguity would change requirements, output destination, or a risky project/team/tooling decision.
-- Keep generated task prompts outcome-focused. Do not repeat generic agent, repo, or tool rules in every task unless they materially affect that task.
+- Keep generated task prompts outcome-focused. Do not repeat generic agent, repo, or tool rules in every task unless they materially affect that task; generic behavior belongs in the harness, tool descriptions, AGENTS.md, or reusable skill guidance.
+- Avoid process-focused scaffolding such as "first inspect, then plan, then edit, then test" unless the exact process is part of the product contract. Include detailed implementation sequencing only when order, API shape, migration sequencing, or safety constraints materially matter.
 - Preserve requirement wording from the plan/spec. Any task-level rewrite of enumerations, constants, thresholds, states, or acceptance criteria must be logged as an approved deviation.
 
 ### Verification
@@ -305,6 +306,7 @@ Generate tasks following these rules:
 
 #### Plan → Task Mapping
 
+- **Task mapping invariant**: Every generated task must either map to at least one plan item (objective, AC, phase, or MUST/SHALL/REQUIRED obligation) or be an infra/setup/support task with a recorded justification tying it to mapped plan work
 - **Setup/Foundation phases**: Derive from `Prerequisites` and infra/config items in `High-Level Approach`
 - **System Wiring phase**: If any end-to-end flow or cross-layer data/config/template propagation is introduced, create at least one dedicated wiring task tagged `[system-wiring]`
 - **US1/US2/USn phases**: Map from spec user stories (when spec loaded) using priority order (P1, P2, P3), applying TDD ordering within each story
@@ -313,14 +315,14 @@ Generate tasks following these rules:
 
 #### Sizing Rules
 
-Size tasks by **files touched** and **subsystems crossed** — these are the best observable proxies for context window consumption, the true limiting factor for LLM agents.
+Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance criteria** — these are the best observable proxies for context window consumption and implementation obligation count.
 
 **Target range**: 3-8 files, 1-2 subsystems per task.
 
 **Hard limits**:
 - Maximum 12 files
 - Maximum 3 subsystems
-- Maximum 3 acceptance criteria
+- Preferred 1-3 atomic acceptance criteria; hard maximum 5 atomic acceptance criteria when tightly coupled with one coherent implementation and verification path
 
 **Mechanical sweep exception** (same change across many files):
 - Up to 18 files allowed
@@ -330,8 +332,9 @@ Size tasks by **files touched** and **subsystems crossed** — these are the bes
 
 **Split triggers** — if any are true, task is too big:
 - Description contains "and then", "after that", "finally"
-- More than 3 acceptance criteria
-- Crosses 3+ subsystems (already at hard limit)
+- More than 5 atomic acceptance criteria
+- Acceptance criteria are cosmetically packed: fewer rendered bullets hide many independent checks behind semicolons, conjunctions, or paragraph-style criteria
+- Crosses more than 3 subsystems (over hard limit); 3 subsystems is allowed but should be split when the work is not one coherent outcome
 - Contains "figure out", "investigate", or "determine where"
 - Red flags: "central integration point", "ties everything together"
 
@@ -426,7 +429,15 @@ These describe the structure of the *generated tasks*, not the workflow phases a
 
 For each task, create a rich specification.
 
-Each task should read like a compact engineering ticket for an implementation agent. Preserve the standard section names below for parser/review compatibility, but keep content task-specific and outcome-focused instead of restating generic agent process.
+Each task should read like a compact engineering-ticket prompt for an implementation agent. Preserve the standard section names below for parser/review compatibility, but keep content task-specific and outcome-focused instead of restating generic agent process.
+
+**Prompt-quality requirements**:
+- State the outcome: what should be true when the task is complete, not merely an activity to perform.
+- Define what good means through observable ACs and focused verification.
+- Name only task-specific constraints and source boundaries: compatibility, non-goals, ordering constraints, risky files, migration boundaries, or required APIs.
+- Avoid generic process scaffolding such as "first inspect, then plan, then edit, then test". Let the coder choose the path unless exact ordering is required by the product contract.
+- Include detailed implementation sequencing only when order, API shape, migration sequencing, data safety, or cross-task handoff materially matters.
+- Include completion-response expectations so the coder reports outcome, changed files, verification results, and risks/blockers.
 
 **Source Document Links (Hard Gate)**:
 
@@ -460,6 +471,10 @@ Every task MUST include a `**Source Documents**:` section. This is validated in 
 **Subsystems**: auth, api (list all subsystems touched)
 **Dependencies**: T000 (if any)
 
+**Plan Mapping**:
+- Plan Item(s): objective/AC/phase/obligation identifiers or quoted plan text this task owns
+- Infra/Support Justification: N/A, or why this setup/support task is necessary for mapped plan work
+
 **Source Documents**:
 - Plan: [plan-name.md#L45-L67](path/to/plan-name.md#L45-L67) — Section: Technical Design
 - Plan: [plan-name.md#L120-L135](path/to/plan-name.md#L120-L135) — Section: File Impact Summary
@@ -468,11 +483,12 @@ Every task MUST include a `**Source Documents**:` section. This is validated in 
 <!-- Use "Spec: N/A" if no spec exists per the Spec Exists Rule above -->
 
 **Goal**:
-The concrete outcome this task accomplishes (1-2 sentences)
+The concrete outcome this task accomplishes (1-2 sentences). Phrase as the desired end state, not a generic activity.
 
 **Context**:
 - Why this matters for the plan
 - Only the task-specific plan/spec background needed to execute safely
+- No generic agent process reminders or repo rules already covered by AGENTS.md/tooling
 
 **Scope**:
 - In: what will be changed
@@ -489,6 +505,7 @@ The concrete outcome this task accomplishes (1-2 sentences)
 **Acceptance Criteria**:
 - What good means for this task, expressed as observable outcomes
 - Keep to the task's owned behavior; reference supporting ACs without claiming primary ownership
+- Use one observable criterion per bullet. Do not reduce bullet count by packing independent checks with semicolons, conjunctions, or paragraph-style criteria.
 
 **Verification**:
 - The narrowest commands/checks that prove this task is complete
@@ -516,14 +533,17 @@ After generating task specs, produce a **sizing summary table** and verify all t
 | Task | Files | Subsystems | ACs | Mechanical? | Status | Action |
 |------|-------|------------|-----|-------------|--------|--------|
 | T001 | 4 | 1 | 2 | No | OK | — |
-| T002 | 8 | 2 | 3 | No | OK | — |
+| T002 | 8 | 2 | 5 | No | OK | 5 tightly-coupled ACs share one verification path |
 | T003 | 14 | 4 | 2 | No | Over | MUST split (>12 files, >3 subsystems) |
 | T004 | 16 | 1 | 1 | Yes | OK | Mechanical sweep allowed |
+| T005 | 5 | 1 | 3 bullets / 7 atomic | No | Over | MUST split; semicolon-packing does not count |
 ```
 
 **Gating rule**: No tasks exceeding hard limits may proceed:
-- Standard tasks: 12 files, 3 subsystems, 3 ACs
-- Mechanical sweeps: 18 files, 1 subsystem, grep-able pattern required
+- Standard tasks: 12 files, 3 subsystems, preferred 1-3 atomic ACs with hard max 5 when tightly coupled
+- Mechanical sweeps: 18 files, 1 subsystem, preferred 1-3 atomic ACs with hard max 5 when tightly coupled; additionally require a grep-able/scriptable pattern and scripted verification
+
+Count atomic ACs, not bullets. A task with 3 bullets that each contain multiple unrelated checks can exceed the limit; a task with 5 crisp, tightly-coupled ACs can pass. Do not cosmetically combine distinct ACs to pass the gate.
 
 Split and re-estimate until all pass.
 
@@ -604,14 +624,17 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 |-------|------|------|-----|
 | **Obligation coverage** | Hard | All MUST/SHALL/REQUIRED/PROHIBIT/FORBID/FAIL-FAST/DEPRECATED/BREAKING CHANGE clauses mapped to tasks + verification | Add task(s) or update verification |
 | **File overlap** | Hard | No two parallel tasks share files | Add dependency |
+| **Task mapping** | Hard | Every task maps to at least one plan item or has an infra/setup/support justification tied to mapped plan work | Add mapping/justification or remove task |
+| **Task format** | Hard | Every task includes required sections: Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and task-specific Notes/Completion Response guidance when applicable | Add missing sections |
 | **AC coverage** | Hard | Every spec AC maps to exactly one primary task (if spec present) | Add task or reassign |
 | **No orphan ACs** | Hard | No AC claimed by multiple tasks as primary (if spec present) | Reassign ownership |
 | **Consistency audit** | Hard | Spec/legacy → plan matches, or deviations logged + approved | Add deviations or abort |
 | **Requirement freeze** | Hard | Tasks mirror plan requirements verbatim (ACs/enums/constants/thresholds) | Rewrite tasks to match plan |
 | **Dependencies complete** | Hard | When uncertain, add the dep | Add dependency |
 | **One outcome per task** | Hard | No bundled multi-behavior tasks | Split task |
-| **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 3 ACs | MUST split |
-| **Sizing: mechanical** | Hard | Mechanical sweeps: max 18 files, must be 1 subsystem, grep-able pattern | Split by subsystem or convert to standard |
+| **Prompt quality** | Hard | Every task reads as a compact coder prompt: outcome, what good means, task-specific constraints, focused verification, completion response; no generic process scaffolding unless required | Rewrite task prompt |
+| **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 5 atomic ACs; 4-5 ACs require tight coupling and one coherent verification path; semicolon-packed bullets count by atomic checks | MUST split or genuinely reduce scope |
+| **Sizing: mechanical** | Hard | Mechanical sweeps: max 18 files, must be 1 subsystem, grep-able/scriptable pattern, scripted verification, ≤ 5 atomic ACs with 4-5 only when tightly coupled and sharing one coherent verification path | Split by subsystem or convert to standard |
 | **No vague tasks** | Hard | Every task has concrete files + verification steps | Rewrite or delete |
 | **Startup vs runtime** | Hard | Config/boot-time semantics have separate startup/load-path verification | Add startup/load-path test |
 | **Negative-case coverage** | Hard | Rejection/error/invalid inputs have explicit negative tests | Add negative tests |
@@ -638,12 +661,14 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 2. **All Hard Gates Pass**: Zero violations in Phase 5 validation table
 3. **Obligation Coverage Complete**: Obligation Coverage table shows 100% mapping with verification
 4. **AC Coverage Complete**: Every spec AC (if spec present) maps to exactly one primary owner task
-5. **Dependency Graph Valid**: No file overlaps without deps, no cycles
-6. **Sizing Compliant**: All tasks within hard limits (12 files / 3 subsystems / 3 ACs)
-7. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
-8. **Wiring Complete**: New data/config/templates have wiring maps and coverage
-9. **Consistency Audit Passes**: Spec/legacy → plan matches, or deviations logged + approved
-10. **System Wiring Covered**: Each end-to-end flow has a `[system-wiring]` task
+5. **Task Mapping Complete**: Every task maps to at least one plan item or has an infra/setup/support justification tied to mapped plan work
+6. **Task Format Complete**: Every task includes required sections, including Plan Mapping with `Plan Item(s)` and `Infra/Support Justification`
+7. **Dependency Graph Valid**: No file overlaps without deps, no cycles
+8. **Sizing Compliant**: Standard tasks are within hard limits (≤12 files, ≤3 subsystems, preferred 1-3 atomic ACs / hard max 5 when tightly coupled); mechanical sweeps are within their exception limits (≤18 files, =1 subsystem, same AC rule, grep-able/scriptable pattern, and scripted verification)
+9. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
+10. **Wiring Complete**: New data/config/templates have wiring maps and coverage
+11. **Consistency Audit Passes**: Spec/legacy → plan matches, or deviations logged + approved
+12. **System Wiring Covered**: Each end-to-end flow has a `[system-wiring]` task
 
 **Tasks may ONLY be output when all success criteria are met.**
 
@@ -685,6 +710,7 @@ Use the **beads skill** to create issues. Follow these patterns:
    ```
 
 3. **Create tasks with --parent**:
+   - Each `br create` / `br update --description` MUST include the full Phase 4 task spec, preserving Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
    ```bash
    br create "[T001] Task title" -p 2 --type task --parent EPIC-ID --description "..."
    # Returns TASK-ID
@@ -758,7 +784,7 @@ Use the available Linear integration (MCP tools, CLI, or API client configured i
    - Team: resolved Linear team.
    - Priority: mapped from the generated task priority.
    - Labels: include `cerberus`; include phase/story labels when the Linear workspace already uses compatible labels.
-   - Description: start with a visible `Cerberus Sync` block containing the plan path, task marker, generated task ID, and generated timestamp. Then include the full Phase 4 task spec, preserving Source Documents, Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
+   - Description: start with a visible `Cerberus Sync` block containing the plan path, task marker, generated task ID, and generated timestamp. Then include the full Phase 4 task spec, preserving Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
 
 3. **Keep a task-to-issue map**:
    ```text
@@ -789,7 +815,7 @@ Key sections to include:
 - **Header**: Feature name, generated date, links to plan/spec
 - **Task Summary table**: Phase, task count, parallel count, dependencies
 - **Phase sections**: Setup → Foundation → US1/US2/USn → Polish
-- **Per-task format**: `- [ ] **T00X** [P] [USn] Description` with Source Documents, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Completion Response guidance
+- **Per-task format**: `- [ ] **T00X** [P] [USn] Outcome-focused description` with Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Completion Response guidance. The description should be a coder prompt summary, not a process script.
 - **Dependencies Graph**: ASCII visualization of task ordering
 - **AC Coverage table**: Map spec acceptance criteria to tasks
 - **Validation Artifacts**: Sizing Summary, Requirements Snapshot, Consistency Audit, Deviation Log, Obligation Coverage, plus System Wiring Coverage and Propagation Map when applicable
@@ -830,6 +856,12 @@ Apply the **malicious compliance test** to all acceptance criteria:
 1. Can this be satisfied while missing the point? → Rewrite
 2. Does this focus on side effects instead of behavior? → Rewrite
 3. Would a malicious-compliance agent pass this? → Add behavioral constraint
+
+Apply the **coder-prompt test** to each task description:
+1. Does it state the desired outcome and success signal? If not, rewrite.
+2. Does it include only task-specific constraints and source boundaries? If generic process or repo/tool boilerplate is repeated, remove it.
+3. Does it tell the coder how to verify and what to report back? If not, add focused verification and completion-response guidance.
+4. Does it over-prescribe implementation steps where the coder can safely choose the path? If yes, replace the recipe with outcome, constraints, and verification.
 
 ## Handling Edge Cases
 

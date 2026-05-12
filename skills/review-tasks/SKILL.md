@@ -94,7 +94,7 @@ Validate the generated task graph against its plan and, when the artifact is edi
 
 - Closing every task fully implements the plan: every objective, acceptance criterion, phase, and MUST/SHALL/REQUIRED-style obligation is owned by at least one reachable task.
 - The dependency graph is safe for parallel work: no cycles, no unreachable tasks, and no unordered file overlaps or missing logical prerequisites.
-- Each task is completable by an implementation agent without extra clarification: source links, outcome, scope/constraints, concrete changes, acceptance criteria, verification, and dependencies are present and objective.
+- Each task works as a compact prompt to the implementation agent: it states the outcome, defines what good means, names constraints and source boundaries, gives focused verification, and says what the completion response should contain without generic process scaffolding.
 - Required create-tasks artifacts (coverage tables, sizing summary, propagation/wiring maps when applicable) are present and consistent with recomputed review state.
 - The final report gives the last validated state only, including iterations used and any remaining blockers if PASS is impossible.
 
@@ -103,6 +103,7 @@ Validate the generated task graph against its plan and, when the artifact is edi
 - Treat the validation dimensions below as the product contract, not a fixed script. Choose the smallest reads and recomputations that establish the verdict.
 - Keep detailed reasoning internal. Do not print step-by-step analysis, fake subagent transcripts, or intermediate full reports.
 - Do not expand scope beyond the plan. Preserve plan/spec wording unless an approved deviation is already documented.
+- Treat task descriptions as coder prompts. Prefer outcome-focused ticket content over process-focused instructions; generic agent behavior belongs in the harness, tool descriptions, AGENTS.md, or reusable skill guidance, not repeated in every task.
 - Ask one narrow question only when the task source, plan source, or a required fix would materially change requirements or create tracker-side risk.
 - Do not stop at the first FAIL when blocking issues are safely fixable in the active task artifact. Fix, re-check the affected gates plus global coverage/dependencies, and report only the final iteration.
 
@@ -132,10 +133,10 @@ For task graphs with more than 10 tasks, partition local checks by epic, parent,
 
 1. **Plan Coverage**: Every plan objective, AC, and MUST/SHALL obligation has at least one owning task, AND every task maps to at least one plan item (or is justified as infra/support)
 2. **Dependency Correctness**: Dependency graph is acyclic and tasks sharing files have explicit dependencies
-3. **Agent Completability**: Every task passes the completability checklist (clear goal, concrete verification, objective ACs)
-4. **Task Format Compliance**: Every task includes required sections (Source Documents, Goal/outcome, Context, Scope/constraints, Changes, AC, Verification)
+3. **Agent Completability**: Every task passes the prompt-quality and completability checklist (clear outcome, concrete success criteria, task-specific constraints, focused verification, expected completion response, objective ACs, and no generic process scaffolding unless required by the product contract)
+4. **Task Format Compliance**: Every task includes required sections (Source Documents, Plan Mapping with Plan Item(s) and Infra/Support Justification, Goal/outcome, Context, Scope/constraints, Changes, AC, Verification)
 5. **Source Document Links**: Every task has plan links (+ spec links if spec exists) with line numbers pointing to relevant sections
-6. **Sizing Compliance**: Every task within hard limits (12 files, 3 subsystems, 3 ACs)
+6. **Sizing Compliance**: Standard tasks are within hard limits (≤12 files, ≤3 subsystems, preferred 1-3 atomic ACs / hard max 5 when tightly coupled); mechanical sweeps are within their exception limits (≤18 files, =1 subsystem, same AC rule, grep-able/scriptable pattern, and scripted verification)
 7. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
 8. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
 9. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
@@ -190,11 +191,19 @@ Tasks must have correct dependency relationships:
 - Setup/foundation before feature work
 - Integration tests exist before implementation tasks that turn them green
 
-### 3. Agent Completability
+### 3. Agent Completability & Prompt Quality
 
-**Why this matters**: Ensures any agent can execute tasks without back-and-forth clarification, reducing stalls and misimplementations. Vague tasks lead to incorrect implementations that require rework.
+**Why this matters**: Each task description is the implementation agent's prompt. Strong coding-agent prompts read like good engineering tickets: outcome, what good means, constraints, verification, and expected completion response. Vague tasks cause rework; over-scripted tasks bury the product contract under generic process instructions.
 
 Each task must be completable by an agent with no external clarification:
+
+**Prompt Shape:**
+- Outcome is explicit: the task says what should be true when complete, not just an activity to perform
+- What-good-means is concrete: ACs and verification define observable success
+- Constraints are task-specific: source boundaries, compatibility requirements, non-goals, ordering constraints, and risk areas are named when relevant
+- Final response expectation is present or covered by the task template: implementer reports outcome, changed files, verification results, and risks/blockers
+- Generic process scaffolding is absent unless the process is part of the product contract (avoid filler such as "first inspect, then plan, then edit, then test")
+- Detailed implementation recipes are used only when ordering, API shape, migration sequencing, or safety constraints materially matter; otherwise let the coder choose the path
 
 **Context Sufficiency:**
 - Goal is clear and specific (describes the concrete outcome)
@@ -220,6 +229,7 @@ Each task must be completable by an agent with no external clarification:
 Each task must include required sections:
 
 - [ ] **Source Documents**: Links to plan and spec with line numbers (e.g., `plan.md#L45-L67`). Multiple links when task spans multiple sections. "N/A" for spec if none exists.
+- [ ] **Plan Mapping**: `Plan Item(s)` listing objective/AC/phase/obligation identifiers or quoted plan text the task owns, plus `Infra/Support Justification` set to N/A or explaining why setup/support work is necessary for mapped plan work
 - [ ] **Goal**: The concrete outcome this task accomplishes (1-2 sentences)
 - [ ] **Context**: Why this matters and only the task-specific background needed to execute safely
 - [ ] **Scope**: In/Out boundaries and constraints
@@ -254,7 +264,7 @@ Conditional sections (required when applicable):
 
 ### 5. Sizing Compliance
 
-**Why this matters**: Tasks exceeding size limits overwhelm agent context windows, leading to incomplete or incorrect implementations.
+**Why this matters**: Tasks exceeding size limits overwhelm agent context windows, leading to incomplete or incorrect implementations. AC count is a proxy for distinct obligations, not a formatting target; cosmetic bullet-packing makes tasks harder to implement and review.
 
 Verify all tasks are within bounds:
 
@@ -262,11 +272,14 @@ Verify all tasks are within bounds:
 |-------|---------------|------------------|
 | Files | ≤ 12 | ≤ 18 |
 | Subsystems | ≤ 3 | = 1 |
-| Acceptance Criteria | ≤ 3 | ≤ 3 |
+| Acceptance Criteria | Preferred 1-3; hard max 5 atomic ACs when tightly coupled | Preferred 1-3; hard max 5 atomic ACs when tightly coupled |
+
+Count atomic ACs, not bullets. A task with 3 bullets that each contain multiple unrelated checks may exceed the limit; a task with 5 crisp, tightly-coupled ACs may pass.
 
 Mechanical sweeps additionally require:
 - Grep-able pattern for verification
 - All changes within single subsystem
+- Scripted verification for the sweep pattern
 
 ### 6. Graph Integrity
 
@@ -274,7 +287,7 @@ Mechanical sweeps additionally require:
 
 The task graph must be well-formed:
 
-- Every task traces to at least one plan objective or is justified as infra/support
+- Every task traces to at least one plan item or is justified as infra/support
 - Dependency graph is acyclic (no circular dependencies)
 - Every task is reachable from `br ready` via some sequence of dependency completions
 - Parent-child relationships match epic structure
@@ -383,11 +396,11 @@ If these artifacts exist, load them and verify consistency with recomputed state
 
 3. **Check for orphan tasks** (tasks with no plan mapping):
    - For each task, verify it maps to at least one plan item
-   - Infra/setup tasks may be justified—flag but don't auto-fail
+   - Infra/setup tasks may be justified when they are necessary support for mapped plan work; record the justification instead of failing
 
 4. **Flag coverage gaps**:
    - Plan items with no owning task → **BLOCKING**
-   - Tasks with no plan mapping → **WARNING** (unless justified)
+   - Tasks with no plan mapping and no infra/support justification → **BLOCKING**
    - Acceptance criteria claimed by multiple tasks as primary → **BLOCKING**
 
 5. **Rollup verification**:
@@ -430,23 +443,33 @@ If these artifacts exist, load them and verify consistency with recomputed state
 
 **State to update**: `issues`
 
-**Goal**: Each task can be completed without external clarification.
+**Goal**: Each task can be completed without external clarification and reads as a strong coder prompt, not a generic process script.
 
 For each task, evaluate:
 
-**4a. Context Sufficiency Checklist:**
+**4a. Prompt Quality Checklist:**
+- [ ] Outcome is explicit and concrete
+- [ ] What-good-means is defined through ACs and/or expected behavior
+- [ ] Constraints and source boundaries are task-specific, not generic repo/process reminders
+- [ ] Verification is focused and gives the expected passing signal
+- [ ] Completion response expectation is present or inherited from the task template
+- [ ] Generic process scaffolding is absent unless required by the product contract
+- [ ] Step-by-step implementation instructions appear only when order/API/migration/safety details materially matter
+
+**4b. Context Sufficiency Checklist:**
 - [ ] Goal describes specific single outcome
 - [ ] All files in Changes section exist or marked [New]
 - [ ] Background context from plan included (no "see above" / "as discussed")
 - [ ] Edge cases documented
 
-**4b. Done Criteria Checklist:**
+**4c. Done Criteria Checklist:**
 - [ ] Verification has concrete commands (not just "verify it works")
 - [ ] Each AC is testable by the agent
+- [ ] Each AC bullet is one observable criterion, not a semicolon-packed bundle of unrelated checks
 - [ ] Success state is unambiguous
 - [ ] All ACs are objective and measurable
 
-**4c. Scope Atomicity Checklist:**
+**4d. Scope Atomicity Checklist:**
 - [ ] Single outcome (task can be summarized without "and")
 - [ ] In-scope items are explicit
 - [ ] Out-of-scope items are explicit
@@ -454,10 +477,11 @@ For each task, evaluate:
 
 **Flag problematic tasks:**
 ```
-T003: INCOMPLETE — 3 issues
+T003: INCOMPLETE — 4 issues
   - [BLOCKING] Missing verification commands
   - [BLOCKING] AC "looks good" is subjective → rewrite as measurable outcome
   - [WARNING] References "the discussion" without context
+  - [BLOCKING] Contains generic process scaffolding not required by the product contract; replace with task-specific outcome/constraints/verification
 ```
 
 ### Phase 5: Format & Sizing Compliance
@@ -478,14 +502,23 @@ Missing required section → **BLOCKING**
 
 **5b. Sizing Compliance:**
 
+Count **atomic acceptance criteria**, not rendered bullets. An atomic AC is one distinct observable success condition the implementer must satisfy or verify. Do **not** pass sizing by combining multiple independent checks into one bullet with semicolons, conjunctions, or paragraphs; that is cosmetic consolidation and is itself a sizing failure. Preserve clear one-check-per-line ACs unless you can genuinely remove duplication or merge inseparable sub-conditions into one observable outcome.
+
+AC limits:
+- **Preferred target**: 1-3 atomic ACs for standard implementation tasks.
+- **Allowed**: 4-5 atomic ACs only when they are tightly related sub-behaviors of one change, touch the same implementation path, and share a single coherent verification strategy.
+- **Blocking**: >5 atomic ACs, or any AC list that hides >5 atomic checks inside fewer bullets.
+
 Build sizing summary table:
 ```
 | Task | Files | Subsystems | ACs | Mechanical? | Status | Action |
 |------|-------|------------|-----|-------------|--------|--------|
 | T001 | 4 | 1 | 2 | No | OK | — |
-| T002 | 8 | 2 | 3 | No | OK | — |
+| T002 | 8 | 2 | 5 | No | OK | 5 tightly-coupled ACs share one verification path |
 | T003 | 14 | 4 | 2 | No | OVER | MUST split (>12 files, >3 subsystems) |
 | T004 | 16 | 1 | 1 | Yes | OK | Mechanical sweep allowed |
+| T005 | 5 | 1 | 6 | No | OVER | MUST split or genuinely reduce scope (>5 atomic ACs) |
+| T006 | 5 | 1 | 3 bullets / 7 atomic | No | OVER | MUST split; semicolon-packing does not count |
 ```
 
 Exceeds hard limits → **BLOCKING**
@@ -496,7 +529,7 @@ Exceeds hard limits → **BLOCKING**
 
 **6a. Graph Integrity:**
 
-1. **Orphan detection**: Tasks with no parent AND no plan mapping
+1. **Orphan detection**: Tasks with neither a plan-item mapping nor an infra/setup/support justification, regardless of parentage
 2. **Reachability check**: From `br ready`, trace which tasks can eventually be reached
 3. **Duplicate detection**: Tasks with similar titles/files/changes
 4. **Epic consistency**: Child tasks have parent relationship, epic completion = all children complete
@@ -531,7 +564,7 @@ For tasks with new config/data/templates:
 - Objectives: X/Y covered
 - Acceptance criteria: A/B covered  
 - MUST/SHALL obligations: M/N covered
-- Orphan tasks (no plan mapping): [list or "none"]
+- Unmapped/unjustified tasks (no plan-item mapping and no infra/support justification): [list or "none"]
 - **Status**: PASS / FAIL
 
 ### 2. Dependency Correctness
@@ -556,7 +589,7 @@ For tasks with new config/data/templates:
 - **Status**: PASS / FAIL
 
 ### 6. Graph Integrity
-- Orphan tasks: [list or "none"]
+- Unmapped/unjustified tasks: [list or "none"]
 - Unreachable tasks: [list or "none"]
 - Potential duplicates: [list or "none"]
 - **Status**: PASS / FAIL
@@ -697,7 +730,7 @@ None
 - **Fixes applied**:
   - Iteration 1: Created T008 for missing "revoke tokens" objective, created T009 for missing "refresh token expiry" AC
   - Iteration 2: Added dependency `br dep add T005 T002` (file overlap), split T003 into T003a + T003b (sizing)
-  - Iteration 3: Consolidated T004 ACs from 5 → 3
+  - Iteration 3: Left T004's 5 clear ACs separate because they are tightly coupled and share one verification path; split T006 because it had 7 atomic ACs despite 3 rendered bullets
 ```
 
 ### Example: FAIL After Max Iterations
@@ -735,19 +768,24 @@ None
 | **Plan coverage** | BLOCKING | Every objective/AC/obligation has owning task(s) | Add missing tasks |
 | **Task mapping** | BLOCKING | Every task maps to plan item or justified as infra | Remove orphan tasks or add justification |
 | **AC ownership** | BLOCKING | Each AC has exactly one primary owner task | Reassign ownership |
+| **Consistency audit / requirement freeze** | BLOCKING | Requirements Snapshot, Consistency Audit, and Deviation Log are present; tasks preserve plan/spec requirements unless an approved deviation is logged | Add missing artifacts, rewrite tasks to match plan/spec, or log approved deviations |
 | **File overlap deps** | BLOCKING | Tasks sharing files have explicit dependency | Add dependency |
 | **Circular deps** | BLOCKING | Dependency graph is acyclic | Restructure dependencies |
+| **Prompt quality** | BLOCKING when outcome/success/constraints/verification are missing or ambiguous, or when generic process scaffolding is present without being required by the product contract | Rewrite as a compact engineering-ticket prompt: outcome, what good means, task-specific constraints, verification, completion response |
 | **Context sufficiency** | BLOCKING | Every task has clear goal + concrete `Changes` entries | Expand task description |
 | **Done criteria** | BLOCKING | Every task has concrete verification commands | Add verification |
 | **Objective ACs** | BLOCKING | All ACs are measurable and testable | Rewrite subjective ACs |
 | **Task format** | BLOCKING | All required sections present | Add missing sections |
 | **Source document links** | BLOCKING | Every task has `**Source Documents**:` with valid plan link(s), spec link(s) if spec exists per Spec Exists Rule, line numbers in `#L<n>` or `#L<n>-L<m>` format, and labels matching text actually present in referenced range | Add/fix links per Spec Exists Rule and Line Number Validity Check |
-| **Sizing: standard** | BLOCKING | Tasks ≤ 12 files, ≤ 3 subsystems, ≤ 3 ACs | Split task |
-| **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able | Split or reclassify |
+| **Sizing: standard** | BLOCKING | Tasks ≤ 12 files, ≤ 3 subsystems, ≤ 5 atomic ACs; 4-5 ACs require tight coupling and one coherent verification path; semicolon-packed bullets count by atomic checks | Split task or genuinely reduce scope; do not cosmetically combine ACs |
+| **Sizing: mechanical** | BLOCKING | Mechanical sweeps: ≤ 18 files, = 1 subsystem, grep-able/scriptable pattern, scripted verification, ≤ 5 atomic ACs with 4-5 only when tightly coupled and sharing one coherent verification path | Split or reclassify |
 | **Reachability** | BLOCKING | Every task reachable from `br ready` | Fix blocking dependencies |
 | **Integration path tests** | BLOCKING when applicable | Each feature in a create-tasks/TDD graph has one `[integration-path-test]` task | Add integration path test task |
+| **TDD ordering** | BLOCKING when applicable | Implementation tasks depend on the skeleton + `[integration-path-test]` task; final implementation task verifies all relevant tests pass | Add dependencies or final verification |
+| **Startup vs runtime verification** | BLOCKING when applicable | Config/boot-time semantics have explicit load/startup-path verification | Add startup/load-path test |
 | **Config override tests** | BLOCKING when applicable | New configurable values have override tests reaching runtime via the normal load/construction path | Add override test |
 | **Wiring maps** | BLOCKING when applicable | New data/config/templates or cross-layer propagation have wiring maps and tasks covering each hop | Add wiring map, missing task, or dependency |
+| **System wiring coverage** | BLOCKING when applicable | Each end-to-end flow has a dedicated `[system-wiring]` task | Add system-wiring task |
 | **Adapter/bridge coverage** | BLOCKING when applicable | Field/DTO/config changes are mapped across all adapters, mappers, constructors, and DI builders | Add adapter/bridge task coverage |
 | **Template lifecycle** | BLOCKING when applicable | New templates/resources are loaded, passed through, and used by runtime behavior | Add missing lifecycle coverage |
 | **Merge/precedence semantics** | BLOCKING when applicable | Merge, override, precedence, and default behavior have explicit verification | Add merge/precedence tests |
@@ -801,11 +839,12 @@ When you encounter blocking issues, apply fixes to the artifact/tracker when saf
 | Issue Type | Fix Action |
 |------------|------------|
 | **Sizing: files > 12** | Split task into 2+ tasks by subsystem; update `tasks` list and `dependency_graph` |
-| **Sizing: subsystems > 3** | Split task by subsystem boundary; each new task ≤ 2 subsystems |
-| **Sizing: ACs > 3** | Consolidate ACs into 3 by grouping related behaviors; or split task |
+| **Sizing: subsystems > 3** | Split task by subsystem boundary; target 1-2 subsystems per new task, with ≤ 3 as the hard limit when the task remains one coherent outcome |
+| **Sizing: ACs > 5 atomic checks** | Split the task or genuinely reduce scope. You may merge duplicate or inseparable sub-conditions, but MUST NOT pass by packing independent checks into fewer bullets with semicolons/conjunctions/paragraphs. If a task has 4-5 atomic ACs and they are tightly coupled with one verification path, leave them as clear separate ACs and mark sizing OK. |
 | **Long chain (advisory)** | Consider restructuring to allow parallelism; split middle tasks if beneficial |
 | **File overlap without dep** | Add dependency to `dependency_graph` |
 | **Circular dependency** | Remove one edge; restructure task boundaries if needed |
+| **Poor task prompt quality** | Rewrite task description into outcome / what-good-means / task-specific constraints / verification / completion response. Remove generic process scaffolding unless exact process is required. Keep detailed implementation sequence only when order, API shape, migration sequencing, or safety constraints matter. |
 | **Missing plan coverage** | Add new task to `tasks` list for uncovered objective/AC/obligation |
 | **Orphan task** | Add plan mapping justification or remove from `tasks` |
 | **Missing verification** | Update task in `tasks` with concrete verification commands |
@@ -823,7 +862,7 @@ br update <task-id> --description "..."
 br create "Task for uncovered AC" -p 1 --parent <epic> --description "..."
 ```
 
-**TODO.md/team-task mode**: edit the file directly by splitting/narrowing tasks, updating dependencies, consolidating or rewriting ACs, adding missing sections, or inserting missing tasks. For team-task files, update both the parser-owned `meta` block's `depends: [...]` field and the human-readable `### Dependencies` section.
+**TODO.md/team-task mode**: edit the file directly by splitting/narrowing tasks, updating dependencies, genuinely consolidating duplicate/inseparable ACs, rewriting subjective ACs, adding missing sections, or inserting missing tasks. Do not cosmetically combine distinct ACs to reduce bullet count. For team-task files, update both the parser-owned `meta` block's `depends: [...]` field and the human-readable `### Dependencies` section.
 
 **Plan-only or unfixable cases**: do not invent new requirements. Report the blocker as requiring plan/user input.
 
