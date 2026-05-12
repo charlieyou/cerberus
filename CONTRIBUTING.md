@@ -23,17 +23,31 @@ make lint
 ## Maintainer Install Workflow
 
 `make install` is the v2 maintainer workflow that replaces the old
-`bin/update-plugin` convenience script from v1. The target installs the
-`cerberus` command from `./cmd/cerberus` with the local Go toolchain:
+`bin/update-plugin` convenience script from v1. The target installs a committed
+Cerberus tree to `${INSTALL_ROOT:-$HOME/.local/share/cerberus}` and builds the
+binary at `bin/cerberus` inside that stable runtime root:
 
 ```bash
 make install
 ```
 
+Install a different committed ref or destination with:
+
+```bash
+make install INSTALL_REF=my-branch
+make install INSTALL_ROOT=$HOME/.local/share/cerberus-dev
+```
+
 Use this after changing Go source, hooks, prompts, skills, or manifests and
-before running manual host smoke tests. For plugin-store testing, install or
-update the plugin through the host plugin manager and then run `make install`
-from the same checkout so the host invokes the current binary.
+before running manual host smoke tests. Commit or choose an `INSTALL_REF` first;
+the install target uses `git archive` so the runtime root is a clean snapshot,
+not your live checkout. Put `$HOME/.local/share/cerberus/bin` before older
+Cerberus installs on `PATH` so tools that infer `CERBERUS_ROOT` from the binary
+resolve the stable runtime root.
+
+For plugin-store testing, install or update the plugin through the host plugin
+manager and then run `make install` from the same checkout so external tools can
+invoke the current stable binary.
 
 Do not commit `bin/cerberus`; it is a local build artifact and is ignored.
 

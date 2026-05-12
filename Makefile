@@ -1,5 +1,7 @@
 BIN := bin/cerberus
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
+INSTALL_ROOT ?= $(HOME)/.local/share/cerberus
+INSTALL_REF ?= HEAD
 
 .PHONY: build install test lint fixtures-refresh
 
@@ -10,7 +12,20 @@ $(BIN): $(GO_SOURCES) go.mod go.sum
 	go build -tags netgo -o $(BIN) ./cmd/cerberus
 
 install:
-	go install ./cmd/cerberus
+	@set -eu; \
+	case "$(INSTALL_ROOT)" in ""|/) echo "refusing unsafe INSTALL_ROOT=$(INSTALL_ROOT)" >&2; exit 2;; esac; \
+	commit=$$(git rev-parse --verify "$(INSTALL_REF)^{commit}"); \
+	stage=$$(mktemp -d "$${TMPDIR:-/tmp}/cerberus-install.XXXXXX"); \
+	trap 'rm -rf "$$stage"' EXIT HUP INT TERM; \
+	git archive "$$commit" | tar -x -C "$$stage"; \
+	$(MAKE) -C "$$stage" build; \
+	parent=$$(dirname -- "$(INSTALL_ROOT)"); \
+	mkdir -p "$$parent"; \
+	rm -rf "$(INSTALL_ROOT)"; \
+	mv "$$stage" "$(INSTALL_ROOT)"; \
+	trap - EXIT HUP INT TERM; \
+	echo "installed cerberus $$commit to $(INSTALL_ROOT)"; \
+	echo "add $(INSTALL_ROOT)/bin to PATH before other cerberus installs"
 
 test:
 	go test ./...

@@ -105,6 +105,18 @@ from a checkout yourself:
 make build
 ```
 
+For non-plugin automation, install a stable userspace runtime root:
+
+```bash
+make install
+export PATH="$HOME/.local/share/cerberus/bin:$PATH"
+```
+
+`make install` copies a committed snapshot to
+`$HOME/.local/share/cerberus` by default and builds
+`$HOME/.local/share/cerberus/bin/cerberus`. Override the committed ref or
+destination with `INSTALL_REF=<ref>` or `INSTALL_ROOT=<path>`.
+
 ### Codex CLI
 
 Cerberus also ships Codex plugin metadata and hooks. Enable the plugin from the
@@ -330,14 +342,14 @@ For non-plugin automation, set the host and run identity yourself because there
 is no automatic Stop hook:
 
 ```bash
-export CERBERUS_ROOT=$PWD
+export CERBERUS_ROOT=$HOME/.local/share/cerberus
 export CERBERUS_HOST=generic
 export CERBERUS_STATE_ROOT=/tmp/cerberus-state
 export CERBERUS_PROJECT_KEY=my-project
 export CERBERUS_RUN_KEY="ci-${BUILD_ID:-local}"
 
-bin/cerberus spawn-code-review --agents codex --base main
-bin/cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
+cerberus spawn-code-review --agents codex --base main
+cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
 ```
 
 Important direct subcommands:
@@ -361,7 +373,7 @@ set these for you.
 
 | Variable | Meaning |
 | --- | --- |
-| `CERBERUS_ROOT` | Plugin or checkout root containing `bin/cerberus`. |
+| `CERBERUS_ROOT` | Plugin, installed runtime, or checkout root containing `bin/cerberus`. |
 | `CERBERUS_HOST` | `claude`, `codex`, or `generic`. |
 | `CERBERUS_RUN_KEY` | Stable identity for the active Cerberus run. |
 | `CERBERUS_SESSION_ID` | Host session or thread id. |
