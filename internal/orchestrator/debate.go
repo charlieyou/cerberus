@@ -90,10 +90,6 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "reviewer", err)
 		return nil, err
 	}
-	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
-		return nil, err
-	}
-
 	startedAt := time.Now().UTC()
 	consensus := params.Consensus
 	if o.Consensus != "" {
@@ -117,6 +113,20 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		rosterID = "default"
 	}
 
+	gatePath := state.GateStatePath(runRoot)
+	unlock, err := acquireStartLock(runRoot, resolvedEnv.RunKey)
+	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "start_lock", err)
+		return nil, err
+	}
+	defer unlock()
+	if err := rejectPendingGate(gatePath, resolvedEnv.RunKey); err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "pending_gate", err)
+		return nil, err
+	}
+	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
+		return nil, err
+	}
 	gate := &state.GateState{
 		RunKey:           resolvedEnv.RunKey,
 		Host:             resolvedEnv.Host,
@@ -130,7 +140,6 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		RosterID:         rosterID,
 		StartedAt:        startedAt,
 	}
-	gatePath := state.GateStatePath(runRoot)
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return nil, err
 	}

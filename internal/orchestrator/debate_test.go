@@ -100,6 +100,47 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	}
 }
 
+func TestStartDebateRejectsWhenExistingGateIsPending(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := state.WriteGateState(state.GateStatePath(runRoot), &state.GateState{
+		RunKey:           env.RunKey,
+		Host:             env.Host,
+		ProjectKey:       env.ProjectKey,
+		Status:           state.StatusPending,
+		CurrentIteration: 1,
+		MaxRounds:        3,
+		RosterID:         "default",
+	}); err != nil {
+		t.Fatalf("seed gate state: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+
+	_, err := (Orchestrator{Env: env}).StartDebate(Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+			{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+		},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "review already pending") || !strings.Contains(err.Error(), env.RunKey) {
+		t.Fatalf("StartDebate() error = %v, want pending gate rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "old#1", "output.json")); statErr != nil {
+		t.Fatalf("stale reviewer artifact stat err = %v, want not reset", statErr)
+	}
+	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewSpawned, 0)
+	failure := findEvent(t, events, telemetry.EventPreflightFailed)
+	if failure["reason"] != "pending_gate" {
+		t.Fatalf("preflight failure event = %#v, want pending_gate reason", failure)
+	}
+}
+
 func TestRunDebateRunsPeerRoundWhenRoundOnePasses(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

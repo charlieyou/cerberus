@@ -57,6 +57,40 @@ type StartedRun struct {
 	Params  Params
 }
 
+type pendingGateError struct {
+	RunKey string
+	Path   string
+}
+
+type startLockError struct {
+	RunKey string
+	Path   string
+}
+
+func (err pendingGateError) Error() string {
+	return fmt.Sprintf("review already pending for run key %q at %s; wait for it to resolve or use a different CERBERUS_RUN_KEY", err.RunKey, err.Path)
+}
+
+func (err pendingGateError) ExitCode() int {
+	return 6
+}
+
+func (err pendingGateError) TelemetryReason() string {
+	return "pending_gate"
+}
+
+func (err startLockError) Error() string {
+	return fmt.Sprintf("review start already in progress for run key %q at %s; wait for it to finish or use a different CERBERUS_RUN_KEY", err.RunKey, err.Path)
+}
+
+func (err startLockError) ExitCode() int {
+	return 6
+}
+
+func (err startLockError) TelemetryReason() string {
+	return "start_lock"
+}
+
 // RunSinglePass executes one review round and resolves the gate from reviewer output.
 func RunSinglePass(ctx context.Context, env *config.Env, params Params, spawner reviewer.Spawner) error {
 	started, err := StartSinglePass(env, params)
@@ -82,14 +116,6 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	}
 	if err := preflightExplicitSlots(slots, params.Reviewers != nil); err != nil {
 		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "reviewer", err)
-		return nil, err
-	}
-
-	gatePath := state.GateStatePath(runRoot)
-	if existing, err := state.ReadGateState(gatePath); err == nil && existing.Status == state.StatusPending {
-		fmt.Fprintf(os.Stderr, "warning: %s is already pending at %s; starting another review may overwrite active state\n", state.GateStateFilename(), gatePath)
-	}
-	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
 		return nil, err
 	}
 
@@ -121,6 +147,20 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 		artifactType = "code"
 	}
 
+	gatePath := state.GateStatePath(runRoot)
+	unlock, err := acquireStartLock(runRoot, resolvedEnv.RunKey)
+	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "start_lock", err)
+		return nil, err
+	}
+	defer unlock()
+	if err := rejectPendingGate(gatePath, resolvedEnv.RunKey); err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "pending_gate", err)
+		return nil, err
+	}
+	if err := state.ResetReviewAttemptArtifacts(runRoot); err != nil {
+		return nil, err
+	}
 	gate := &state.GateState{
 		RunKey:           resolvedEnv.RunKey,
 		Host:             resolvedEnv.Host,
@@ -175,6 +215,33 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	params.RosterID = rosterID
 	params.ArtifactType = artifactType
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
+}
+
+func rejectPendingGate(gatePath, runKey string) error {
+	existing, err := state.ReadGateState(gatePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if existing.Status != state.StatusPending {
+		return nil
+	}
+	return pendingGateError{RunKey: runKey, Path: gatePath}
+}
+
+func acquireStartLock(runRoot, runKey string) (func(), error) {
+	path := state.StartLockPath(runRoot)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, startLockError{RunKey: runKey, Path: path}
+		}
+		return nil, err
+	}
+	_ = file.Close()
+	return func() { _ = os.Remove(path) }, nil
 }
 
 // RecordPreflightFailure records a pre-run validation failure when the CLI

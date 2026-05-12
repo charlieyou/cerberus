@@ -166,10 +166,11 @@ func TestStartSinglePassClaudeWithoutSessionCacheExplainsHookSetup(t *testing.T)
 	}
 }
 
-func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
+func TestRunSinglePassRejectsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	path := gatePath(env)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	if err := state.WriteGateState(path, &state.GateState{
 		RunKey:           env.RunKey,
 		Host:             env.Host,
@@ -181,15 +182,74 @@ func TestRunSinglePassWarnsWhenExistingGateIsPending(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
 
-	stderr := captureStderr(t, func() {
-		if err := RunSinglePass(context.Background(), env, testParams(), passSpawner{}); err != nil {
-			t.Fatalf("RunSinglePass() error = %v", err)
-		}
-	})
+	err := RunSinglePass(context.Background(), env, testParams(), passSpawner{})
 
-	if !strings.Contains(stderr, "warning: gate-state.json is already pending") {
-		t.Fatalf("stderr = %q, want pending gate warning", stderr)
+	if err == nil || !strings.Contains(err.Error(), "review already pending") || !strings.Contains(err.Error(), env.RunKey) {
+		t.Fatalf("RunSinglePass() error = %v, want pending gate rejection", err)
+	}
+	gate := readGate(t, env)
+	if gate.Status != state.StatusPending || gate.EndedAt != nil {
+		t.Fatalf("gate = %#v, want original pending gate", gate)
+	}
+	if _, statErr := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "old#1", "output.json")); statErr != nil {
+		t.Fatalf("stale reviewer artifact stat err = %v, want not reset", statErr)
+	}
+	events := readEventLog(t, env)
+	assertEventCount(t, events, telemetry.EventReviewSpawned, 0)
+	failure := findEvent(t, events, telemetry.EventPreflightFailed)
+	if failure["reason"] != "pending_gate" {
+		t.Fatalf("preflight failure event = %#v, want pending_gate reason", failure)
+	}
+}
+
+func TestStartSinglePassFailsClosedWhenGateStateUnreadable(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := state.EnsureRunDir(runRoot); err != nil {
+		t.Fatalf("EnsureRunDir() error = %v", err)
+	}
+	if err := os.WriteFile(gatePath(env), []byte(`{"status":`), 0o644); err != nil {
+		t.Fatalf("write corrupt gate state: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+
+	_, err := StartSinglePass(env, testParams())
+
+	if err == nil || !strings.Contains(err.Error(), "unmarshal gate state") {
+		t.Fatalf("StartSinglePass() error = %v, want unreadable gate state error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "old#1", "output.json")); statErr != nil {
+		t.Fatalf("stale reviewer artifact stat err = %v, want not reset", statErr)
+	}
+}
+
+func TestStartSinglePassRejectsConcurrentStartLock(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	if err := state.EnsureRunDir(runRoot); err != nil {
+		t.Fatalf("EnsureRunDir() error = %v", err)
+	}
+	if err := os.WriteFile(state.StartLockPath(runRoot), []byte("locked\n"), 0o644); err != nil {
+		t.Fatalf("write start lock: %v", err)
+	}
+
+	_, err := StartSinglePass(env, testParams())
+
+	if err == nil || !strings.Contains(err.Error(), "review start already in progress") || !strings.Contains(err.Error(), env.RunKey) {
+		t.Fatalf("StartSinglePass() error = %v, want start lock rejection", err)
+	}
+	events := readEventLog(t, env)
+	failure := findEvent(t, events, telemetry.EventPreflightFailed)
+	if failure["reason"] != "start_lock" {
+		t.Fatalf("preflight failure event = %#v, want start_lock reason", failure)
 	}
 }
 

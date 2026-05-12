@@ -30,6 +30,9 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
+	if !strings.Contains(stdout.String(), "review spawned (run key: run)") {
+		t.Fatalf("stdout = %q, want spawned message with run key", stdout.String())
+	}
 	gate := waitForSpawnGateStatus(t, state.StatusResolved)
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want resolved", gate.Status)
@@ -40,6 +43,45 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	assertRecordedModel(t, "claude", "claude-opus-4-7")
 	assertRecordedModel(t, "codex", "gpt-5.5")
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
+}
+
+func TestSpawnCodeReviewRejectsPendingGate(t *testing.T) {
+	setSpawnTestEnv(t)
+	runRoot := state.RunDir(os.Getenv("CERBERUS_STATE_ROOT"), os.Getenv("CERBERUS_PROJECT_KEY"), os.Getenv("CERBERUS_RUN_KEY"))
+	if err := state.WriteGateState(state.GateStatePath(runRoot), &state.GateState{
+		RunKey:           os.Getenv("CERBERUS_RUN_KEY"),
+		Host:             os.Getenv("CERBERUS_HOST"),
+		ProjectKey:       os.Getenv("CERBERUS_PROJECT_KEY"),
+		Status:           state.StatusPending,
+		CurrentIteration: 1,
+		MaxRounds:        1,
+		RosterID:         "default",
+	}); err != nil {
+		t.Fatalf("seed gate state: %v", err)
+	}
+	launched := false
+	old := startReviewRuntime
+	startReviewRuntime = func(started *orchestrator.StartedRun) error {
+		launched = true
+		return nil
+	}
+	t.Cleanup(func() { startReviewRuntime = old })
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+
+	if code != 6 {
+		t.Fatalf("spawn-code-review exit code = %d, want 6; stderr: %s", code, stderr.String())
+	}
+	if launched {
+		t.Fatal("runtime launcher was called for pending gate rejection")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "review already pending") || !strings.Contains(got, "CERBERUS_RUN_KEY") {
+		t.Fatalf("stderr = %q, want pending gate guidance", got)
+	}
 }
 
 func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {

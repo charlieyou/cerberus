@@ -71,7 +71,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			return 1
+			return exitCodeForError(err, 1)
 		}
 		if err := startDebateRuntime(started); err != nil {
 			if resolveErr := orchestrator.ResolveDebateFailure(started, err); resolveErr != nil {
@@ -82,7 +82,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 			return 1
 		}
 		warnIfGenericHostNeedsManualWait(started, stderr)
-		fmt.Fprintln(stdout, "review spawned")
+		fmt.Fprintf(stdout, "review spawned (run key: %s)\n", started.Env.RunKey)
 		return 0
 	}
 
@@ -101,7 +101,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	started, err := orchestrator.StartSinglePass(config.Resolve(), params)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return exitCodeForError(err, 1)
 	}
 	if err := startReviewRuntime(started); err != nil {
 		if resolveErr := orchestrator.ResolveSinglePassFailure(started, err); resolveErr != nil {
@@ -112,7 +112,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		return 1
 	}
 	warnIfGenericHostNeedsManualWait(started, stderr)
-	fmt.Fprintln(stdout, "review spawned")
+	fmt.Fprintf(stdout, "review spawned (run key: %s)\n", started.Env.RunKey)
 	return 0
 }
 

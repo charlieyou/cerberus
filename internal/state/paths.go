@@ -12,6 +12,8 @@ const sessionCacheFilename = "active-session.json"
 
 const stopMessageMarkerFilename = "stop-message-emitted.json"
 
+const startLockFilename = "start.lock"
+
 // GateStateFilename returns the canonical gate state file name.
 func GateStateFilename() string {
 	return gateStateFilename
@@ -41,6 +43,11 @@ func GateStatePath(runRoot string) string {
 // StopMessageMarkerPath returns the per-attempt Stop-hook message marker path.
 func StopMessageMarkerPath(runRoot string) string {
 	return filepath.Join(runRoot, stopMessageMarkerFilename)
+}
+
+// StartLockPath returns the short-lived lock path used while claiming a review start.
+func StartLockPath(runRoot string) string {
+	return filepath.Join(runRoot, startLockFilename)
 }
 
 // EnsureRunDir creates the canonical run directory.
