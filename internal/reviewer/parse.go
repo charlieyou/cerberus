@@ -238,7 +238,7 @@ func validateRequiredFields(stdout []byte) error {
 
 func validate(output *RawReviewerOutput) error {
 	switch output.Verdict {
-	case "PASS", "FAIL", "NEEDS_WORK":
+	case "PASS", "pass", "FAIL", "fail", "NEEDS_WORK", "NEEDS WORK", "needs_work", "REQUIRES_DECISION", "requires_decision":
 	default:
 		return fmt.Errorf("reviewer verdict %q is invalid", output.Verdict)
 	}

@@ -48,6 +48,15 @@ func TestComputeMajority(t *testing.T) {
 			},
 			want: VerdictRequiresDecision,
 		},
+		{
+			name: "needs work strict majority",
+			outputs: []reviewer.RawReviewerOutput{
+				output("PASS", 1),
+				output("NEEDS_WORK", 1),
+				output("NEEDS_WORK", 1),
+			},
+			want: VerdictNeedsWork,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Compute(tc.outputs, ModeMajority)
@@ -83,8 +92,21 @@ func TestComputeAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
 	}
-	if got.Verdict != VerdictFail {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictFail)
+	if got.Verdict != VerdictNeedsWork {
+		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictNeedsWork)
+	}
+}
+
+func TestComputeAllPreservesRequiresDecision(t *testing.T) {
+	got, err := Compute([]reviewer.RawReviewerOutput{
+		output("PASS", 1),
+		output("requires_decision", 1),
+	}, ModeAll)
+	if err != nil {
+		t.Fatalf("Compute() error = %v", err)
+	}
+	if got.Verdict != VerdictRequiresDecision {
+		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictRequiresDecision)
 	}
 }
 
@@ -122,9 +144,15 @@ func TestBlockingFindingPreventsPassAcrossModes(t *testing.T) {
 
 func TestNormalizeVerdict(t *testing.T) {
 	for raw, want := range map[string]string{
-		"PASS":       VerdictPass,
-		"FAIL":       VerdictFail,
-		"NEEDS_WORK": VerdictRequiresDecision,
+		"PASS":              VerdictPass,
+		"pass":              VerdictPass,
+		"FAIL":              VerdictFail,
+		"fail":              VerdictFail,
+		"NEEDS_WORK":        VerdictNeedsWork,
+		"NEEDS WORK":        VerdictNeedsWork,
+		"needs_work":        VerdictNeedsWork,
+		"REQUIRES_DECISION": VerdictRequiresDecision,
+		"requires_decision": VerdictRequiresDecision,
 	} {
 		t.Run(raw, func(t *testing.T) {
 			got, err := NormalizeVerdict(raw)

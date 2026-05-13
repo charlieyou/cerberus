@@ -311,6 +311,51 @@ func TestHandleCodexStopResponseEmitsClaudeStyleMessageOnce(t *testing.T) {
 	}
 }
 
+func TestResolvedGateMessageDistinguishesNeedsWorkFromBlockingFailure(t *testing.T) {
+	runRoot := t.TempDir()
+	priority := 3
+	output, err := json.Marshal(reviewer.RawReviewerOutput{
+		Verdict: "NEEDS_WORK",
+		Summary: "Reviewer found a non-blocking issue.",
+		Findings: []reviewer.RawFinding{{
+			Title:    "Clarify help example",
+			Body:     "The help text is confusing.",
+			Priority: &priority,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal reviewer output: %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "codex#1", output); err != nil {
+		t.Fatalf("WriteReviewerOutput() error = %v", err)
+	}
+	verdict := state.VerdictNeedsWork
+	message := resolvedGateMessage(runRoot, &state.GateState{Status: state.StatusResolved, Verdict: &verdict})
+
+	for _, want := range []string{"## Review Needs Work", "non-blocking issues", "Clarify help example"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message missing %q:\n%s", want, message)
+		}
+	}
+	if strings.Contains(message, "fix the blocking issues") || strings.Contains(message, "You MUST fix") {
+		t.Fatalf("needs_work message used blocking wording:\n%s", message)
+	}
+}
+
+func TestResolvedGateMessageExplainsRequiresDecisionAsAmbiguous(t *testing.T) {
+	verdict := state.VerdictRequiresDecision
+	message := resolvedGateMessage("", &state.GateState{Status: state.StatusResolved, Verdict: &verdict})
+
+	for _, want := range []string{"## Review Requires Decision", "inconclusive", "rerun review"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message missing %q:\n%s", want, message)
+		}
+	}
+	if strings.Contains(message, "fix the blocking issues") || strings.Contains(message, "You MUST fix") {
+		t.Fatalf("requires_decision message used blocking wording:\n%s", message)
+	}
+}
+
 func TestStopHookResponseClaimsMarkerAtomically(t *testing.T) {
 	runRoot := t.TempDir()
 	verdict := state.VerdictPass

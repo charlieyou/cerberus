@@ -37,11 +37,13 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 	counts := map[string]int{
 		VerdictPass:             0,
 		VerdictFail:             0,
+		VerdictNeedsWork:        0,
 		VerdictRequiresDecision: 0,
 	}
 	var blockers []FindingRef
 	allPass := true
 	anyPass := false
+	anyNeedsWork := false
 	anyRequiresDecision := false
 
 	for index, output := range outputs {
@@ -51,6 +53,7 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 		}
 		allPass = allPass && verdict == VerdictPass
 		anyPass = anyPass || verdict == VerdictPass
+		anyNeedsWork = anyNeedsWork || verdict == VerdictNeedsWork
 		anyRequiresDecision = anyRequiresDecision || verdict == VerdictRequiresDecision
 		counts[verdict]++
 		blockers = append(blockers, blockingFindings(index, output.Findings)...)
@@ -60,7 +63,7 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 		return Result{Verdict: VerdictFail, Blockers: blockers}, nil
 	}
 
-	return Result{Verdict: computeVerdict(counts, len(outputs), mode, allPass, anyPass, anyRequiresDecision)}, nil
+	return Result{Verdict: computeVerdict(counts, len(outputs), mode, allPass, anyPass, anyNeedsWork, anyRequiresDecision)}, nil
 }
 
 func normalizeMode(mode Mode) Mode {
@@ -74,16 +77,25 @@ func normalizeMode(mode Mode) Mode {
 	}
 }
 
-func computeVerdict(counts map[string]int, count int, mode Mode, allPass bool, anyPass bool, anyRequiresDecision bool) string {
+func computeVerdict(counts map[string]int, count int, mode Mode, allPass bool, anyPass bool, anyNeedsWork bool, anyRequiresDecision bool) string {
 	switch mode {
 	case ModeAll:
 		if allPass {
 			return VerdictPass
 		}
+		if anyRequiresDecision {
+			return VerdictRequiresDecision
+		}
+		if counts[VerdictFail] == 0 && anyNeedsWork {
+			return VerdictNeedsWork
+		}
 		return VerdictFail
 	case ModeAny:
 		if anyPass {
 			return VerdictPass
+		}
+		if anyNeedsWork {
+			return VerdictNeedsWork
 		}
 		if anyRequiresDecision {
 			return VerdictRequiresDecision
@@ -95,6 +107,9 @@ func computeVerdict(counts map[string]int, count int, mode Mode, allPass bool, a
 		}
 		if counts[VerdictFail] > count/2 {
 			return VerdictFail
+		}
+		if counts[VerdictNeedsWork] > count/2 {
+			return VerdictNeedsWork
 		}
 		return VerdictRequiresDecision
 	}

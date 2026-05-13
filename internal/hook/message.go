@@ -94,7 +94,7 @@ func resolvedGateMessage(runRoot string, gate *state.GateState) string {
 		} else {
 			b.WriteString("Please provide a brief summary of the review outcome, then you may stop.")
 		}
-	case state.VerdictFail, state.VerdictRequiresDecision:
+	case state.VerdictFail:
 		b.WriteString("## Revision Required\n\n")
 		if gate != nil && gate.ResolutionReason != "" {
 			b.WriteString("**Reason:** ")
@@ -116,6 +116,50 @@ func resolvedGateMessage(runRoot string, gate *state.GateState) string {
 		b.WriteString("## Context Preservation Requirement\n\n")
 		b.WriteString("You MUST use subagents for investigation, debugging, and review follow-up before making or validating fixes. Keep the main thread focused on coordination, applying the chosen edits, running verification, and summarizing the outcome.\n\n")
 		b.WriteString("You MUST fix the blocking issues above before stopping. After making changes, run Cerberus review again or explain why the remaining issues are safe to proceed with.")
+	case state.VerdictNeedsWork:
+		b.WriteString("## Review Needs Work\n\n")
+		if gate != nil && gate.ResolutionReason != "" {
+			b.WriteString("**Reason:** ")
+			b.WriteString(gate.ResolutionReason)
+			b.WriteString("\n\n")
+		} else {
+			b.WriteString("**Review found non-blocking issues.** Address or explicitly triage the findings below before stopping.\n\n")
+		}
+		if findings != "" {
+			b.WriteString("## Review Findings\n\n")
+			b.WriteString(findings)
+			b.WriteString("\n\n")
+		}
+		if summaries != "" {
+			b.WriteString("## Reviewer Summaries\n\n")
+			b.WriteString(summaries)
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## Context Preservation Requirement\n\n")
+		b.WriteString("Use subagents for substantial investigation or review follow-up so the main thread preserves context for coordination, edits, verification, and the final summary.\n\n")
+		b.WriteString("Address or explicitly defer the non-blocking issues above. After making changes, run Cerberus review again or explain why the remaining issues are safe to proceed with.")
+	case state.VerdictRequiresDecision:
+		b.WriteString("## Review Requires Decision\n\n")
+		if gate != nil && gate.ResolutionReason != "" {
+			b.WriteString("**Reason:** ")
+			b.WriteString(gate.ResolutionReason)
+			b.WriteString("\n\n")
+		} else {
+			b.WriteString("**Reviewer consensus was inconclusive or review infrastructure degraded.** Inspect the reviewer outputs below and decide whether to rerun review, make changes, or proceed with rationale.\n\n")
+		}
+		if findings != "" {
+			b.WriteString("## Review Findings\n\n")
+			b.WriteString(findings)
+			b.WriteString("\n\n")
+		}
+		if summaries != "" {
+			b.WriteString("## Reviewer Summaries\n\n")
+			b.WriteString(summaries)
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## Context Preservation Requirement\n\n")
+		b.WriteString("Use subagents for substantial investigation or review follow-up so the main thread preserves context for coordination, edits, verification, and the final summary.\n\n")
+		b.WriteString("Resolve the ambiguity by rerunning Cerberus review, addressing concrete findings, or documenting why it is safe to proceed.")
 	default:
 		b.WriteString("## Review Gate Resolved\n\n")
 		b.WriteString("Cerberus resolved with verdict: ")

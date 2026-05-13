@@ -167,7 +167,7 @@ func TestRunDebateRunsPeerRoundWhenRoundOnePasses(t *testing.T) {
 	}
 }
 
-func TestRunDebateRunsAllRoundsWhenVerdictRequiresDecision(t *testing.T) {
+func TestRunDebateRunsAllRoundsWhenVerdictNeedsWork(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	spawner := &verdictByRoundSpawner{verdicts: map[int]string{
@@ -183,8 +183,8 @@ func TestRunDebateRunsAllRoundsWhenVerdictRequiresDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunDebate() error = %v", err)
 	}
-	if verdict.Verdict != state.VerdictRequiresDecision {
-		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictRequiresDecision)
+	if verdict.Verdict != state.VerdictNeedsWork {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictNeedsWork)
 	}
 	if got, want := spawner.roundCalls(3), 2; got != want {
 		t.Fatalf("round 3 call count = %d, want %d", got, want)

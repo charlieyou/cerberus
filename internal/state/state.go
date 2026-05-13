@@ -16,6 +16,7 @@ const (
 
 	VerdictPass             = "pass"
 	VerdictFail             = "fail"
+	VerdictNeedsWork        = "needs_work"
 	VerdictRequiresDecision = "requires_decision"
 
 	GateStatePending  = StatusPending

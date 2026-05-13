@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,8 +181,23 @@ func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
 	if _, err := Parse([]byte(`not-json`)); err == nil {
 		t.Fatal("Parse(invalid JSON) error = nil")
 	}
-	if _, err := Parse([]byte(`{"findings":[],"verdict":"pass","summary":"bad","overall_confidence":0.5,"strategy":"mock","round":1,"peer_responses_seen":[]}`)); err == nil {
+	if _, err := Parse([]byte(`{"findings":[],"verdict":"MAYBE","summary":"bad","overall_confidence":0.5,"strategy":"mock","round":1,"peer_responses_seen":[]}`)); err == nil {
 		t.Fatal("Parse(invalid verdict) error = nil")
+	}
+}
+
+func TestParseAcceptsNormalizedVerdictSpellings(t *testing.T) {
+	for _, verdict := range []string{"PASS", "pass", "FAIL", "fail", "NEEDS_WORK", "NEEDS WORK", "needs_work", "REQUIRES_DECISION", "requires_decision"} {
+		t.Run(verdict, func(t *testing.T) {
+			input := fmt.Sprintf(`{"findings":[],"verdict":%q,"summary":"ok","overall_confidence":0.8}`, verdict)
+			got, err := Parse([]byte(input))
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if got.Verdict != verdict {
+				t.Fatalf("Verdict = %q, want %q", got.Verdict, verdict)
+			}
+		})
 	}
 }
 

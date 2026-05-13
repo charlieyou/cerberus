@@ -59,7 +59,7 @@ type Tokens struct {
 }
 
 // RawReviewerOutput is the v1 per-reviewer JSON schema. Verdict is intentionally
-// raw PASS/FAIL/NEEDS_WORK; normalization belongs to aggregation.
+// raw reviewer text; normalization belongs to aggregation.
 type RawReviewerOutput struct {
 	Findings          []RawFinding `json:"findings"`
 	Verdict           string       `json:"verdict"`

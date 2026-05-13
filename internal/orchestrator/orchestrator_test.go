@@ -74,6 +74,34 @@ func TestRunSinglePassReviewerFailureResolvesRequiresDecision(t *testing.T) {
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
 }
 
+func TestRunSinglePassNeedsWorkPersistsNeedsWork(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt: []byte("review this"),
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, needsWorkSpawner{})
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictNeedsWork {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictNeedsWork)
+	}
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	row := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
+	if row["verdict"] != state.VerdictNeedsWork {
+		t.Fatalf("reviewer telemetry verdict = %v, want %q", row["verdict"], state.VerdictNeedsWork)
+	}
+}
+
 func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
@@ -654,6 +682,31 @@ type passSpawner struct{}
 
 func (passSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
 	return passResponse(request.ID)
+}
+
+type needsWorkSpawner struct{}
+
+func (needsWorkSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	confidence := 0.8
+	round := 1
+	priority := 3
+	parsed := &reviewer.RawReviewerOutput{
+		Findings: []reviewer.RawFinding{{
+			Title:    "Clarify help example",
+			Body:     "The help text is confusing.",
+			Priority: &priority,
+		}},
+		Verdict:           "NEEDS_WORK",
+		Summary:           "non-blocking issue",
+		OverallConfidence: &confidence,
+		Round:             &round,
+		PeerResponsesSeen: []string{},
+	}
+	output, err := json.Marshal(parsed)
+	if err != nil {
+		return reviewer.Response{}, err
+	}
+	return reviewer.Response{ID: request.ID, Output: output, Parsed: parsed}, nil
 }
 
 type errorSpawner struct {
