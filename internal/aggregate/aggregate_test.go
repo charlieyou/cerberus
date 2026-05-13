@@ -32,12 +32,12 @@ func TestComputeMajority(t *testing.T) {
 			want: VerdictFail,
 		},
 		{
-			name: "tie requires decision",
+			name: "pass fail tie fails",
 			outputs: []reviewer.RawReviewerOutput{
 				output("PASS", 1),
 				output("FAIL", 1),
 			},
-			want: VerdictRequiresDecision,
+			want: VerdictFail,
 		},
 		{
 			name: "non-failing findings count as pass votes",

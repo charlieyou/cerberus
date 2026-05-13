@@ -133,6 +133,9 @@ func computeVerdict(counts map[string]int, count int, mode Mode, allPass bool, a
 		if counts[VerdictFail] > count/2 {
 			return VerdictFail
 		}
+		if counts[VerdictFail] > 0 {
+			return VerdictFail
+		}
 		if counts[VerdictNeedsWork] > count/2 {
 			return VerdictNeedsWork
 		}

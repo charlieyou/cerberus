@@ -39,7 +39,7 @@ func TestRunSinglePassTransitionsPendingToResolvedPass(t *testing.T) {
 	}
 }
 
-func TestRunSinglePassReviewerFailureResolvesRequiresDecision(t *testing.T) {
+func TestRunSinglePassAllReviewersFailedResolvesRequiresDecision(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	wantErr := errors.New("reviewer failed")
@@ -72,6 +72,41 @@ func TestRunSinglePassReviewerFailureResolvesRequiresDecision(t *testing.T) {
 	}
 	events := readEventLog(t, env)
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
+}
+
+func TestRunSinglePassMajorityPassFailTieWithReviewerFailureResolvesFail(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:    []byte("review this"),
+		Consensus: aggregate.ModeMajority,
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+			{ID: "gemini#1", Provider: "gemini", Model: "stub"},
+		},
+	}, mixedVerdictFailureSpawner{
+		failures: map[string]error{"gemini#1": errors.New("auth unavailable")},
+		verdicts: map[string]string{
+			"claude#1": "PASS",
+			"codex#1":  "FAIL",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v, want nil", err)
+	}
+
+	gate := readGate(t, env)
+	if gate.Status != state.StatusResolved {
+		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
+	}
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictFail {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictFail)
+	}
+	if !strings.Contains(gate.ResolutionReason, "1 reviewer failed") {
+		t.Fatalf("resolution reason = %q, want reviewer failure", gate.ResolutionReason)
+	}
 }
 
 func TestRunSinglePassNonFailingFindingsPassByDefault(t *testing.T) {
@@ -566,6 +601,16 @@ func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) 
 			},
 			want: aggregate.VerdictFail,
 		},
+		{
+			name:      "majority mode pass fail tie fails with reviewer failure abstention",
+			consensus: aggregate.ModeMajority,
+			outputs: []roundReviewerResult{
+				roundOutput("PASS"),
+				roundOutput("FAIL"),
+				failedRoundOutput(),
+			},
+			want: aggregate.VerdictFail,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := aggregateRoundOutputs(tc.outputs, tc.consensus, aggregate.DefaultFailurePriority)
@@ -576,6 +621,30 @@ func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) 
 				t.Fatalf("verdict = %q, want %q", got.Verdict, tc.want)
 			}
 		})
+	}
+}
+
+func TestAggregateRoundOutputsRemapsBlockerIndexesAfterFailureFiltering(t *testing.T) {
+	severity := "blocking"
+	got, err := aggregateRoundOutputs([]roundReviewerResult{
+		failedRoundOutput(),
+		{
+			Output: reviewer.RawReviewerOutput{Findings: []reviewer.RawFinding{{
+				Title:    "blocks release",
+				Body:     "blocks release",
+				Severity: &severity,
+			}}},
+			Row: telemetry.ReviewerRow{Verdict: aggregate.VerdictFail},
+		},
+	}, aggregate.ModeMajority, aggregate.DefaultFailurePriority)
+	if err != nil {
+		t.Fatalf("aggregateRoundOutputs() error = %v", err)
+	}
+	if got.Verdict != aggregate.VerdictFail {
+		t.Fatalf("verdict = %q, want %q", got.Verdict, aggregate.VerdictFail)
+	}
+	if len(got.Blockers) != 1 || got.Blockers[0].ReviewerIndex != 1 {
+		t.Fatalf("blockers = %#v, want blocker index remapped to original reviewer index 1", got.Blockers)
 	}
 }
 
@@ -591,12 +660,10 @@ func TestConsensusPctExcludesReviewerFailures(t *testing.T) {
 }
 
 func roundOutput(verdict string) roundReviewerResult {
-	gateVerdict, err := aggregate.NormalizeVerdict(verdict)
-	if err != nil {
-		panic(err)
-	}
+	findings := findingsForVerdict(verdict)
+	gateVerdict := aggregate.VerdictForFindings(findings, aggregate.DefaultFailurePriority)
 	return roundReviewerResult{
-		Output: reviewer.RawReviewerOutput{Findings: findingsForVerdict(verdict)},
+		Output: reviewer.RawReviewerOutput{Findings: findings},
 		Row:    telemetry.ReviewerRow{Verdict: gateVerdict},
 	}
 }
@@ -789,6 +856,18 @@ type partialFailureSpawner struct {
 	err    error
 }
 
+type mixedVerdictFailureSpawner struct {
+	verdicts map[string]string
+	failures map[string]error
+}
+
+func (spawner mixedVerdictFailureSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if err := spawner.failures[request.ID]; err != nil {
+		return reviewer.Response{}, err
+	}
+	return responseForVerdict(request.ID, spawner.verdicts[request.ID])
+}
+
 func (spawner *partialFailureSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
 	if request.ID == "claude#1" {
 		close(spawner.failed)
@@ -801,6 +880,26 @@ func (spawner *partialFailureSpawner) Spawn(ctx context.Context, request reviewe
 	case <-ctx.Done():
 		return reviewer.Response{}, ctx.Err()
 	}
+}
+
+func responseForVerdict(id string, verdict string) (reviewer.Response, error) {
+	if verdict == "" || verdict == "PASS" {
+		return passResponse(id)
+	}
+	confidence := 0.9
+	round := 1
+	parsed := &reviewer.RawReviewerOutput{
+		Findings:          findingsForVerdict(verdict),
+		Summary:           strings.ToLower(verdict),
+		OverallConfidence: &confidence,
+		Round:             &round,
+		PeerResponsesSeen: []string{},
+	}
+	output, err := json.Marshal(parsed)
+	if err != nil {
+		return reviewer.Response{}, err
+	}
+	return reviewer.Response{ID: id, Output: output, Parsed: parsed}, nil
 }
 
 func passResponse(id string) (reviewer.Response, error) {

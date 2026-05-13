@@ -263,9 +263,9 @@ func reviewerFailureResolutionReason(results []roundReviewerResult) string {
 		return ""
 	}
 	if failures == 1 {
-		return "1 reviewer failed; see reviewer summaries and logs"
+		return "1 reviewer failed; see reviewer logs"
 	}
-	return fmt.Sprintf("%d reviewers failed; see reviewer summaries and logs", failures)
+	return fmt.Sprintf("%d reviewers failed; see reviewer logs", failures)
 }
 
 func writeReviewerFailureEvent(runRoot string, slot ReviewerSlot, slotIndex int, round int, original error) error {
