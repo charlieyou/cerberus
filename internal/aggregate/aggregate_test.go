@@ -40,26 +40,26 @@ func TestComputeMajority(t *testing.T) {
 			want: VerdictRequiresDecision,
 		},
 		{
-			name: "split with needs work requires decision",
+			name: "non-failing findings count as pass votes",
 			outputs: []reviewer.RawReviewerOutput{
 				output("PASS", 1),
 				output("FAIL", 1),
 				output("NEEDS_WORK", 1),
 			},
-			want: VerdictRequiresDecision,
+			want: VerdictPass,
 		},
 		{
-			name: "needs work strict majority",
+			name: "non-failing findings strict majority passes",
 			outputs: []reviewer.RawReviewerOutput{
 				output("PASS", 1),
 				output("NEEDS_WORK", 1),
 				output("NEEDS_WORK", 1),
 			},
-			want: VerdictNeedsWork,
+			want: VerdictPass,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Compute(tc.outputs, ModeMajority)
+			got, err := Compute(tc.outputs, ModeMajority, DefaultFailurePriority)
 			if err != nil {
 				t.Fatalf("Compute() error = %v", err)
 			}
@@ -75,7 +75,7 @@ func TestComputeMajorityHandlesNullConfidenceByReviewerCount(t *testing.T) {
 		outputWithoutConfidence("PASS"),
 		outputWithoutConfidence("PASS"),
 		output("FAIL", 1),
-	}, ModeMajority)
+	}, ModeMajority, DefaultFailurePriority)
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
 	}
@@ -88,25 +88,24 @@ func TestComputeAll(t *testing.T) {
 	got, err := Compute([]reviewer.RawReviewerOutput{
 		output("PASS", 1),
 		output("NEEDS_WORK", 1),
-	}, ModeAll)
+	}, ModeAll, DefaultFailurePriority)
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
 	}
-	if got.Verdict != VerdictNeedsWork {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictNeedsWork)
+	if got.Verdict != VerdictPass {
+		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictPass)
 	}
 }
 
-func TestComputeAllPreservesRequiresDecision(t *testing.T) {
+func TestComputeUsesFailurePriorityThreshold(t *testing.T) {
 	got, err := Compute([]reviewer.RawReviewerOutput{
-		output("PASS", 1),
-		output("requires_decision", 1),
-	}, ModeAll)
+		output("NEEDS_WORK", 1),
+	}, ModeAll, 2)
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
 	}
-	if got.Verdict != VerdictRequiresDecision {
-		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictRequiresDecision)
+	if got.Verdict != VerdictFail {
+		t.Fatalf("Verdict = %q, want %q", got.Verdict, VerdictFail)
 	}
 }
 
@@ -114,7 +113,7 @@ func TestComputeAny(t *testing.T) {
 	got, err := Compute([]reviewer.RawReviewerOutput{
 		output("FAIL", 1),
 		output("PASS", 1),
-	}, ModeAny)
+	}, ModeAny, DefaultFailurePriority)
 	if err != nil {
 		t.Fatalf("Compute() error = %v", err)
 	}
@@ -128,7 +127,7 @@ func TestBlockingFindingPreventsPassAcrossModes(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			got, err := Compute([]reviewer.RawReviewerOutput{
 				output("PASS", 1, blockingFinding()),
-			}, mode)
+			}, mode, DefaultFailurePriority)
 			if err != nil {
 				t.Fatalf("Compute() error = %v", err)
 			}
@@ -177,17 +176,34 @@ func TestNormalizeVerdictUnknownReturnsError(t *testing.T) {
 }
 
 func output(verdict string, confidence float64, findings ...reviewer.RawFinding) reviewer.RawReviewerOutput {
+	if len(findings) == 0 {
+		findings = findingsForVerdict(verdict)
+	}
 	return reviewer.RawReviewerOutput{
-		Verdict:           verdict,
 		OverallConfidence: &confidence,
 		Findings:          findings,
 	}
 }
 
 func outputWithoutConfidence(verdict string, findings ...reviewer.RawFinding) reviewer.RawReviewerOutput {
+	if len(findings) == 0 {
+		findings = findingsForVerdict(verdict)
+	}
 	return reviewer.RawReviewerOutput{
-		Verdict:  verdict,
 		Findings: findings,
+	}
+}
+
+func findingsForVerdict(verdict string) []reviewer.RawFinding {
+	switch verdict {
+	case "FAIL", "fail":
+		priority := 1
+		return []reviewer.RawFinding{{Title: "fail", Body: "fail", Priority: &priority}}
+	case "NEEDS_WORK", "NEEDS WORK", "needs_work":
+		priority := 2
+		return []reviewer.RawFinding{{Title: "needs work", Body: "needs work", Priority: &priority}}
+	default:
+		return []reviewer.RawFinding{}
 	}
 }
 

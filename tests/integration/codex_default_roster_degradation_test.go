@@ -207,7 +207,7 @@ func codexOnlyReviewerPath(t *testing.T) string {
 while IFS= read -r _line; do
   :
 done
-printf '{"findings":[],"verdict":"PASS","summary":"mock codex pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}\n'
+printf '{"findings":[]}\n'
 `
 	path := filepath.Join(bin, "codex")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -226,7 +226,7 @@ func claudeCodexReviewerPath(t *testing.T) string {
 while IFS= read -r _line; do
   :
 done
-printf '{"findings":[],"verdict":"PASS","summary":"mock pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}\n'
+printf '{"findings":[]}\n'
 `
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s) error = %v", bin, err)

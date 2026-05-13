@@ -223,15 +223,8 @@ func (stub passReviewerStub) Spawn(ctx context.Context, request reviewer.Request
 		return reviewer.Response{}, fmt.Errorf("gate status during reviewer spawn = %q, want %q", gate.Status, state.GateStatePending)
 	}
 
-	confidence := 0.9
-	round := 1
 	output, err := json.Marshal(reviewer.RawReviewerOutput{
-		Verdict:           "PASS",
-		Summary:           "ok",
-		OverallConfidence: &confidence,
-		Round:             &round,
-		Findings:          []reviewer.RawFinding{},
-		PeerResponsesSeen: []string{},
+		Findings: []reviewer.RawFinding{},
 	})
 	if err != nil {
 		return reviewer.Response{}, err

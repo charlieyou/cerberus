@@ -12,11 +12,5 @@
       "evidence": "using claude-opus-4-7 capabilities, claude sees an unresolved invariant",
       "recommendation": "ask peers whether claude-opus-4-7 missed a policy edge"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "as the claude reviewer on claude-opus-4-7, I need peer review before resolving",
-  "overall_confidence": 0.61,
-  "strategy": "verification-first",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

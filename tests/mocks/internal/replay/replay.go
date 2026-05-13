@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const passResponse = `{"findings":[],"verdict":"PASS","summary":"mock pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}` + "\n"
+const passResponse = `{"findings":[]}` + "\n"
 
 func Main(provider string) {
 	if err := validateInvocation(provider, os.Args[1:]); err != nil {

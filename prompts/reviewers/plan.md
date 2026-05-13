@@ -22,7 +22,6 @@ ${PRIOR_ROUND_SELF_BLOCK}
      - Integration Analysis
      - Prerequisites
      - High-level Approach
-     - Technical Design (architecture, data model, interfaces, file impact summary)
      - Risks & Edge Cases / Breaking Changes
      - Testing & Validation
      - Spec/Legacy Fidelity (Deviation Log if applicable)
@@ -48,7 +47,6 @@ ${PRIOR_ROUND_SELF_BLOCK}
 
 5. **Edge Cases & Risk**
    - Does the plan address error handling, fallbacks, and degraded modes?
-   - Are failure modes (e.g., external service downtime) considered?
    - Are monitoring/alerting needs called out for risky areas?
 
 6. **Breaking Changes & Compatibility**
@@ -89,7 +87,6 @@ Note: Plans focus on **design** (architecture, data model, interfaces, file impa
 5. The issue does not rely on unstated assumptions about the codebase.
 6. To claim a step is missing or wrong, you must identify specific evidence or a clear consequence.
 7. The issue is clearly not an intentional design choice.
-8. **Iteration hygiene (verification-first):** At the start of each review round, first verify whether previously flagged P0/P1 issues are resolved in the updated plan and any provided author-context. For each prior issue, decide if it is resolved, partially resolved, or still unresolved. Only after completing this verification step should you flag genuinely new issues. Do not re-raise issues already addressed unless the plan clearly regressed or you can point to a specific remaining gap. In later iterations where most high-severity issues are resolved, be conservative about promoting new concerns to P1; prefer P2 unless there is a concrete, high-likelihood failure on the main happy path.
 9. **Author-context awareness:** Input may include an author-context note summarizing which findings were resolved, which were false positives, and any constraints. Treat items explicitly marked as "Resolved" as resolved unless the updated plan clearly contradicts them. If there is ambiguity between the updated plan and author-context, default to trusting author-context and classify any residual concern as P2 or a clarifying question rather than P1. Do not re-flag such items unless you can point to a specific remaining gap or regression.
 10. **Avoid scope creep:** Do not demand exhaustive detail beyond what's required to implement and ship safely.
 11. **Requirement fidelity bias:** Actively check for requirement rewrites (lists shortened, thresholds changed, renamed states) and flag them when not explicitly justified.
@@ -147,7 +144,6 @@ Acceptance criteria that use **proxy metrics** instead of **observable outcomes*
 
 In general, prefer AC that describe behavior, invariants, or verifiable states—not internal structure limits or work quotas.
 
-### Parallel/Duplicate Infrastructure (Flag as P1 only when it causes happy-path failures)
 
 Plans that propose creating new infrastructure when similar infrastructure already exists in the codebase are a serious red flag. This leads to fragmented, inconsistent codebases.
 
@@ -157,7 +153,6 @@ Plans that propose creating new infrastructure when similar infrastructure alrea
 |---------|---------|---------------------|
 | Duplicate config system | "Create a new config loader for X" when `config/loader.ts` exists | Fragments configuration, creates drift |
 | Parallel registry | "Add a new plugin registry" when `plugins/registry.ts` exists | Duplicates patterns, confuses extension points |
-| Redundant middleware | "Create auth middleware" when auth middleware chain exists | Bypasses existing security model |
 | New event system | "Build event dispatcher for Y" when `events/` system exists | Fragments event handling |
 | Separate state management | "Add state store for Z" when state management exists | Creates inconsistent state patterns |
 
@@ -167,11 +162,9 @@ Plans that propose creating new infrastructure when similar infrastructure alrea
 3. If proposing new infrastructure, is there explicit justification for why existing mechanisms are insufficient?
 
 **When to flag as P1:**
-- Duplication is very likely to cause inconsistent behavior or failures on core happy-path flows (e.g., two conflicting auth systems, divergent state management)
 
 **When to flag as P2 (not P1):**
 - Duplication is primarily a maintainability or long-term complexity concern
-- Plan creates new infrastructure without acknowledging existing similar systems (but doesn't cause happy-path failures)
 - Justification for new infrastructure is weak ("cleaner to start fresh", "existing is complex")
 - You only suspect duplication from generic naming patterns without clear evidence
 
@@ -197,10 +190,8 @@ Use when the plan is structurally or logically impossible to execute as written.
 
 **[P1] – High-severity, must-fix before implementation**
 
-Use when leaving the issue unfixed will *very likely* cause failure or serious risk on normal, expected execution paths in the system as described in the plan (not based on speculative runtime or library behavior).
 
 - Criteria (any one is enough):
-  - The main "happy path" will fail or be blocked for a large portion of users.
   - There is a clear, direct path to data loss, security/privacy breach, or major outage.
   - A required piece is missing and cannot be reasonably inferred or safely filled in by the implementer.
 - Examples:
@@ -218,7 +209,6 @@ Use when leaving the issue unfixed will *very likely* cause failure or serious r
 Use when the plan is executable but has gaps that could cause bugs, confusion, or rework in some paths—but are not clearly catastrophic for the main flow.
 
 - Criteria:
-  - Some paths might fail or misbehave if not clarified.
   - An implementer can proceed but would have to guess or make assumptions.
   - The impact is limited to certain features, edge cases, or observability.
 - Examples:
@@ -231,22 +221,15 @@ Use when the plan is executable but has gaps that could cause bugs, confusion, o
 
 **[P3] – Low-severity, nice-to-have clarity or polish**
 
-Use for feedback that would improve quality but is not expected to cause failures if ignored.
 
 - Examples:
   - Suggesting clearer step ordering for readability.
   - Recommending additional comments or diagrams.
   - Proposing more detailed logging levels when basic logging exists.
 
-### Verdict Guidelines
 
-- **PASS**: No P0 or P1 findings. P2/P3 findings are allowed as non-blocking suggestions.
-- **NEEDS_WORK**: At least one P1 finding (no P0), OR P2 issues that collectively make execution meaningfully risky (you must explain this in the summary).
-- **FAIL**: At least one P0 finding, or the plan is not meaningfully reviewable.
 
-**Do not choose NEEDS_WORK solely because P2/P3 findings exist.** Use NEEDS_WORK only when issues actually prevent safe execution or are P1+.
 
-**Multi-reviewer consensus:** In multi-reviewer mode, NEEDS_WORK based only on P2/P3 can be overridden if at least two other reviewers PASS with no P0/P1 findings. FAIL verdicts always block regardless of priority levels.
 
 ## Reasoning Process
 
@@ -255,9 +238,6 @@ Before outputting your review, use ultrathink to reason step-by-step. Follow thi
 2. For each prior P0/P1, check the updated plan to determine whether it is resolved, partially resolved, or still unresolved.
 3. Only after completing this verification step, scan the updated plan for genuinely new potential issues.
 4. For each potential finding (old or new), explicitly ask: "Does this meet P1 criteria, or is it P2?" If you are uncertain and it is not clearly catastrophic on the main happy path, classify it as P2.
-5. Consider edge cases and failure modes, but do not escalate speculative or highly uncertain concerns about runtimes/APIs to P1; classify them as P2 or raise them as questions.
-6. Only then formulate your findings and verdict, ensuring the verdict logic matches the Priority and Verdict Guidelines.
-7. **Convergence sanity-check:** Before deciding the verdict, re-check: Are all remaining concerns P2/P3 or questions and not clearly catastrophic for the main happy path? If yes, you SHOULD choose PASS, even if P2/P3 feedback remains.
 
 ## Output Format
 
@@ -270,18 +250,15 @@ JSON only, no markdown code fences:
       "priority": 1,
       "file_path": null,
       "line_start": null,
-      "line_end": null
+      "line_end": null,
+      "confidence": 0.85
     }
-  ],
-  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
-  "summary": "Highest priority: P{N}. {1-2 sentences explaining why verdict matches the rules.}"
+  ]
 }
 
 ${DEBATE_OUTPUT_SHAPE}
-- PASS: No P0/P1 findings; P2/P3 allowed
-- NEEDS_WORK: At least one P1, or P2s that collectively prevent safe execution
-- FAIL: At least one P0
 - file_path, line_start, line_end: use null for plan reviews (not applicable). Do not add line-number citations in finding bodies.
-- summary MUST state the highest priority level and justify the verdict
 
 If any guidance here conflicts with these output format rules, follow the output format rules above.
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

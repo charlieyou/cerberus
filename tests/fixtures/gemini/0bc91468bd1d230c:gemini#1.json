@@ -1,1 +1,3 @@
-{"findings":[],"verdict":"PASS","summary":"gemini smoke pass","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}
+{
+  "findings": []
+}

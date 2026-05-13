@@ -12,11 +12,5 @@
       "evidence": "claude found a possible claude-sonnet-4-5 blind spot",
       "recommendation": "broadcast this claude concern anonymously"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "as claude on claude-sonnet-4-5, I want one more round",
-  "overall_confidence": 0.62,
-  "strategy": "falsification-first",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

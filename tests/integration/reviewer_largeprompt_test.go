@@ -52,11 +52,8 @@ func TestReviewerLargePromptStdinRoundTrip(t *testing.T) {
 			}
 
 			parsed := response.Parsed
-			if parsed.Verdict != "PASS" {
-				t.Fatalf("%s parsed verdict = %q, want PASS", provider, parsed.Verdict)
-			}
-			if !strings.Contains(parsed.Summary, wantHash) {
-				t.Fatalf("%s canonical reviewer output summary = %q, want prompt sha256 %s", provider, parsed.Summary, wantHash)
+			if parsed == nil || len(parsed.Findings) != 0 {
+				t.Fatalf("%s parsed output = %#v, want no findings", provider, parsed)
 			}
 
 			stdinBytes, err := os.ReadFile(filepath.Join(recordDir, provider+".stdin"))
@@ -90,7 +87,7 @@ func reviewerLargePromptFixtureDir(t *testing.T, userPrompt []byte, wantHash str
 	sum := sha256.Sum256(userPrompt)
 	promptHash := hex.EncodeToString(sum[:8])
 	for _, provider := range generateProviders {
-		fixture := fmt.Sprintf(`{"findings":[],"verdict":"PASS","summary":"mock pass prompt_sha256=%s","overall_confidence":0.9,"strategy":"mock","round":1,"peer_responses_seen":[]}`+"\n", wantHash)
+		fixture := `{"findings":[]}` + "\n"
 		path := filepath.Join(fixtureDir, promptHash+":"+provider+"#1.json")
 		if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
 			t.Fatalf("WriteFile(%s) error = %v", path, err)

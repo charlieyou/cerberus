@@ -12,11 +12,5 @@
       "evidence": "gpt-5.3-codex split the concern into policy and identity parts",
       "recommendation": "have other codex peers compare the decomposition"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "as the codex reviewer on gpt-5.3-codex, I need the panel",
-  "overall_confidence": 0.63,
-  "strategy": "decompose",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

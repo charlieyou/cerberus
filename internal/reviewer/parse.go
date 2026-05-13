@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-// Parse strictly decodes reviewer stdout as JSON and validates the raw verdict.
+// Parse strictly decodes reviewer stdout as JSON and validates the findings-only
+// reviewer output shape.
 func Parse(stdout []byte) (*RawReviewerOutput, error) {
 	if len(stdout) == 0 {
 		return nil, fmt.Errorf("reviewer stdout is empty")
@@ -157,7 +158,7 @@ func looksLikeReviewerObject(raw []byte) bool {
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return false
 	}
-	for _, key := range []string{"findings", "verdict", "summary"} {
+	for _, key := range []string{"findings"} {
 		if _, ok := object[key]; ok {
 			return true
 		}
@@ -203,13 +204,8 @@ func validateRequiredFields(stdout []byte) error {
 	if err := json.Unmarshal(stdout, &raw); err != nil {
 		return fmt.Errorf("parse reviewer JSON fields: %w", err)
 	}
-	for _, key := range []string{"findings", "verdict", "summary"} {
+	for _, key := range []string{"findings"} {
 		if _, ok := raw[key]; !ok {
-			return fmt.Errorf("reviewer %s is required", key)
-		}
-	}
-	for _, key := range []string{"summary"} {
-		if bytes.Equal(bytes.TrimSpace(raw[key]), []byte("null")) {
 			return fmt.Errorf("reviewer %s is required", key)
 		}
 	}
@@ -237,11 +233,6 @@ func validateRequiredFields(stdout []byte) error {
 }
 
 func validate(output *RawReviewerOutput) error {
-	switch output.Verdict {
-	case "PASS", "pass", "FAIL", "fail", "NEEDS_WORK", "NEEDS WORK", "needs_work", "REQUIRES_DECISION", "requires_decision":
-	default:
-		return fmt.Errorf("reviewer verdict %q is invalid", output.Verdict)
-	}
 	if output.Findings == nil {
 		return fmt.Errorf("reviewer findings is required")
 	}

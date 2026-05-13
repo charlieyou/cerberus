@@ -67,14 +67,14 @@ func TestRunSinglePassReviewerFailureResolvesRequiresDecision(t *testing.T) {
 
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	failed := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "output.json"))
-	if !strings.Contains(fmt.Sprint(failed["summary"]), wantErr.Error()) {
-		t.Fatalf("failed output summary = %v, want reviewer error", failed["summary"])
+	if _, ok := failed["summary"]; ok {
+		t.Fatalf("failed output summary = %v, want omitted", failed["summary"])
 	}
 	events := readEventLog(t, env)
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
 }
 
-func TestRunSinglePassNeedsWorkPersistsNeedsWork(t *testing.T) {
+func TestRunSinglePassNonFailingFindingsPassByDefault(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 
@@ -92,13 +92,13 @@ func TestRunSinglePassNeedsWorkPersistsNeedsWork(t *testing.T) {
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want %q", gate.Status, state.StatusResolved)
 	}
-	if gate.Verdict == nil || *gate.Verdict != state.VerdictNeedsWork {
-		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictNeedsWork)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictPass {
+		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictPass)
 	}
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	row := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
-	if row["verdict"] != state.VerdictNeedsWork {
-		t.Fatalf("reviewer telemetry verdict = %v, want %q", row["verdict"], state.VerdictNeedsWork)
+	if row["verdict"] != state.VerdictPass {
+		t.Fatalf("reviewer telemetry verdict = %v, want %q", row["verdict"], state.VerdictPass)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestRunSinglePassRejectsWhenExistingGateIsPending(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
-	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[]}`)); err != nil {
 		t.Fatalf("WriteReviewerOutput() error = %v", err)
 	}
 
@@ -244,7 +244,7 @@ func TestStartSinglePassFailsClosedWhenGateStateUnreadable(t *testing.T) {
 	if err := os.WriteFile(gatePath(env), []byte(`{"status":`), 0o644); err != nil {
 		t.Fatalf("write corrupt gate state: %v", err)
 	}
-	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[]}`)); err != nil {
 		t.Fatalf("WriteReviewerOutput() error = %v", err)
 	}
 
@@ -291,7 +291,7 @@ func TestStartSinglePassResetsAttemptScopedArtifacts(t *testing.T) {
 	if err := os.WriteFile(state.StopMessageMarkerPath(runRoot), []byte(`{"emitted_at":"old"}`), 0o644); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
-	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[]}`)); err != nil {
 		t.Fatalf("WriteReviewerOutput() error = %v", err)
 	}
 
@@ -530,8 +530,8 @@ func TestRunSinglePassReviewerFailureDoesNotCancelOtherReviewers(t *testing.T) {
 	assertEventCount(t, events, telemetry.EventReviewerCompleted, 1)
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	passed := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "output.json"))
-	if got, want := passed["verdict"], "PASS"; got != want {
-		t.Fatalf("codex output verdict = %v, want %q", got, want)
+	if _, ok := passed["verdict"]; ok {
+		t.Fatalf("codex output verdict = %v, want omitted", passed["verdict"])
 	}
 }
 
@@ -568,7 +568,7 @@ func TestAggregateRoundOutputsTreatsReviewerFailuresAsAbstentions(t *testing.T) 
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := aggregateRoundOutputs(tc.outputs, tc.consensus)
+			got, err := aggregateRoundOutputs(tc.outputs, tc.consensus, aggregate.DefaultFailurePriority)
 			if err != nil {
 				t.Fatalf("aggregateRoundOutputs() error = %v", err)
 			}
@@ -596,8 +596,21 @@ func roundOutput(verdict string) roundReviewerResult {
 		panic(err)
 	}
 	return roundReviewerResult{
-		Output: reviewer.RawReviewerOutput{Findings: []reviewer.RawFinding{}, Verdict: verdict},
+		Output: reviewer.RawReviewerOutput{Findings: findingsForVerdict(verdict)},
 		Row:    telemetry.ReviewerRow{Verdict: gateVerdict},
+	}
+}
+
+func findingsForVerdict(verdict string) []reviewer.RawFinding {
+	switch verdict {
+	case "FAIL", "fail":
+		priority := 1
+		return []reviewer.RawFinding{{Title: "fail", Body: "fail", Priority: &priority}}
+	case "NEEDS_WORK", "NEEDS WORK", "needs_work":
+		priority := 2
+		return []reviewer.RawFinding{{Title: "needs work", Body: "needs work", Priority: &priority}}
+	default:
+		return []reviewer.RawFinding{}
 	}
 }
 
@@ -696,7 +709,6 @@ func (needsWorkSpawner) Spawn(ctx context.Context, request reviewer.Request) (re
 			Body:     "The help text is confusing.",
 			Priority: &priority,
 		}},
-		Verdict:           "NEEDS_WORK",
 		Summary:           "non-blocking issue",
 		OverallConfidence: &confidence,
 		Round:             &round,
@@ -796,7 +808,6 @@ func passResponse(id string) (reviewer.Response, error) {
 	round := 1
 	parsed := &reviewer.RawReviewerOutput{
 		Findings:          []reviewer.RawFinding{},
-		Verdict:           "PASS",
 		Summary:           "ok",
 		OverallConfidence: &confidence,
 		Strategy:          nil,

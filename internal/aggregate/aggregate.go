@@ -20,6 +20,8 @@ type Result struct {
 	Blockers []FindingRef
 }
 
+const DefaultFailurePriority = 1
+
 type FindingRef struct {
 	ReviewerIndex int
 	Title         string
@@ -28,12 +30,13 @@ type FindingRef struct {
 	LineEnd       int
 }
 
-func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
+func Compute(outputs []reviewer.RawReviewerOutput, mode Mode, failurePriority int) (Result, error) {
 	if len(outputs) == 0 {
 		return Result{}, fmt.Errorf("aggregate reviewer outputs: none provided")
 	}
 
 	mode = normalizeMode(mode)
+	failurePriority = normalizeFailurePriority(failurePriority)
 	counts := map[string]int{
 		VerdictPass:             0,
 		VerdictFail:             0,
@@ -47,10 +50,7 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 	anyRequiresDecision := false
 
 	for index, output := range outputs {
-		verdict, err := NormalizeVerdict(output.Verdict)
-		if err != nil {
-			return Result{}, err
-		}
+		verdict := VerdictForFindings(output.Findings, failurePriority)
 		allPass = allPass && verdict == VerdictPass
 		anyPass = anyPass || verdict == VerdictPass
 		anyNeedsWork = anyNeedsWork || verdict == VerdictNeedsWork
@@ -64,6 +64,31 @@ func Compute(outputs []reviewer.RawReviewerOutput, mode Mode) (Result, error) {
 	}
 
 	return Result{Verdict: computeVerdict(counts, len(outputs), mode, allPass, anyPass, anyNeedsWork, anyRequiresDecision)}, nil
+}
+
+// VerdictForFindings derives the per-reviewer verdict from findings emitted by
+// a CLI reviewer. Reviewers no longer vote directly.
+func VerdictForFindings(findings []reviewer.RawFinding, failurePriority int) string {
+	if len(findings) == 0 {
+		return VerdictPass
+	}
+	failurePriority = normalizeFailurePriority(failurePriority)
+	for _, finding := range findings {
+		if finding.Severity != nil && strings.ToLower(*finding.Severity) == "blocking" {
+			return VerdictFail
+		}
+		if finding.Priority != nil && *finding.Priority <= failurePriority {
+			return VerdictFail
+		}
+	}
+	return VerdictPass
+}
+
+func normalizeFailurePriority(priority int) int {
+	if priority < 0 || priority > 3 {
+		return DefaultFailurePriority
+	}
+	return priority
 }
 
 func normalizeMode(mode Mode) Mode {

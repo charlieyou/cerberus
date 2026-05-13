@@ -1,4 +1,3 @@
-Under `--debate`, also include `confidence` (0.0–1.0) on each finding and `overall_confidence` (0.0–1.0) at the top level:
 {
   "findings": [
     {
@@ -10,8 +9,7 @@ Under `--debate`, also include `confidence` (0.0–1.0) on each finding and `ove
       "line_end": 45,
       "confidence": 0.85
     }
-  ],
-  "verdict": "PASS",
-  "summary": "1-3 sentence explanation",
-  "overall_confidence": 0.8
+  ]
 }
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

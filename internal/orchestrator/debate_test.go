@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	verdict, err := (Orchestrator{
 		Env:     env,
 		Spawner: spawner,
-		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput, rosterModelNames []string) ([]anonymize.PeerRecord, error) {
+		AnonymizePeerBroadcast: func(outputs []reviewer.RawReviewerOutput, rosterModelNames []string, failurePriority int) ([]anonymize.PeerRecord, error) {
 			anonymizerCalls++
 			if len(outputs) != 2 {
 				t.Fatalf("anonymizer outputs length = %d, want 2", len(outputs))
@@ -115,7 +116,7 @@ func TestStartDebateRejectsWhenExistingGateIsPending(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
-	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "old#1", []byte(`{"findings":[]}`)); err != nil {
 		t.Fatalf("WriteReviewerOutput() error = %v", err)
 	}
 
@@ -167,7 +168,7 @@ func TestRunDebateRunsPeerRoundWhenRoundOnePasses(t *testing.T) {
 	}
 }
 
-func TestRunDebateRunsAllRoundsWhenVerdictNeedsWork(t *testing.T) {
+func TestRunDebateStopsAfterPeerRoundWhenFindingsDoNotFail(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	spawner := &verdictByRoundSpawner{verdicts: map[int]string{
@@ -183,14 +184,14 @@ func TestRunDebateRunsAllRoundsWhenVerdictNeedsWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunDebate() error = %v", err)
 	}
-	if verdict.Verdict != state.VerdictNeedsWork {
-		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictNeedsWork)
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictPass)
 	}
-	if got, want := spawner.roundCalls(3), 2; got != want {
+	if got, want := spawner.roundCalls(3), 0; got != want {
 		t.Fatalf("round 3 call count = %d, want %d", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "iterations", "1", "round-3", "peer-broadcast.json")); err != nil {
-		t.Fatalf("round-3 peer-broadcast.json missing: %v", err)
+	if _, err := os.Stat(filepath.Join(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey), "iterations", "1", "round-3", "peer-broadcast.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("round-3 peer-broadcast stat error = %v, want not exist", err)
 	}
 }
 
@@ -321,7 +322,7 @@ func TestStartDebateResetsAttemptScopedArtifacts(t *testing.T) {
 	if err := os.WriteFile(state.StopMessageMarkerPath(runRoot), []byte(`{"emitted_at":"old"}`), 0o644); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
-	if err := state.WriteReviewerOutput(runRoot, 1, 2, "old#1", []byte(`{"findings":[],"verdict":"FAIL","summary":"stale"}`)); err != nil {
+	if err := state.WriteReviewerOutput(runRoot, 1, 2, "old#1", []byte(`{"findings":[]}`)); err != nil {
 		t.Fatalf("WriteReviewerOutput() error = %v", err)
 	}
 
@@ -375,12 +376,13 @@ func (spawner *debateRecordingSpawner) Spawn(ctx context.Context, request review
 
 	raw := reviewer.RawReviewerOutput{
 		Findings:          []reviewer.RawFinding{},
-		Verdict:           "NEEDS_WORK",
 		Summary:           "round one needs peer input",
 		PeerResponsesSeen: []string{},
 	}
+	priority := 2
+	raw.Findings = []reviewer.RawFinding{{Title: "needs peer input", Body: "needs peer input", Priority: &priority}}
 	if request.Round == 2 {
-		raw.Verdict = "PASS"
+		raw.Findings = []reviewer.RawFinding{}
 		raw.Summary = "resolved after peer input"
 		raw.PeerResponsesSeen = []string{"peer_1", "peer_2"}
 	}
@@ -422,8 +424,7 @@ func (spawner *verdictByRoundSpawner) Spawn(ctx context.Context, request reviewe
 	}
 	round := request.Round
 	raw := reviewer.RawReviewerOutput{
-		Findings: []reviewer.RawFinding{},
-		Verdict:  verdict,
+		Findings: findingsForVerdict(verdict),
 		Summary:  "same reviewer output",
 		Round:    &round,
 	}

@@ -2,7 +2,6 @@ package reviewer
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,8 +34,8 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Spawn() error = %v", err)
 			}
-			if response.Parsed == nil || response.Parsed.Verdict != "PASS" {
-				t.Fatalf("parsed response = %#v, want PASS", response.Parsed)
+			if response.Parsed == nil || len(response.Parsed.Findings) != 0 {
+				t.Fatalf("parsed response = %#v, want no findings", response.Parsed)
 			}
 
 			args := readRecord(t, recordDir, provider+".args")
@@ -177,39 +176,23 @@ func TestRunnerWritesReviewerArtifacts(t *testing.T) {
 	}
 }
 
-func TestParseRejectsInvalidJSONAndVerdict(t *testing.T) {
+func TestParseRejectsInvalidJSONAndUnknownFields(t *testing.T) {
 	if _, err := Parse([]byte(`not-json`)); err == nil {
 		t.Fatal("Parse(invalid JSON) error = nil")
 	}
-	if _, err := Parse([]byte(`{"findings":[],"verdict":"MAYBE","summary":"bad","overall_confidence":0.5,"strategy":"mock","round":1,"peer_responses_seen":[]}`)); err == nil {
-		t.Fatal("Parse(invalid verdict) error = nil")
-	}
-}
-
-func TestParseAcceptsNormalizedVerdictSpellings(t *testing.T) {
-	for _, verdict := range []string{"PASS", "pass", "FAIL", "fail", "NEEDS_WORK", "NEEDS WORK", "needs_work", "REQUIRES_DECISION", "requires_decision"} {
-		t.Run(verdict, func(t *testing.T) {
-			input := fmt.Sprintf(`{"findings":[],"verdict":%q,"summary":"ok","overall_confidence":0.8}`, verdict)
-			got, err := Parse([]byte(input))
-			if err != nil {
-				t.Fatalf("Parse() error = %v", err)
-			}
-			if got.Verdict != verdict {
-				t.Fatalf("Verdict = %q, want %q", got.Verdict, verdict)
-			}
-		})
+	if _, err := Parse([]byte(`{"findings":[],"verdict":"PASS"}`)); err == nil {
+		t.Fatal("Parse(unknown verdict field) error = nil")
 	}
 }
 
 func TestParseRejectsMissingRequiredFields(t *testing.T) {
 	for name, input := range map[string]string{
-		"missing summary":        `{"findings":[],"verdict":"PASS","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"missing finding fields": `{"findings":[{"title":"x","body":"y"}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"missing confidence":     `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null priority":          `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null summary":           `{"findings":[],"verdict":"PASS","summary":null,"overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null title":             `{"findings":[{"title":null,"body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
-		"null body":              `{"findings":[{"title":"x","body":null,"priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}],"verdict":"FAIL","summary":"bad","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":[]}`,
+		"missing findings":       `{}`,
+		"missing finding fields": `{"findings":[{"title":"x","body":"y"}]}`,
+		"missing confidence":     `{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null}]}`,
+		"null priority":          `{"findings":[{"title":"x","body":"y","priority":null,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}]}`,
+		"null title":             `{"findings":[{"title":null,"body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}]}`,
+		"null body":              `{"findings":[{"title":"x","body":null,"priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":0.9}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
@@ -219,18 +202,18 @@ func TestParseRejectsMissingRequiredFields(t *testing.T) {
 	}
 }
 
-func TestParseAcceptsOptionalDebateMetadata(t *testing.T) {
-	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8}`))
+func TestParseAcceptsFindingsOnlyOutput(t *testing.T) {
+	got, err := Parse([]byte(`{"findings":[]}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "ok" {
-		t.Fatalf("Parse() = %#v, want PASS", got)
+	if got.Findings == nil || len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want empty findings", got)
 	}
 }
 
 func TestParseAcceptsRequiredNullableFindingLocations(t *testing.T) {
-	got, err := Parse([]byte(`{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":null}],"verdict":"FAIL","summary":"bad","overall_confidence":null,"strategy":null,"round":null,"peer_responses_seen":null}`))
+	got, err := Parse([]byte(`{"findings":[{"title":"x","body":"y","priority":1,"file_path":null,"line_start":null,"line_end":null,"confidence":null}]}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -240,62 +223,62 @@ func TestParseAcceptsRequiredNullableFindingLocations(t *testing.T) {
 }
 
 func TestParseUnwrapsClaudeResultJSON(t *testing.T) {
-	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"ok\",\"overall_confidence\":0.8,\"strategy\":\"mock\",\"round\":1,\"peer_responses_seen\":[]}"}`))
+	got, err := Parse([]byte(`{"type":"result","result":"{\"findings\":[]}"}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "ok" {
-		t.Fatalf("Parse() = %#v, want unwrapped PASS result", got)
+	if len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want unwrapped empty findings", got)
 	}
 }
 
 func TestParseUnwrapsClaudeResultJSONAfterProse(t *testing.T) {
-	got, err := Parse([]byte(`{"type":"result","result":"I checked the plan first.\n\n{\n  \"findings\": [],\n  \"verdict\": \"PASS\",\n  \"summary\": \"ok after prose\",\n  \"overall_confidence\": 0.8\n}"}`))
+	got, err := Parse([]byte(`{"type":"result","result":"I checked the plan first.\n\n{\n  \"findings\": []\n}"}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "ok after prose" {
-		t.Fatalf("Parse() = %#v, want embedded PASS result", got)
+	if len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want embedded empty findings", got)
 	}
 }
 
 func TestParseUnwrapsLastClaudeResultJSONAfterProse(t *testing.T) {
-	got, err := Parse([]byte(`{"type":"result","result":"Draft:\n{\"findings\":[],\"verdict\":\"FAIL\",\"summary\":\"draft\",\"overall_confidence\":0.1}\n\nFinal:\n{\"findings\":[],\"verdict\":\"PASS\",\"summary\":\"final\",\"overall_confidence\":0.9}"}`))
+	got, err := Parse([]byte(`{"type":"result","result":"Draft:\n{\"findings\":[{\"title\":\"draft\",\"body\":\"draft\",\"priority\":2,\"file_path\":null,\"line_start\":null,\"line_end\":null,\"confidence\":0.1}]}\n\nFinal:\n{\"findings\":[]}"}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "final" {
-		t.Fatalf("Parse() = %#v, want final embedded PASS result", got)
+	if len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want final embedded empty findings", got)
 	}
 }
 
 func TestParseClaudeResultWithMalformedEmbeddedJSONReturnsValidationError(t *testing.T) {
-	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[],\"verdict\":\"PASS\",\"overall_confidence\":0.8}"}`))
+	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[{\"title\":\"x\"}]}"}`))
 	if err == nil {
 		t.Fatal("Parse() error = nil, want embedded validation error")
 	}
-	if !strings.Contains(err.Error(), "reviewer summary is required") {
+	if !strings.Contains(err.Error(), "reviewer findings[0].body is required") {
 		t.Fatalf("Parse() error = %q, want embedded validation error", err)
 	}
 }
 
 func TestParseClaudeResultWithMalformedEmbeddedJSONIgnoresNestedFindingErrors(t *testing.T) {
-	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[{\"title\":\"x\",\"body\":\"y\",\"priority\":1,\"file_path\":null,\"line_start\":null,\"line_end\":null,\"confidence\":0.8}],\"verdict\":\"PASS\",\"overall_confidence\":0.8}"}`))
+	_, err := Parse([]byte(`{"type":"result","result":"I checked the plan.\n\n{\"findings\":[{\"title\":\"x\"}]}"}`))
 	if err == nil {
 		t.Fatal("Parse() error = nil, want embedded validation error")
 	}
-	if !strings.Contains(err.Error(), "reviewer summary is required") {
+	if !strings.Contains(err.Error(), "reviewer findings[0].body is required") {
 		t.Fatalf("Parse() error = %q, want top-level embedded validation error", err)
 	}
 }
 
 func TestParseUnwrapsGeminiResponseJSON(t *testing.T) {
-	got, err := Parse([]byte("{\"session_id\":\"gemini-session\",\"response\":\"```json\\n{\\\"findings\\\":[],\\\"verdict\\\":\\\"PASS\\\",\\\"summary\\\":\\\"ok\\\",\\\"overall_confidence\\\":0.8}\\n```\",\"stats\":{}}"))
+	got, err := Parse([]byte("{\"session_id\":\"gemini-session\",\"response\":\"```json\\n{\\\"findings\\\":[]}\\n```\",\"stats\":{}}"))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "ok" {
-		t.Fatalf("Parse() = %#v, want unwrapped PASS response", got)
+	if len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want unwrapped empty findings", got)
 	}
 }
 
@@ -303,15 +286,15 @@ func TestParseUnwrapsCodexJSONLAgentMessage(t *testing.T) {
 	stdout := strings.Join([]string{
 		`{"type":"thread.started","thread_id":"thread"}`,
 		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"working"}}`,
-		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\n  \"findings\": [],\n  \"verdict\": \"PASS\",\n  \"summary\": \"ok\",\n  \"overall_confidence\": 0.8\n}"}}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\n  \"findings\": []\n}"}}`,
 		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
 	}, "\n")
 	got, err := Parse([]byte(stdout))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.Verdict != "PASS" || got.Summary != "ok" {
-		t.Fatalf("Parse() = %#v, want unwrapped PASS agent message", got)
+	if len(got.Findings) != 0 {
+		t.Fatalf("Parse() = %#v, want unwrapped empty findings", got)
 	}
 }
 
@@ -334,16 +317,6 @@ func TestParseRejectsMalformedCodexJSONLAfterEvent(t *testing.T) {
 	_, err := Parse([]byte(stdout))
 	if err == nil || !strings.Contains(err.Error(), "parse codex JSONL") {
 		t.Fatalf("Parse() error = %v, want malformed codex JSONL error", err)
-	}
-}
-
-func TestParseAcceptsPeerResponsesSeenArray(t *testing.T) {
-	got, err := Parse([]byte(`{"findings":[],"verdict":"PASS","summary":"ok","overall_confidence":0.8,"strategy":"mock","round":1,"peer_responses_seen":["peer-1","peer-2"]}`))
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	if len(got.PeerResponsesSeen) != 2 || got.PeerResponsesSeen[0] != "peer-1" || got.PeerResponsesSeen[1] != "peer-2" {
-		t.Fatalf("PeerResponsesSeen = %#v, want peer ID array", got.PeerResponsesSeen)
 	}
 }
 

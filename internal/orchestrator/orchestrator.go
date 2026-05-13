@@ -21,16 +21,18 @@ type ConsensusMode = aggregate.Mode
 
 // Params contains the single-pass review inputs.
 type Params struct {
-	Prompt          []byte
-	ArtifactType    string
-	ArtifactContent string
-	ContextContent  string
-	Reviewers       []ReviewerSlot
-	RosterDefaults  RosterDefaults
-	Mode            string
-	MaxRounds       int
-	Consensus       ConsensusMode
-	RosterID        string
+	Prompt             []byte
+	ArtifactType       string
+	ArtifactContent    string
+	ContextContent     string
+	Reviewers          []ReviewerSlot
+	RosterDefaults     RosterDefaults
+	Mode               string
+	MaxRounds          int
+	Consensus          ConsensusMode
+	FailurePriority    int
+	FailurePrioritySet bool
+	RosterID           string
 }
 
 // RosterDefaults carries panel-wide defaults from rosters.yaml.
@@ -142,6 +144,10 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if consensus == "" {
 		consensus = aggregate.ModeMajority
 	}
+	failurePriority := params.FailurePriority
+	if !params.FailurePrioritySet || failurePriority < 0 || failurePriority > 3 {
+		failurePriority = aggregate.DefaultFailurePriority
+	}
 	artifactType := params.ArtifactType
 	if artifactType == "" {
 		artifactType = "code"
@@ -212,6 +218,8 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	params.Mode = mode
 	params.MaxRounds = maxRounds
 	params.Consensus = consensus
+	params.FailurePriority = failurePriority
+	params.FailurePrioritySet = true
 	params.RosterID = rosterID
 	params.ArtifactType = artifactType
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
@@ -281,6 +289,7 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 		Root:            started.Env.Root,
 		RuntimeMode:     started.Params.Mode,
 		Consensus:       started.Params.Consensus,
+		FailurePriority: started.Params.FailurePriority,
 	})
 	if err != nil {
 		return err

@@ -22,7 +22,7 @@ type Orchestrator struct {
 	Consensus              aggregate.Mode
 	Mode                   string
 	RosterID               string
-	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput, []string) ([]anonymize.PeerRecord, error)
+	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput, []string, int) ([]anonymize.PeerRecord, error)
 }
 
 // RunDebate executes a multi-round debate review on the same orchestrator path
@@ -58,6 +58,10 @@ func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
 	}
 	if params.Consensus == "" {
 		params.Consensus = aggregate.ModeMajority
+	}
+	if !params.FailurePrioritySet || params.FailurePriority < 0 || params.FailurePriority > 3 {
+		params.FailurePriority = aggregate.DefaultFailurePriority
+		params.FailurePrioritySet = true
 	}
 	if params.RosterID == "" {
 		params.RosterID = "default"
@@ -97,6 +101,10 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	}
 	if consensus == "" {
 		consensus = aggregate.ModeMajority
+	}
+	failurePriority := params.FailurePriority
+	if !params.FailurePrioritySet || failurePriority < 0 || failurePriority > 3 {
+		failurePriority = aggregate.DefaultFailurePriority
 	}
 	mode := params.Mode
 	if o.Mode != "" {
@@ -176,6 +184,8 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	params.Mode = mode
 	params.MaxRounds = maxRounds
 	params.Consensus = consensus
+	params.FailurePriority = failurePriority
+	params.FailurePrioritySet = true
 	params.RosterID = rosterID
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
 }
@@ -193,6 +203,10 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	consensus := started.Params.Consensus
 	if consensus == "" {
 		consensus = aggregate.ModeMajority
+	}
+	failurePriority := started.Params.FailurePriority
+	if !started.Params.FailurePrioritySet || failurePriority < 0 || failurePriority > 3 {
+		failurePriority = aggregate.DefaultFailurePriority
 	}
 	mode := started.Params.Mode
 	if mode == "" {
@@ -224,7 +238,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 
 	for round := 1; round <= maxRounds; round++ {
 		if round > 1 {
-			records, err := anonymizeBroadcast(previous, rosterModelNames)
+			records, err := anonymizeBroadcast(previous, rosterModelNames, failurePriority)
 			if err != nil {
 				return Verdict{}, err
 			}
@@ -270,6 +284,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 			Iteration:       1,
 			Round:           round,
 			Consensus:       consensus,
+			FailurePriority: failurePriority,
 		})
 		if err != nil {
 			return Verdict{}, err
@@ -279,6 +294,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 		for i, result := range roundResults {
 			outputs[i] = result.Output
 			outputs[i].InstanceID = slots[i].ID
+			outputs[i].Round = &round
 			totalTokens.Input += result.Row.Tokens.Input
 			totalTokens.Output += result.Row.Tokens.Output
 			totalCostUSD += result.Row.CostUSD

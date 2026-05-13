@@ -12,11 +12,5 @@
       "evidence": "gemini-3.1-pro saw the policy flag in the command",
       "recommendation": "keep gemini policy active in round two"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "I, gemini, recommend a second round using gemini-3.1-pro policy context",
-  "overall_confidence": 0.64,
-  "strategy": "gemini-policy",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

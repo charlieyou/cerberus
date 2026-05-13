@@ -12,11 +12,5 @@
       "evidence": "codex found a possible gpt-5.4 blind spot",
       "recommendation": "broadcast this codex concern anonymously"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "as codex on gpt-5.4, I want one more round",
-  "overall_confidence": 0.62,
-  "strategy": "falsification-first",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

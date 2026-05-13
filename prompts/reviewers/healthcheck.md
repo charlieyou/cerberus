@@ -51,8 +51,6 @@ You are acting as a reviewer performing a health check on a codebase.
 - [P2] - Normal. Fix when convenient.
 - [P3] - Low. Nice to clean up.
 
-### Verdict Guidelines
 
-- **PASS**: Codebase is healthy with no significant issues.
-- **NEEDS_WORK**: Has issues worth addressing but nothing critical.
-- **FAIL**: Has critical issues requiring immediate attention.
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

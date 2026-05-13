@@ -19,13 +19,7 @@ var providers = []string{"claude", "codex", "gemini"}
 const reviewerSystemPrompt = `Return reviewer output as raw JSON only, with no markdown fences or prose outside JSON.
 The JSON object must contain:
 - "findings": an array
-- "verdict": one of "PASS", "FAIL", or "NEEDS_WORK"
-- "summary": a string
-- "overall_confidence": a number from 0 to 1
-- "strategy": a string
-- "round": 1
-- "peer_responses_seen": an array
-If the prompt does not contain enough context for a substantive review, return an empty findings array and verdict "PASS".`
+Do not include verdict, summary, confidence, strategy, round, or peer metadata. If the prompt does not contain enough context for a substantive review, return {"findings":[]}.`
 
 func main() {
 	if err := run(); err != nil {

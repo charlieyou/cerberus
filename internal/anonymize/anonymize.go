@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/charlieyou/cerberus/internal/aggregate"
 	"github.com/charlieyou/cerberus/internal/reviewer"
 )
 
@@ -33,7 +34,7 @@ type PeerFinding struct {
 
 // AnonymizePeerBroadcast converts reviewer outputs into peer records for the
 // next debate round.
-func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterModelNames []string) ([]PeerRecord, error) {
+func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterModelNames []string, failurePriority int) ([]PeerRecord, error) {
 	if len(roundOutputs) == 0 {
 		return []PeerRecord{}, nil
 	}
@@ -44,9 +45,6 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 		}
 		if output.Findings == nil {
 			return nil, fmt.Errorf("anonymize reviewer output %s: findings is required", output.InstanceID)
-		}
-		if output.Verdict == "" {
-			return nil, fmt.Errorf("anonymize reviewer output %s: verdict is required", output.InstanceID)
 		}
 	}
 
@@ -59,7 +57,7 @@ func AnonymizePeerBroadcast(roundOutputs []reviewer.RawReviewerOutput, rosterMod
 		peerID := peerIDs[output.InstanceID]
 		records[i] = PeerRecord{
 			PeerID:            peerID,
-			Verdict:           output.Verdict,
+			Verdict:           aggregate.VerdictForFindings(output.Findings, failurePriority),
 			Summary:           scrubber.Scrub(output.Summary, peerID),
 			Findings:          scrubFindings(output.Findings, peerID, scrubber),
 			OverallConfidence: output.OverallConfidence,

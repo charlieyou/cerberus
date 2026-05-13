@@ -32,6 +32,7 @@ type roundPrompts struct {
 	Iteration       int
 	Round           int
 	Consensus       aggregate.Mode
+	FailurePriority int
 }
 
 type roundReviewerResult struct {
@@ -103,7 +104,7 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 					return
 				}
 			}
-			row, err := reviewerTelemetryRow(slot, i, prompts.RuntimeMode, response, parsed, startedAt, endedAt)
+			row, err := reviewerTelemetryRow(slot, i, prompts.RuntimeMode, response, parsed, startedAt, endedAt, prompts.FailurePriority, round)
 			if err != nil {
 				slotResults[i] = reviewerFailureSlotResult(prompts.RunRoot, iteration, round, slot, i, prompts.RuntimeMode, startedAt, err)
 				return
@@ -136,14 +137,14 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 		}
 		outputs = append(outputs, slotResult.Result)
 	}
-	result, err := aggregateRoundOutputs(outputs, prompts.Consensus)
+	result, err := aggregateRoundOutputs(outputs, prompts.Consensus, prompts.FailurePriority)
 	if err != nil {
 		return nil, aggregate.Result{}, err
 	}
 	return outputs, result, nil
 }
 
-func aggregateRoundOutputs(outputs []roundReviewerResult, consensus aggregate.Mode) (aggregate.Result, error) {
+func aggregateRoundOutputs(outputs []roundReviewerResult, consensus aggregate.Mode, failurePriority int) (aggregate.Result, error) {
 	successful := make([]reviewer.RawReviewerOutput, 0, len(outputs))
 	successfulIndexes := make([]int, 0, len(outputs))
 	for i, output := range outputs {
@@ -159,7 +160,7 @@ func aggregateRoundOutputs(outputs []roundReviewerResult, consensus aggregate.Mo
 		result = aggregate.Result{Verdict: aggregate.VerdictRequiresDecision}
 	} else {
 		var err error
-		result, err = aggregate.Compute(successful, consensus)
+		result, err = aggregate.Compute(successful, consensus, failurePriority)
 		if err != nil {
 			return aggregate.Result{}, err
 		}
@@ -203,7 +204,6 @@ func failedReviewerOutput(slot ReviewerSlot, round int, original error) reviewer
 	reviewerID := firstNonEmpty(slot.ID, slot.Provider)
 	return reviewer.RawReviewerOutput{
 		Findings:          []reviewer.RawFinding{},
-		Verdict:           "NEEDS_WORK",
 		Summary:           fmt.Sprintf("Reviewer %s failed: %v", reviewerID, original),
 		OverallConfidence: &confidence,
 		Strategy:          strategy,
@@ -305,21 +305,15 @@ func writeReviewerEvent(runRoot string, eventName string, slot ReviewerSlot, slo
 	})
 }
 
-func reviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode string, response reviewer.Response, output *reviewer.RawReviewerOutput, startedAt, endedAt time.Time) (telemetry.ReviewerRow, error) {
-	verdict, err := aggregate.NormalizeVerdict(output.Verdict)
-	if err != nil {
-		return telemetry.ReviewerRow{}, err
-	}
+func reviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode string, response reviewer.Response, output *reviewer.RawReviewerOutput, startedAt, endedAt time.Time, failurePriority int, requestRound int) (telemetry.ReviewerRow, error) {
+	verdict := aggregate.VerdictForFindings(output.Findings, failurePriority)
 	instanceIndex := reviewerInstanceIndex(slot, slotIndex)
 	reviewerID := firstNonEmpty(response.ID, slot.ID)
 	confidence := 0.5
 	if output.OverallConfidence != nil {
 		confidence = *output.OverallConfidence
 	}
-	round := 1
-	if output.Round != nil && *output.Round > 0 {
-		round = *output.Round
-	}
+	round := firstPositive(requestRound, 1)
 
 	return telemetry.ReviewerRow{
 		ReviewerID:        reviewerID,

@@ -5,7 +5,6 @@
 1. **JSON only**: Return raw JSON with no markdown fences, no extra keys outside schema.
 2. **Body template**: Every `body` field must follow Template A (Unmet Criterion) or Template B (Verification Gap) in the Body Field Templates section.
 3. **No invented evidence**: If you cannot verify something, file a verification gap—do not guess.
-4. **Verdict invariant**: `FAIL` iff any finding has priority 0 or 1; `PASS` iff findings is empty and criteria present; `NEEDS_WORK` for P2/P3 only.
 
 ---
 
@@ -62,14 +61,11 @@ When Author Context includes the following evidence types, accept them as correc
 |---|---|---|
 | File:line trace | "Criterion 2 implemented at src/foo.py:40-90" | Code at those lines is different/missing |
 | End-to-end mapping | "CLI flag → config → runtime consumer path: A → B → C" | The wiring is broken or missing |
-| Test output / commands run | "`pytest -k epic_x` passes" | Skip—cannot run commands in read-only environment |
 | Scope clarification | "X is out of scope for this epic" | Epic criteria/spec explicitly includes X |
 
-To override author evidence, you MUST: (a) cite specific code you found, AND (b) describe a concrete failure/coverage gap.
 
 ### Handling Questions
 
-If Author Context contains questions, answer them in the `summary` field. Do not convert questions into findings unless they reveal an unmet acceptance criterion.
 
 ### Author Context Decision Rules
 
@@ -80,10 +76,8 @@ If Author Context contains questions, answer them in the `summary` field. Do not
 
 **Override author evidence when:**
 - Your exploration finds contradicting code → Re-flag with: "Author context says X; however, `file:line` shows Y"
-- You must cite specific code AND describe concrete failure/gap
 
 **Handle author questions:**
-- Answer in `summary` field, not as findings
 - Only create finding if the question reveals an unmet criterion
 
 ---
@@ -233,10 +227,8 @@ Be thorough. Trace code paths end-to-end. Don't just find code—verify it's rea
 4. **Map statuses to findings**:
    - MET → no finding
    - UNMET → finding with priority from subagent's suggestion (default P1)
-   - NOT_APPLICABLE → no finding (note in summary)
    - VERIFICATION_GAP → finding with P2 (or P1 if core feature)
 5. **Build the final findings array** with proper body template (Template A or B)
-6. **Compute verdict** and write summary
 
 ---
 
@@ -245,7 +237,6 @@ Be thorough. Trace code paths end-to-end. Don't just find code—verify it's rea
 <plan_review_rules>
 **Finding plan/spec documents:**
 1. If a plan/design doc is **normatively referenced** (e.g., "per plan", "must match", "see RFC for exact schema", "as specified in") in `<task_context>`, `<epic_criteria>`, `<spec_content>`, or Author Context: you MUST locate and open it.
-2. If **no plan doc is referenced** but acceptance criteria mention structural requirements (types, APIs, config), search `docs/` for likely plan docs using keywords: epic name, "plan", "RFC", "design", phase number, or date. Open the best match; note in summary which doc you used.
 3. Docs referenced only as **background context** (e.g., "for more info see...") are optional—do not treat as authoritative unless they define required shapes.
 
 **Using plan/spec documents:**
@@ -281,7 +272,6 @@ When validating plan/spec-defined structures, verify **shape**, not existence:
 - When a criterion depends on behavior elsewhere (callers, config loaders, shared helpers), have subagents inspect those definitions.
 - **Non-code criteria**: tests, linting, formatting, CI/deploy, coverage are not *implicitly* required. Only verify them when explicitly stated in `<epic_criteria>`. When explicitly stated, verify via repo evidence (tests added, docs updated, CI config changed).
 - Tests/logs can be used as supporting *evidence* when they directly demonstrate criterion behavior.
-- **Empty or missing criteria**: If `<epic_criteria>` is empty or contains only placeholder text, return `NEEDS_WORK` with `findings: []` and explain in `summary` that acceptance criteria are required to verify.
 
 ---
 
@@ -382,16 +372,8 @@ Return all clear, well-supported unmet acceptance criteria (or verification gaps
 - P0/P1 issues block epic closure and create remediation tasks.
 - P2/P3 issues are informational and do NOT block epic closure (unless the acceptance criteria explicitly say they are blocking).
 
-**Verdict Decision Table:**
-| Condition | Verdict |
 |-----------|---------|
-| Any P0 or P1 finding | `FAIL` |
-| Only P2/P3 findings (no P0/P1) | `NEEDS_WORK` |
-| No findings AND criteria present | `PASS` |
-| All criteria NOT_APPLICABLE | `PASS` (note in summary why none applied) |
-| No/placeholder criteria provided | `NEEDS_WORK` |
 
-**Note:** `NEEDS_WORK` indicates recommended followups but does NOT block epic closure unless criteria explicitly say so.
 
 ---
 
@@ -407,11 +389,8 @@ Return all clear, well-supported unmet acceptance criteria (or verification gaps
 5. For each finding: Did I include the criterion ID (AC-#) and source file:line?
 6. For each finding: Did I check Author Context and only override with cited contradictory code?
 7. For each finding: Does `priority` match the `[P#]` prefix in `title`?
-8. For P0/P1 findings: Can I describe a concrete failure path?
 9. Did I resolve any conflicts between subagent results?
-10. Is verdict consistent? (`FAIL` iff any P0/P1; `PASS` iff empty findings with criteria present)
 
-If any check fails, revise your findings before outputting.
 
 ---
 
@@ -426,11 +405,10 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
       "priority": 1,
       "file_path": "path/to/relevant/file.py",
       "line_start": 42,
-      "line_end": 50
+      "line_end": 50,
+      "confidence": 0.85
     }
-  ],
-  "verdict": "PASS",
-  "summary": "1-3 sentence explanation"
+  ]
 }
 
 ${DEBATE_OUTPUT_SHAPE}
@@ -438,12 +416,7 @@ ${DEBATE_OUTPUT_SHAPE}
 - `line_start` and `line_end` are 1-based file line numbers, inclusive.
 - `file_path`, `line_start`, `line_end` may be null if not applicable to a specific file.
 - `body` should include: the unmet criterion text, why it's unmet, and file/function evidence.
-- `verdict` must be one of: "PASS", "FAIL", or "NEEDS_WORK".
-  - PASS: No findings at all.
-  - FAIL: One or more blocking issues exist (any P0/P1 finding).
-  - NEEDS_WORK: Only P2/P3 findings exist (no P0/P1). Also use for empty/missing criteria or unresolvable verification gaps.
 
-**Important:** Do not use FAIL for tests/lint/CI/coverage. Those are not acceptance criteria unless explicitly stated in `<epic_criteria>`.
 
 ---
 
@@ -453,7 +426,7 @@ ${DEBATE_OUTPUT_SHAPE}
 
 <example_1 type="all_criteria_met">
 ```json
-{"findings": [], "verdict": "PASS", "summary": "All code-related acceptance criteria are satisfied with end-to-end traceability from entrypoints through runtime consumers."}
+{"findings": []}
 ```
 </example_1>
 
@@ -461,15 +434,13 @@ ${DEBATE_OUTPUT_SHAPE}
 ```json
 {
   "findings": [{
-    "title": "[P1] AC-2 missing fail-fast validation for invalid config",
     "body": "## Unmet Criterion\n\n**Source:** specs/config-system-epic.md, line 45\n**Criterion AC-2:** \"Invalid config/reference errors must be rejected at startup.\"\n\n## Problem\n\nConfig parsing accepts unknown keys and defers errors until runtime.\n\n## Evidence\n\n- `src/config/load.py:88-120` — `load_config()` parses YAML but does not validate keys against schema\n- `src/config/schema.py:15-30` — Schema definition exists but is never called from load path\n\n## Required Fix\n\n1. Call `validate_against_schema()` from `load_config()` before returning\n2. Raise `ConfigValidationError` with specific field path on unknown/invalid keys",
     "priority": 1,
     "file_path": "src/config/load.py",
     "line_start": 88,
-    "line_end": 120
-  }],
-  "verdict": "FAIL",
-  "summary": "Blocking acceptance gap: invalid configs are not rejected at the required stage per AC-2."
+    "line_end": 120,
+    "confidence": 0.9
+  }]
 }
 ```
 </example_2>
@@ -483,10 +454,9 @@ ${DEBATE_OUTPUT_SHAPE}
     "priority": 2,
     "file_path": "src/config/merge.py",
     "line_start": 20,
-    "line_end": 50
-  }],
-  "verdict": "NEEDS_WORK",
-  "summary": "One verification gap: AC-3 config merge path could not be confirmed."
+    "line_end": 50,
+    "confidence": 0.7
+  }]
 }
 ```
 </example_3>
@@ -500,10 +470,9 @@ ${DEBATE_OUTPUT_SHAPE}
     "priority": 1,
     "file_path": null,
     "line_start": null,
-    "line_end": null
-  }],
-  "verdict": "FAIL",
-  "summary": "Core feature missing: sync command not implemented per AC-1."
+    "line_end": null,
+    "confidence": 0.9
+  }]
 }
 ```
 </example_4>
@@ -530,5 +499,6 @@ If you produce JSON without first making tool calls to explore the codebase, you
 1. Output is raw JSON only—no markdown fences, no prose before/after.
 2. Every `body` follows Template A (Unmet Criterion) or Template B (Verification Gap).
 3. `priority` in each finding matches the `[P#]` prefix in its `title`.
-4. `verdict` is `FAIL` if any finding has priority 0 or 1; `PASS` if findings is empty; `NEEDS_WORK` otherwise.
 5. No evidence is invented—every file:line reference was actually explored with your tools or subagents.
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

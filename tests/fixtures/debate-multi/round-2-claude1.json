@@ -12,11 +12,5 @@
       "evidence": "round two contained only anonymous peer identifiers",
       "recommendation": "accept the debate result"
     }
-  ],
-  "verdict": "PASS",
-  "summary": "peer context resolved my verifier concern",
-  "overall_confidence": 0.91,
-  "strategy": "verification-first",
-  "round": 2,
-  "peer_responses_seen": ["peer_1", "peer_2"]
+  ]
 }

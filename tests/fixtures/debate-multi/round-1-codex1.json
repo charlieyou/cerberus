@@ -12,11 +12,5 @@
       "evidence": "using gpt-5.5 capabilities, codex sees an unresolved invariant",
       "recommendation": "ask peers whether gpt-5.5 missed a policy edge"
     }
-  ],
-  "verdict": "NEEDS_WORK",
-  "summary": "as the codex reviewer on gpt-5.5, I need peer review before resolving",
-  "overall_confidence": 0.61,
-  "strategy": "verification-first",
-  "round": 1,
-  "peer_responses_seen": []
+  ]
 }

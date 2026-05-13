@@ -19,7 +19,6 @@ ${PRIOR_ROUND_SELF_BLOCK}
 3. **Technical Feasibility** - Are proposed components realistic given the codebase?
 4. **Implementation Completeness** - Does it cover all necessary steps?
 5. **Dependency Ordering** - Are steps sequenced correctly?
-6. **Edge Cases** - Are error paths and failure modes addressed?
 7. **Testability** - Is there a clear testing strategy?
 8. **Integration Points** - Are interactions with existing systems addressed?
 9. **Actionability** - Could a developer implement without further clarification?
@@ -89,15 +88,10 @@ In general, prefer AC that describe behavior, invariants, or verifiable statesâ€
 ### Priority Levels
 
 - [P0] - Spec is fundamentally unclear. Cannot implement as written.
-- [P1] - Urgent gap. Will cause implementation failures.
 - [P2] - Normal. Should be clarified before implementation.
 - [P3] - Low. Nice to have clarity.
 
-### Verdict Guidelines
 
-- **PASS**: No P0/P1 issues. P2/P3 can be listed as suggestions without blocking.
-- **NEEDS_WORK**: Use sparingly; only if issues block implementation but do not rise to FAIL.
-- **FAIL**: Any P0/P1 issues or spec is too vague, contradictory, or incomplete.
 
 ## Output Format
 
@@ -110,17 +104,15 @@ JSON only, no markdown code fences:
       "priority": 1,
       "file_path": null,
       "line_start": null,
-      "line_end": null
+      "line_end": null,
+      "confidence": 0.85
     }
-  ],
-  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
-  "summary": "1-3 sentence explanation"
+  ]
 }
 
 ${DEBATE_OUTPUT_SHAPE}
-- PASS: No significant findings
-- FAIL: Blocking issues (P0/P1)
-- NEEDS_WORK: Non-blocking issues (P2/P3)
 - file_path, line_start, line_end: use null for spec reviews (not applicable)
 
 If any guidance here conflicts with these output format rules, follow the spec-review guidelines above.
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

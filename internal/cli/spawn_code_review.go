@@ -58,16 +58,18 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	}
 	if opts.debate {
 		started, err := (orchestrator.Orchestrator{Env: config.Resolve()}).StartDebate(orchestrator.Params{
-			Prompt:          prompt,
-			ArtifactType:    opts.artifactType,
-			ArtifactContent: opts.artifactContent,
-			ContextContent:  opts.contextContent,
-			Reviewers:       resolved.reviewers,
-			RosterDefaults:  resolved.defaults,
-			Mode:            opts.mode,
-			MaxRounds:       opts.explicitMaxRounds(),
-			Consensus:       orchestrator.ConsensusMode(opts.consensus),
-			RosterID:        resolved.rosterID,
+			Prompt:             prompt,
+			ArtifactType:       opts.artifactType,
+			ArtifactContent:    opts.artifactContent,
+			ContextContent:     opts.contextContent,
+			Reviewers:          resolved.reviewers,
+			RosterDefaults:     resolved.defaults,
+			Mode:               opts.mode,
+			MaxRounds:          opts.explicitMaxRounds(),
+			Consensus:          orchestrator.ConsensusMode(opts.consensus),
+			FailurePriority:    opts.failurePriority,
+			FailurePrioritySet: true,
+			RosterID:           resolved.rosterID,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -87,16 +89,18 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 	}
 
 	params := orchestrator.Params{
-		Prompt:          prompt,
-		ArtifactType:    opts.artifactType,
-		ArtifactContent: opts.artifactContent,
-		ContextContent:  opts.contextContent,
-		Reviewers:       resolved.reviewers,
-		RosterDefaults:  resolved.defaults,
-		Mode:            opts.mode,
-		MaxRounds:       opts.explicitMaxRounds(),
-		Consensus:       orchestrator.ConsensusMode(opts.consensus),
-		RosterID:        resolved.rosterID,
+		Prompt:             prompt,
+		ArtifactType:       opts.artifactType,
+		ArtifactContent:    opts.artifactContent,
+		ContextContent:     opts.contextContent,
+		Reviewers:          resolved.reviewers,
+		RosterDefaults:     resolved.defaults,
+		Mode:               opts.mode,
+		MaxRounds:          opts.explicitMaxRounds(),
+		Consensus:          orchestrator.ConsensusMode(opts.consensus),
+		FailurePriority:    opts.failurePriority,
+		FailurePrioritySet: true,
+		RosterID:           resolved.rosterID,
 	}
 	started, err := orchestrator.StartSinglePass(config.Resolve(), params)
 	if err != nil {
@@ -129,7 +133,8 @@ func normalizeReviewArgs(args []string, artifactType string) []string {
 	}
 	knownValueFlags := map[string]bool{
 		"-mode": true, "--mode": true, "-max-rounds": true, "--max-rounds": true,
-		"-consensus": true, "--consensus": true, "-agents": true, "--agents": true,
+		"-consensus": true, "--consensus": true, "-fail-priority": true, "--fail-priority": true,
+		"-agents": true, "--agents": true,
 		"-roster": true, "--roster": true, "-reviewer": true, "--reviewer": true,
 		"-replace-slot": true, "--replace-slot": true, "-exclude": true, "--exclude": true,
 		"-base": true, "--base": true, "-commit": true, "--commit": true,
@@ -373,27 +378,29 @@ func recordRuntimeEvent(started *orchestrator.StartedRun, eventName string, payl
 }
 
 type spawnCodeReviewOptions struct {
-	artifactType    string
-	mode            string
-	modeSet         bool
-	maxRounds       int
-	maxRoundsSet    bool
-	consensus       string
-	agents          string
-	roster          string
-	reviewers       []string
-	replaceSlot     string
-	excludes        []string
-	uncommitted     bool
-	base            string
-	promptFile      string
-	contextFile     string
-	commits         []string
-	debate          bool
-	focus           string
-	positionals     []string
-	artifactContent string
-	contextContent  string
+	artifactType       string
+	mode               string
+	modeSet            bool
+	maxRounds          int
+	maxRoundsSet       bool
+	consensus          string
+	failurePriority    int
+	failurePriorityRaw string
+	agents             string
+	roster             string
+	reviewers          []string
+	replaceSlot        string
+	excludes           []string
+	uncommitted        bool
+	base               string
+	promptFile         string
+	contextFile        string
+	commits            []string
+	debate             bool
+	focus              string
+	positionals        []string
+	artifactContent    string
+	contextContent     string
 }
 
 func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
@@ -414,6 +421,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	fs.StringVar(&opts.mode, "mode", "smart", "review mode")
 	fs.IntVar(&opts.maxRounds, "max-rounds", 3, "maximum review rounds")
 	fs.StringVar(&opts.consensus, "consensus", "majority", "consensus mode")
+	fs.StringVar(&opts.failurePriorityRaw, "fail-priority", "p1", "minimum finding priority that fails the gate (p0, p1, p2, or p3)")
 	fs.StringVar(&opts.agents, "agents", "", "legacy comma-separated reviewer providers")
 	fs.StringVar(&opts.roster, "roster", "", "roster name")
 	fs.Var(&reviewers, "reviewer", "reviewer provider:model[:strategy]")
@@ -446,6 +454,11 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	if !opts.maxRoundsSet {
 		opts.maxRounds = 3
 	}
+	failurePriority, err := parseFailurePriority(opts.failurePriorityRaw)
+	if err != nil {
+		return opts, err
+	}
+	opts.failurePriority = failurePriority
 	if len(opts.commits) > 0 {
 		opts.commits, opts.focus = splitTrailingCommitArgs(opts.commits, fs.Args())
 	} else {
@@ -456,6 +469,23 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 		return opts, err
 	}
 	return opts, nil
+}
+
+func parseFailurePriority(value string) (int, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.TrimPrefix(normalized, "p")
+	switch normalized {
+	case "0":
+		return 0, nil
+	case "1":
+		return 1, nil
+	case "2":
+		return 2, nil
+	case "3":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("--fail-priority must be p0, p1, p2, or p3")
+	}
 }
 
 func splitTrailingCommitArgs(commits []string, args []string) ([]string, string) {

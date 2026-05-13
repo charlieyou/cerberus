@@ -12,11 +12,5 @@
       "evidence": "round two preserved anonymous peer ordering",
       "recommendation": "accept the debate result"
     }
-  ],
-  "verdict": "PASS",
-  "summary": "peer context resolved my falsifier concern",
-  "overall_confidence": 0.92,
-  "strategy": "falsification-first",
-  "round": 2,
-  "peer_responses_seen": ["peer_1", "peer_2", "peer_3", "peer_4"]
+  ]
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -911,12 +912,29 @@ func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
 func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	var stderr bytes.Buffer
 
-	opts, err := parseSpawnCodeReviewFlags([]string{"--mode", "smart", "--max-rounds", "5"}, &stderr)
+	opts, err := parseSpawnCodeReviewFlags([]string{"--mode", "smart", "--max-rounds", "5", "--fail-priority", "p2"}, &stderr)
 	if err != nil {
 		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
 	}
 	if opts.mode != "smart" || opts.maxRounds != 5 {
 		t.Fatalf("mode/maxRounds = %q/%d, want smart/5", opts.mode, opts.maxRounds)
+	}
+	if opts.failurePriority != 2 {
+		t.Fatalf("failurePriority = %d, want 2", opts.failurePriority)
+	}
+}
+
+func TestNormalizeEpicVerifyArgsRecognizesFailPriority(t *testing.T) {
+	got := normalizeReviewArgs([]string{"--fail-priority", "p2", "docs/epic.md"}, "epic-verify")
+	want := []string{"--fail-priority", "p2", "docs/epic.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeReviewArgs() = %#v, want %#v", got, want)
+	}
+
+	got = normalizeReviewArgs([]string{"--fail-priority=p2", "docs/epic.md"}, "epic-verify")
+	want = []string{"--fail-priority=p2", "docs/epic.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeReviewArgs(equals) = %#v, want %#v", got, want)
 	}
 }
 

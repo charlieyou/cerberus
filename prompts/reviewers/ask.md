@@ -26,11 +26,7 @@ ${PRIOR_ROUND_SELF_BLOCK}
 4. If key information is missing, state the assumption you are making instead of inventing facts.
 5. Surface material caveats or disagreements as findings, but do not turn ordinary uncertainty into blocking issues.
 
-### Verdict Guidelines
 
-- **PASS**: You can provide a useful, well-grounded answer. This is the normal outcome, even when you include caveats.
-- **NEEDS_WORK**: The prompt is answerable only with important unresolved uncertainty that the user should know about.
-- **FAIL**: The prompt cannot be answered safely or coherently from the available information.
 
 ### Finding Guidelines
 
@@ -54,14 +50,14 @@ JSON only, no markdown code fences:
       "priority": 2,
       "file_path": null,
       "line_start": null,
-      "line_end": null
+      "line_end": null,
+      "confidence": 0.85
     }
-  ],
-  "verdict": "PASS" | "FAIL" | "NEEDS_WORK",
-  "summary": "Direct answer to the user's prompt. Include the core reasoning and recommendation here."
+  ]
 }
 
 ${DEBATE_OUTPUT_SHAPE}
-- Put the direct answer in `summary`; it may be longer than a review-table blurb when needed.
 - Use `findings` only for caveats, risks, or materially disputed points.
 - Use null for file_path, line_start, and line_end unless you are citing a specific repository location.
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

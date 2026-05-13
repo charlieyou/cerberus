@@ -38,10 +38,7 @@ Do not flag:
 - [P2] - Claim is exaggerated or lacks supporting evidence
 - [P3] - Minor inaccuracy (wrong line number, outdated reference)
 
-### Verdict Guidelines
 
-Your verdict is about the **artifact's accuracy**, not the codebase:
 
-- **PASS**: Claims in the artifact are verified/accurate
-- **NEEDS_WORK**: Some claims lack evidence or are overstated
-- **FAIL**: Artifact contains incorrect or fabricated claims
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

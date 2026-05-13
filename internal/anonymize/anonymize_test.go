@@ -25,7 +25,7 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	outputs[2].Strategy = &modelStrategy
 	models := []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro"}
 
-	got, err := AnonymizePeerBroadcast(outputs, models)
+	got, err := AnonymizePeerBroadcast(outputs, models, 1)
 	if err != nil {
 		t.Fatalf("AnonymizePeerBroadcast() error = %v", err)
 	}
@@ -39,8 +39,8 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	if got[1].Summary != "As peer_2, I agree" {
 		t.Fatalf("codex self-reference summary = %q, want peer_2 attribution", got[1].Summary)
 	}
-	if got[0].Verdict != "NEEDS_WORK" || got[1].Verdict != "PASS" {
-		t.Fatalf("verdicts not preserved: %#v", got)
+	if got[0].Verdict != "pass" || got[1].Verdict != "pass" {
+		t.Fatalf("verdicts not derived from findings: %#v", got)
 	}
 	if got[0].OverallConfidence == nil || *got[0].OverallConfidence != confidence {
 		t.Fatalf("overall confidence = %v, want %v", got[0].OverallConfidence, confidence)
@@ -68,7 +68,7 @@ func TestAnonymizePeerBroadcastAssignsPeerIDsLexicographicallyAndScrubsText(t *t
 	}
 
 	shuffled := []reviewer.RawReviewerOutput{outputs[3], outputs[0], outputs[2], outputs[1]}
-	again, err := AnonymizePeerBroadcast(shuffled, models)
+	again, err := AnonymizePeerBroadcast(shuffled, models, 1)
 	if err != nil {
 		t.Fatalf("AnonymizePeerBroadcast(shuffled) error = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestAnonymizePeerBroadcastKeepsPeerIDsStableForAccumulatedRounds(t *testing
 		rawOutput("codex#1", "PASS", "as codex, round two", confidence, strategy, roundTwo, severity, priority, lineStart, lineEnd),
 	}
 
-	got, err := AnonymizePeerBroadcast(outputs, nil)
+	got, err := AnonymizePeerBroadcast(outputs, nil, 1)
 	if err != nil {
 		t.Fatalf("AnonymizePeerBroadcast() error = %v", err)
 	}
@@ -108,8 +108,37 @@ func TestAnonymizePeerBroadcastKeepsPeerIDsStableForAccumulatedRounds(t *testing
 	}
 }
 
+func TestAnonymizePeerBroadcastUsesFailurePriority(t *testing.T) {
+	confidence := 0.81
+	severity := "medium"
+	priority := 2
+	lineStart := 12
+	lineEnd := 13
+	strategy := "verification-first"
+	round := 1
+	outputs := []reviewer.RawReviewerOutput{
+		rawOutput("codex#1", "NEEDS_WORK", "p2 finding", confidence, strategy, round, severity, priority, lineStart, lineEnd),
+	}
+
+	defaultThreshold, err := AnonymizePeerBroadcast(outputs, nil, 1)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast(default threshold) error = %v", err)
+	}
+	if defaultThreshold[0].Verdict != "pass" {
+		t.Fatalf("default-threshold verdict = %q, want pass", defaultThreshold[0].Verdict)
+	}
+
+	p2Threshold, err := AnonymizePeerBroadcast(outputs, nil, 2)
+	if err != nil {
+		t.Fatalf("AnonymizePeerBroadcast(p2 threshold) error = %v", err)
+	}
+	if p2Threshold[0].Verdict != "fail" {
+		t.Fatalf("p2-threshold verdict = %q, want fail", p2Threshold[0].Verdict)
+	}
+}
+
 func TestAnonymizePeerBroadcastEmptyInput(t *testing.T) {
-	got, err := AnonymizePeerBroadcast(nil, nil)
+	got, err := AnonymizePeerBroadcast(nil, nil, 1)
 	if err != nil {
 		t.Fatalf("AnonymizePeerBroadcast(nil) error = %v", err)
 	}
@@ -119,7 +148,7 @@ func TestAnonymizePeerBroadcastEmptyInput(t *testing.T) {
 }
 
 func TestAnonymizePeerBroadcastRejectsMissingInstanceID(t *testing.T) {
-	_, err := AnonymizePeerBroadcast([]reviewer.RawReviewerOutput{{Findings: []reviewer.RawFinding{}, Verdict: "PASS"}}, nil)
+	_, err := AnonymizePeerBroadcast([]reviewer.RawReviewerOutput{{Findings: []reviewer.RawFinding{}, Verdict: "PASS"}}, nil, 1)
 	if err == nil {
 		t.Fatal("AnonymizePeerBroadcast() error = nil, want missing instance ID error")
 	}
@@ -127,15 +156,12 @@ func TestAnonymizePeerBroadcastRejectsMissingInstanceID(t *testing.T) {
 
 func rawOutput(instanceID, verdict, summary string, confidence float64, strategy string, round int, severity string, priority int, lineStart int, lineEnd int) reviewer.RawReviewerOutput {
 	filePath := "internal/claude/client.go"
-	return reviewer.RawReviewerOutput{
-		InstanceID:        instanceID,
-		Verdict:           verdict,
-		Summary:           summary,
-		OverallConfidence: &confidence,
-		Strategy:          &strategy,
-		Round:             &round,
-		PeerResponsesSeen: []string{},
-		Findings: []reviewer.RawFinding{
+	findings := []reviewer.RawFinding{}
+	if verdict != "PASS" {
+		if priority <= 1 {
+			priority = 2
+		}
+		findings = []reviewer.RawFinding{
 			{
 				Title:          "Claude title",
 				Body:           "Gemini body",
@@ -148,7 +174,16 @@ func rawOutput(instanceID, verdict, summary string, confidence float64, strategy
 				Evidence:       "Claude evidence uses claude-opus-4-7",
 				Recommendation: "ask claude to fix",
 			},
-		},
+		}
+	}
+	return reviewer.RawReviewerOutput{
+		InstanceID:        instanceID,
+		Summary:           summary,
+		OverallConfidence: &confidence,
+		Strategy:          &strategy,
+		Round:             &round,
+		PeerResponsesSeen: []string{},
+		Findings:          findings,
 	}
 }
 

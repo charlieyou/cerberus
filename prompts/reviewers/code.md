@@ -34,14 +34,11 @@ When Author Context includes the following evidence types, accept them as correc
 |---------------|---------|------------------|
 | File:line references | "guard exists at foo.py:120-130" | Diff removes/changes those lines |
 | API verification | "typer.prompt accepts err=True per inspect.signature" | You verify the signature says otherwise |
-| Test output | "test_init_flow passes and covers this" | Diff breaks that test |
 | Scope reference | "Out of scope per issue: T003 handles file ops" | Diff clearly violates stated scope |
 
-To override author evidence, you MUST: (a) cite new/changed lines in THIS diff, AND (b) describe a concrete failure path not covered by author's evidence.
 
 ### Handling Questions
 
-If Author Context contains questions, answer them in the `summary` field. Do not convert questions into findings unless they reveal an actual bug.
 
 ### Few-Shot Examples
 
@@ -61,7 +58,7 @@ Diff shows: `typer.prompt("Enter choice", err=True)` unchanged from previous ite
 
 **Correct output**:
 ```json
-{"findings": [], "verdict": "PASS", "summary": "No new issues. Author context confirms typer.prompt accepts err parameter."}
+{"findings": []}
 ```
 </example_a>
 
@@ -92,10 +89,9 @@ Diff shows:
     "priority": 1,
     "file_path": "runner.py",
     "line_start": 122,
-    "line_end": 122
-  }],
-  "verdict": "FAIL",
-  "summary": "Re-flagging null guard issue: diff removes the guard author referenced."
+    "line_end": 122,
+    "confidence": 0.9
+  }]
 }
 ```
 </example_b>
@@ -111,11 +107,10 @@ Questions:
 
 Diff shows: `typer.prompt(..., err=True)` used consistently.
 
-**Correct action**: Answer in summary, not as a finding.
 
 **Correct output**:
 ```json
-{"findings": [], "verdict": "PASS", "summary": "Using err=True for typer.prompt is acceptable and consistent with stderr-based CLI patterns."}
+{"findings": []}
 ```
 </example_c>
 
@@ -134,7 +129,6 @@ The task context above may include:
 - **Dependency references**: If the task depends on other completed tasks, types and functions from those dependencies exist in the codebase but not in this diff.
 - If the task context is empty, skip this section and rely on the diff and explored code instead.
 
-Treat skeletons as guidance, not specification. If the implementation differs from the skeleton but tests pass, the implementer's adaptation is valid.
 
 ## Diff to Review
 
@@ -149,7 +143,6 @@ ${DIFF_CONTENT}
 - You are reviewing a diff, not full file contents. When code in the diff references types, functions, or fields defined elsewhere, use your tools to inspect the relevant definitions or call sites as needed (see Exploration Workflow below). Do not treat absence from the diff as evidence that something is missing.
 - Do not treat diff prefixes (+/-) or context markers as actual whitespace/indentation.
 - Ignore syntax/formatting/lint errors; ruff/format/ty/pytest already handle those.
-- If tests and linters pass, you can assume basic imports and compilation succeed. Do not flag purely hypothetical "this would not import/compile" issues. Only claim a definition is missing when either the diff explicitly removes it or you have checked the relevant files and confirmed it is not present.
 
 ## Exploration Workflow (required before writing findings)
 
@@ -161,7 +154,6 @@ ${DIFF_CONTENT}
 
 4. **Gather evidence for each candidate issue**: For each potential bug, briefly identify what evidence you need (e.g., "check all callers of X", "see how Y is validated") and collect it before deciding whether to flag the issue.
 
-5. **Stop when issues are well-supported**: Once you have either (a) enough evidence to describe a concrete failure path, or (b) enough evidence that the code is safe (e.g., guards elsewhere, tested paths), stop exploring that thread and move on.
 
 ## Guidelines for Determining Bugs
 
@@ -179,9 +171,6 @@ ${DIFF_CONTENT}
 
 1. **Verify referenced code when it matters (except Author Context evidence)**: If code imports or uses something not shown in the diff, treat it as likely to exist elsewhere, but do not assume correctness without checking—*unless* Author Context already provides accepted evidence types (file:line, API verification, test output, scope reference). When no such Author Context evidence exists and a potential issue depends on that referenced code, use your tools (file read/search) to inspect its definition or usages. Only claim something is "missing" after you have looked in the obvious locations (same module, imported modules, recently added tasks) or the diff explicitly removes it.
 2. **Actively search for guards outside the diff**: If code appears to allow dangerous behavior, actively look for validation in callers, parsers, or shared helpers using file reads and search. If, after a reasonable search, you cannot find a guard that prevents the scenario you are concerned about, you may flag the issue and briefly note what you looked for and did not find.
-3. **Require concrete scenarios**: Flag issues only when you can describe a specific, realistic path to failure using code and inputs visible in the diff and any explored context. Hypotheticals ("could happen if...") without concrete paths are not actionable.
-4. **Use scenario-based, evidence-backed language**: State findings with confidence grounded in the diff and any additional code you inspected. Describe specific scenarios and outcomes (e.g., "When input Y is empty, this causes X") instead of vague hedging like "might cause X" without details. If, after targeted exploration of relevant files and call sites, you still cannot describe a concrete failure path, prefer not to flag the issue.
-5. **Author context overrides**: Follow the "Author Context Handling" section and its Per-Finding Decision Checklist. Do not re-flag issues marked resolved/false positive unless specific diff lines contradict the author's evidence; cite those lines plus the concrete failure scenario you found.
 6. **Distinguish style from correctness**: If code is technically correct and follows a valid pattern (e.g., PEP 563 with TYPE_CHECKING imports, protocols instead of concrete classes), do not flag it as P0/P1. Style preferences belong in P3, or omit entirely if the project's linter enforces the pattern used.
 
 ## Comment Guidelines
@@ -209,10 +198,8 @@ Output all clear, well-supported findings the author would fix if they knew abou
 
 ## Priority Levels
 
-- [P0] - Drop everything. Blocking release or major usage. Use only when you can show a direct, unconditional path from typical inputs to serious failure, based on the diff and any additional code you have inspected. Never use P0 for "missing definitions" if tests pass and your exploration confirms the definitions exist.
 - [P1] - Urgent. Should address in next cycle. Requires a concrete, realistic scenario demonstrable from the diff. Must be an actual bug that causes incorrect behavior—not a style preference or alternative approach.
 - [P2] - Normal. Fix eventually. Logic issues that don't break functionality but should be improved.
-- [P3] - Low. Nice to have. Non-trivial style or documentation improvements that aid clarity and are not already enforced by automated tooling (e.g., linter/formatter). Describe how the issue can realistically hinder understanding or maintenance, even if it does not cause a direct runtime failure.
 
 ## Pre-Output Checklist
 
@@ -220,10 +207,7 @@ Before returning your JSON response, verify:
 
 1. For each finding in `findings`: Did I check Author Context for this title?
 2. If the author marked it `Resolved` or `False Positive`: Did I either (a) skip it, or (b) cite NEW contradictory lines from THIS diff?
-3. For each finding: Can I describe a concrete failure path (for P0–P2), or a specific clarity/maintainability impact (for P3)?
-4. Am I answering any author questions in `summary` rather than as findings?
 
-If any check fails, revise your findings before outputting.
 
 ## Output Format
 
@@ -236,17 +220,14 @@ Respond with valid JSON only (no markdown code fences). The top-level object mus
       "priority": 1,
       "file_path": "path/to/file.py",
       "line_start": 42,
-      "line_end": 45
+      "line_end": 45,
+      "confidence": 0.85
     }
-  ],
-  "verdict": "PASS",
-  "summary": "1-3 sentence explanation"
+  ]
 }
 
 ${DEBATE_OUTPUT_SHAPE}
 - `priority` must be 0, 1, 2, or 3, corresponding to [P0]–[P3].
 - `line_start` and `line_end` are 1-based file line numbers (not diff-relative), inclusive.
-- `verdict` must be one of: "PASS", "FAIL", or "NEEDS_WORK".
-  - PASS: No significant findings
-  - FAIL: Blocking issues (P0/P1)
-  - NEEDS_WORK: Non-blocking issues (P2/P3)
+
+Final output must be valid JSON only with exactly one top-level key, `findings`. Do not include top-level `verdict`, `summary`, `overall_confidence`, `strategy`, `round`, or `peer_responses_seen`; Cerberus derives verdicts from finding priorities. Each finding must include `confidence` (0.0-1.0, or null if unavailable). If there are no findings, return `{"findings": []}`.

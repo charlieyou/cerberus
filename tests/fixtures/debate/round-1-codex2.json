@@ -1,9 +1,3 @@
 {
-  "findings": [],
-  "verdict": "NEEDS_WORK",
-  "summary": "as the codex reviewer on gpt-5.5, I want one more round",
-  "overall_confidence": 0.6,
-  "strategy": "falsification-first",
-  "round": 1,
-  "peer_responses_seen": []
+  "findings": []
 }

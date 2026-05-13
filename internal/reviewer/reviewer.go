@@ -58,16 +58,16 @@ type Tokens struct {
 	Output int
 }
 
-// RawReviewerOutput is the v1 per-reviewer JSON schema. Verdict is intentionally
-// raw reviewer text; normalization belongs to aggregation.
+// RawReviewerOutput is the per-reviewer JSON schema. CLI reviewers emit only
+// findings; Cerberus derives verdicts from those findings during aggregation.
 type RawReviewerOutput struct {
 	Findings          []RawFinding `json:"findings"`
-	Verdict           string       `json:"verdict"`
-	Summary           string       `json:"summary"`
-	OverallConfidence *float64     `json:"overall_confidence"`
-	Strategy          *string      `json:"strategy"`
-	Round             *int         `json:"round"`
-	PeerResponsesSeen []string     `json:"peer_responses_seen"`
+	Verdict           string       `json:"-"`
+	Summary           string       `json:"-"`
+	OverallConfidence *float64     `json:"-"`
+	Strategy          *string      `json:"-"`
+	Round             *int         `json:"-"`
+	PeerResponsesSeen []string     `json:"-"`
 	InstanceID        string       `json:"-"`
 }
 

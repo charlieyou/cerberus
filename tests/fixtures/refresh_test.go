@@ -44,7 +44,7 @@ func TestBuildRefreshRequestKeysAndSendsRawPrompt(t *testing.T) {
 	if strings.Contains(string(request.System), string(rawPrompt)) {
 		t.Fatalf("System prompt contains raw prompt bytes")
 	}
-	for _, want := range []string{`"findings"`, `"verdict"`, `"overall_confidence"`} {
+	for _, want := range []string{`"findings"`} {
 		if !strings.Contains(string(request.System), want) {
 			t.Fatalf("System prompt missing %q", want)
 		}

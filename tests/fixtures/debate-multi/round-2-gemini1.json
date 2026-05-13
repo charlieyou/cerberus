@@ -12,11 +12,5 @@
       "evidence": "round two kept the policy child constrained",
       "recommendation": "accept the debate result"
     }
-  ],
-  "verdict": "PASS",
-  "summary": "peer context resolved my policy concern",
-  "overall_confidence": 0.94,
-  "strategy": "policy-check",
-  "round": 2,
-  "peer_responses_seen": ["peer_1", "peer_2", "peer_3", "peer_4"]
+  ]
 }
