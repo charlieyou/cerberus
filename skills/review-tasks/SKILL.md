@@ -117,7 +117,7 @@ Return the Task Review Summary shape below with a PASS / FAIL / FAIL (MAX_ITERAT
 
 ### Large Graph Handling
 
-For task graphs with more than 10 tasks, partition local checks by epic, parent, or phase so each pass stays focused. Global checks must still see summaries of **all** plan items, tasks, file mappings, dependencies, and parent relationships. The No-Stragglers gate is global and cannot be approximated from a sample.
+For task graphs with more than 10 tasks, partition local checks by epic, sub-epic, parent, or phase so each pass stays focused. Global checks must still see summaries of **all** plan items, tasks, file mappings, dependencies, and parent relationships. The No-Stragglers gate is global and cannot be approximated from a sample.
 
 ### The Cardinal Rule: NO STRAGGLERS
 
@@ -291,6 +291,10 @@ The task graph must be well-formed:
 - Dependency graph is acyclic (no circular dependencies)
 - Every task is reachable from `br ready` via some sequence of dependency completions
 - Parent-child relationships match epic structure
+- Any dependency from a task to its parent epic or any ancestor epic is **BLOCKING**; execution ordering must be represented by dependencies between executable tasks
+- When the plan names natural phases, milestones, or distinct workstreams, tasks are usually grouped under corresponding sub-epics beneath the top-level epic when that improves clarity; a flat epic is acceptable for smaller or simpler graphs
+- Sub-epics are optional organizational containers; if present, each sub-epic contains multiple executable child tasks or materially improves review/execution clarity. One-task sub-epics or purely cosmetic phase containers are review issues and should be flattened unless external tracker constraints require them
+- If phase/workstream ordering is required, the graph contains explicit dependency edges that enforce that order. Prefer boundary task-to-task dependencies; sub-epic-to-sub-epic dependencies are optional summary edges, not a substitute for task-level ordering
 - Each piece of work appears in exactly one task (no duplicates)
 
 ### 7. TDD Compliance (if applicable)
@@ -435,7 +439,11 @@ If these artifacts exist, load them and verify consistency with recomputed state
    - Skeleton tasks before implementation
    - Integration test tasks before "turn tests green" tasks
 
-4. **Detect cycles**:
+4. **Reject task→ancestor epic dependencies**:
+   - Any dependency from a task to its parent epic or any ancestor epic is **BLOCKING**
+   - Fix by removing the task→epic dependency and adding concrete task→task dependency edge(s) to the specific executable blocker(s)
+
+5. **Detect cycles**:
    - Run cycle detection on dependency graph
    - Circular dependency → **BLOCKING**
 
@@ -532,7 +540,8 @@ Exceeds hard limits → **BLOCKING**
 1. **Orphan detection**: Tasks with neither a plan-item mapping nor an infra/setup/support justification, regardless of parentage
 2. **Reachability check**: From `br ready`, trace which tasks can eventually be reached
 3. **Duplicate detection**: Tasks with similar titles/files/changes
-4. **Epic consistency**: Child tasks have parent relationship, epic completion = all children complete
+4. **Epic consistency**: Child tasks and sub-epics have correct parent relationships; any required phase/workstream ordering is enforced by explicit dependencies in the executable task graph, with sub-epic dependencies treated as optional roll-up annotations
+5. **Sub-epic shape**: One-task sub-epics or cosmetic phase containers are flattened into the parent epic unless they materially improve review/execution clarity or external tracker constraints require them
 
 **6b. TDD Compliance (if applicable):**
 
@@ -770,7 +779,9 @@ None
 | **AC ownership** | BLOCKING | Each AC has exactly one primary owner task | Reassign ownership |
 | **Consistency audit / requirement freeze** | BLOCKING | Requirements Snapshot, Consistency Audit, and Deviation Log are present; tasks preserve plan/spec requirements unless an approved deviation is logged | Add missing artifacts, rewrite tasks to match plan/spec, or log approved deviations |
 | **File overlap deps** | BLOCKING | Tasks sharing files have explicit dependency | Add dependency |
+| **No task→ancestor epic deps** | BLOCKING | No task depends on its parent epic or any ancestor epic | Remove task→epic dependency and add concrete task→task dependency edge(s) |
 | **Circular deps** | BLOCKING | Dependency graph is acyclic | Restructure dependencies |
+| **Sub-epic shape** | WARNING unless it obscures executable ordering or creates unreachable work, then BLOCKING | Sub-epics contain multiple executable child tasks or materially improve review/execution clarity | Flatten one-task/cosmetic sub-epics into the parent epic unless external tracker constraints require them |
 | **Prompt quality** | BLOCKING when outcome/success/constraints/verification are missing or ambiguous, or when generic process scaffolding is present without being required by the product contract | Rewrite as a compact engineering-ticket prompt: outcome, what good means, task-specific constraints, verification, completion response |
 | **Context sufficiency** | BLOCKING | Every task has clear goal + concrete `Changes` entries | Expand task description |
 | **Done criteria** | BLOCKING | Every task has concrete verification commands | Add verification |

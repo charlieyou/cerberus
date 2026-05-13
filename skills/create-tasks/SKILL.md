@@ -340,6 +340,8 @@ Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance
 
 **Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-15 tasks per feature/epic.
 
+**Use sub-epics for natural structure** — when the plan names clear phases, milestones, or distinct workstreams, create a parent epic for the overall feature and one sub-epic per natural phase/workstream. Create sub-epics only when each group contains multiple executable tasks or the grouping materially improves review/execution clarity; avoid one-task sub-epics or cosmetic phase containers. Put each executable task under the most specific sub-epic. Use task-to-task dependencies as the source of truth for execution order, including dependencies across sub-epics when a phase/workstream boundary has specific prerequisites.
+
 **Defining subsystems**: A subsystem is a distinct functional area of the codebase with its own responsibilities. Count subsystems by identifying the top-level domains or modules touched:
 - Examples: `auth`, `api`, `database`, `email`, `ui`, `config`, `cli`
 - Heuristic: first directory under `src/` or top-level package name
@@ -709,19 +711,26 @@ Use the **beads skill** to create issues. Follow these patterns:
    # Returns EPIC-ID
    ```
 
+   If the plan has natural phases, milestones, or distinct workstreams, create sub-epics beneath the top-level epic and parent tasks to the most specific sub-epic. Use sub-epics only when each group contains multiple executable tasks or materially improves review/execution clarity:
+   ```bash
+   br create "Epic: [Feature Name] - [Phase/Workstream]" -p 1 --type epic --parent EPIC-ID --description "..."
+   # Returns SUB-EPIC-ID
+   ```
+
 3. **Create tasks with --parent**:
    - Each `br create` / `br update --description` MUST include the full Phase 4 task spec, preserving Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
    ```bash
-   br create "[T001] Task title" -p 2 --type task --parent EPIC-ID --description "..."
+   br create "[T001] Task title" -p 2 --type task --parent SUB-EPIC-ID --description "..."
    # Returns TASK-ID
    ```
+   Use the top-level `EPIC-ID` as the task parent only when no sub-epics were created.
 
-4. **Add dependencies** (file overlap or logical order):
+4. **Add dependencies** (file overlap, phase/workstream order, or logical order):
    ```bash
    br dep add <blocked-task> <blocker-task>
    ```
    
-   **Important**: Tasks should NEVER depend on their parent epic. The `--parent` flag establishes the parent-child relationship. Dependencies should only be between sibling tasks (e.g., T002 depends on T001) for file overlap or logical ordering.
+   **Important**: Tasks must NEVER depend on their parent or ancestor epic. The `--parent` flag establishes hierarchy; dependencies establish executable ordering. Add dependencies between the actual executable work items that require ordering, even when they live in different sub-epics. Prefer task-to-task dependencies for file overlap, logical prerequisites, and phase/workstream boundary prerequisites. Sub-epic-to-sub-epic dependencies may be added as summary ordering edges when helpful, but do not rely on them as the only enforcement of execution order; do not add them when workstreams can proceed independently.
 
 5. **Verify the task graph**:
    ```bash
