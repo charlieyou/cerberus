@@ -95,6 +95,7 @@ Generate a validated execution task graph from a stable plan and write it to the
 - Every plan objective, acceptance criterion, and MUST/SHALL/REQUIRED-style obligation has an owning task and verification.
 - Each task is a compact prompt to the implementation agent: source links, outcome, what-good-means, task-specific scope/constraints, concrete changes, observable acceptance criteria, focused verification, dependencies, and completion-response expectations.
 - Dependencies make parallel execution safe: tasks sharing files or logical prerequisites are ordered; unrelated tasks can run independently.
+- If multiple epics or sub-epics are created and any ordering exists between them, those epic/sub-epic dependencies must be explicit. Task dependencies stay within a single parent epic; no cross-epic task dependencies are allowed.
 - Output-mode side effects are complete and verified: the file is written, Beads graph is ready, Linear project/issues are synced, or team-task file follows the parser contract.
 
 ### Constraints
@@ -108,7 +109,7 @@ Generate a validated execution task graph from a stable plan and write it to the
 
 ### Verification
 
-Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks for all modes, `br ready` for Beads, and project/issue/dependency re-listing for Linear.
+Before writing output, validate the task graph against the gates in this skill. Use the narrowest checks that prove the artifact is executable: coverage tables and dependency checks (including required epic dependencies and no cross-epic task dependencies) for all modes, `br ready` for Beads, and project/issue/dependency re-listing for Linear.
 
 ### Final response
 
@@ -340,7 +341,7 @@ Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance
 
 **Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-15 tasks per feature/epic.
 
-**Use sub-epics for natural structure** — when the plan names clear phases, milestones, or distinct workstreams, create a parent epic for the overall feature and one sub-epic per natural phase/workstream. Create sub-epics only when each group contains multiple executable tasks or the grouping materially improves review/execution clarity; avoid one-task sub-epics or cosmetic phase containers. Put each executable task under the most specific sub-epic. Use task-to-task dependencies as the source of truth for execution order, including dependencies across sub-epics when a phase/workstream boundary has specific prerequisites.
+**Use sub-epics for natural structure** — when the plan names clear phases, milestones, or distinct workstreams, create a parent epic for the overall feature and one sub-epic per natural phase/workstream. Create sub-epics only when each group contains multiple executable tasks or the grouping materially improves review/execution clarity; avoid one-task sub-epics or cosmetic phase containers. Put each executable task under the most specific sub-epic. Within one epic/sub-epic, use task-to-task dependencies as the source of truth for execution order. When ordering crosses epic/sub-epic boundaries, set a dependency between the corresponding epics/sub-epics; do not add task-to-task dependencies across epic boundaries. If a specific task-level dependency would cross epics, re-slice or reparent the work so the dependent tasks share one parent epic, or represent the boundary with an epic dependency.
 
 **Defining subsystems**: A subsystem is a distinct functional area of the codebase with its own responsibilities. Count subsystems by identifying the top-level domains or modules touched:
 - Examples: `auth`, `api`, `database`, `email`, `ui`, `config`, `cli`
@@ -414,6 +415,8 @@ These rules prevent cross-layer gaps where changes are made in one layer but wir
 
 - **File overlap = dependency** — tasks touching same file cannot parallelize
 - **Central file contention**: If many tasks overlap a central file (e.g., `main.py`, `container.ts`), create a dedicated "shared foundation" task for that file, then parallelize downstream tasks that no longer touch it
+- **Epic boundary rule** — task-to-task dependencies must stay within one parent epic/sub-epic. Cross-epic ordering is represented by epic-to-epic dependencies, not task-to-task edges.
+- **Epic dependencies are required** — if multiple epics/sub-epics are created and one must complete before another can start, add the dependency between those epics/sub-epics.
 - **Err toward more dependencies** — safer than too few
 - Prefer restructuring (shared foundation task, re-slicing) over dropping uncertain deps
 
@@ -633,6 +636,8 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **Consistency audit** | Hard | Spec/legacy → plan matches, or deviations logged + approved | Add deviations or abort |
 | **Requirement freeze** | Hard | Tasks mirror plan requirements verbatim (ACs/enums/constants/thresholds) | Rewrite tasks to match plan |
 | **Dependencies complete** | Hard | When uncertain, add the dep | Add dependency |
+| **No cross-epic task deps** | Hard | Task-to-task dependencies stay within one parent epic/sub-epic | Move tasks under the same epic, re-slice, or add an epic-to-epic dependency |
+| **Epic dependencies complete** | Hard | Multiple epics/sub-epics with required ordering have explicit epic-to-epic dependencies | Add the missing epic dependency |
 | **One outcome per task** | Hard | No bundled multi-behavior tasks | Split task |
 | **Prompt quality** | Hard | Every task reads as a compact coder prompt: outcome, what good means, task-specific constraints, focused verification, completion response; no generic process scaffolding unless required | Rewrite task prompt |
 | **Sizing: standard** | Hard | No task over 12 files / 3 subsystems / 5 atomic ACs; 4-5 ACs require tight coupling and one coherent verification path; semicolon-packed bullets count by atomic checks | MUST split or genuinely reduce scope |
@@ -665,7 +670,7 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 4. **AC Coverage Complete**: Every spec AC (if spec present) maps to exactly one primary owner task
 5. **Task Mapping Complete**: Every task maps to at least one plan item or has an infra/setup/support justification tied to mapped plan work
 6. **Task Format Complete**: Every task includes required sections, including Plan Mapping with `Plan Item(s)` and `Infra/Support Justification`
-7. **Dependency Graph Valid**: No file overlaps without deps, no cycles
+7. **Dependency Graph Valid**: No file overlaps without deps, no cycles, no cross-epic task deps, and required epic-to-epic deps exist
 8. **Sizing Compliant**: Standard tasks are within hard limits (≤12 files, ≤3 subsystems, preferred 1-3 atomic ACs / hard max 5 when tightly coupled); mechanical sweeps are within their exception limits (≤18 files, =1 subsystem, same AC rule, grep-able/scriptable pattern, and scripted verification)
 9. **TDD Ordered**: Each feature has `[integration-path-test]` task, skeleton before implementation
 10. **Wiring Complete**: New data/config/templates have wiring maps and coverage
@@ -705,7 +710,7 @@ Use the **beads skill** to create issues. Follow these patterns:
    - **If existing issue matches**: Update its description with new context via `br update <id> --description "..."` instead of creating duplicate
    - **If partial overlap**: Note relationship in description, ensure dependency exists
 
-2. **Create epic** (if 3+ tasks):
+2. **Create epics in dependency order** (if 3+ tasks):
    ```bash
    br create "Epic: [Feature Name]" -p 1 --type epic --description "..."
    # Returns EPIC-ID
@@ -717,6 +722,11 @@ Use the **beads skill** to create issues. Follow these patterns:
    # Returns SUB-EPIC-ID
    ```
 
+   Create blocker epics/sub-epics before dependent epics/sub-epics. If multiple epics/sub-epics require ordering, add each epic dependency immediately after the dependent epic is created and both IDs are known; do not wait until all epics and tasks are created:
+   ```bash
+   br dep add <blocked-epic> <blocker-epic>
+   ```
+
 3. **Create tasks with --parent**:
    - Each `br create` / `br update --description` MUST include the full Phase 4 task spec, preserving Source Documents, Plan Mapping (`Plan Item(s)` + `Infra/Support Justification`), Primary Files, Dependencies, Goal, Context, Scope, Changes, Acceptance Criteria, Verification, and Notes for Agent.
    ```bash
@@ -724,13 +734,15 @@ Use the **beads skill** to create issues. Follow these patterns:
    # Returns TASK-ID
    ```
    Use the top-level `EPIC-ID` as the task parent only when no sub-epics were created.
+   Create tasks in dependency order within each parent epic/sub-epic. Immediately after each task is created, add any same-epic dependency whose blocker task already exists. If the blocker does not exist yet, create or reorder the blocker first rather than creating all tasks and bulk-adding dependencies at the end.
 
-4. **Add dependencies** (file overlap, phase/workstream order, or logical order):
+4. **Add dependencies as IDs become available** (file overlap, phase/workstream order, or logical order):
    ```bash
    br dep add <blocked-task> <blocker-task>
+   br dep add <blocked-epic> <blocker-epic>
    ```
    
-   **Important**: Tasks must NEVER depend on their parent or ancestor epic. The `--parent` flag establishes hierarchy; dependencies establish executable ordering. Add dependencies between the actual executable work items that require ordering, even when they live in different sub-epics. Prefer task-to-task dependencies for file overlap, logical prerequisites, and phase/workstream boundary prerequisites. Sub-epic-to-sub-epic dependencies may be added as summary ordering edges when helpful, but do not rely on them as the only enforcement of execution order; do not add them when workstreams can proceed independently.
+   **Important**: Tasks must NEVER depend on their parent or ancestor epic, and task dependencies must NEVER cross epic/sub-epic boundaries. The `--parent` flag establishes hierarchy. Task dependencies establish executable ordering within one parent epic/sub-epic; epic dependencies establish ordering between epics/sub-epics. For file overlap, logical prerequisites, or phase/workstream boundary prerequisites that cross parent boundaries, add `br dep add <blocked-epic> <blocker-epic>` between the relevant epics/sub-epics instead of a cross-epic task edge. Do not add epic dependencies when workstreams can proceed independently.
 
 5. **Verify the task graph**:
    ```bash
@@ -802,8 +814,9 @@ Use the available Linear integration (MCP tools, CLI, or API client configured i
    ```
    Use this map for dependencies and the Phase 7 report.
 
-4. **Add Linear dependency relations after all issues exist**:
+4. **Add Linear dependency relations as issue IDs become available**:
    - For each task dependency `T002 → T001`, set the Linear relation so the `T001` issue blocks the `T002` issue.
+   - Create issues in dependency order where possible and add each dependency as soon as both issue IDs exist; do not intentionally defer all dependency relations to the end.
    - Add dependency links to each issue description if the Linear tooling cannot create native blocking relations.
    - If native dependency creation fails partway through, backfill explicit dependency links into the descriptions for every missing relation before stopping. Report the run as partial/incomplete and list any relation that could not be represented.
 
@@ -851,6 +864,7 @@ Output summary:
 ### Dependencies Added
 - T003 → T005 (file overlap: src/auth/session.ts)
 - T004 → T005 (logical: types needed first)
+- Epic: US2 → Epic: Foundation (phase ordering)
 
 ### AC Coverage
 - 5/5 acceptance criteria mapped to tasks
