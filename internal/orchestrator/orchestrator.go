@@ -26,6 +26,7 @@ type Params struct {
 	ArtifactContent    string
 	ContextContent     string
 	Reviewers          []ReviewerSlot
+	PostReviewer       ReviewerSlot
 	RosterDefaults     RosterDefaults
 	Mode               string
 	MaxRounds          int
@@ -152,6 +153,11 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	if artifactType == "" {
 		artifactType = "code"
 	}
+	postReviewer, err := preflightPostReviewSlot(artifactType, params.PostReviewer)
+	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "post_reviewer", err)
+		return nil, err
+	}
 
 	gatePath := state.GateStatePath(runRoot)
 	unlock, err := acquireStartLock(runRoot, resolvedEnv.RunKey)
@@ -222,6 +228,7 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	params.FailurePrioritySet = true
 	params.RosterID = rosterID
 	params.ArtifactType = artifactType
+	params.PostReviewer = postReviewer
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
 }
 
@@ -296,7 +303,7 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	}
 
 	endedAt := time.Now().UTC()
-	reviewerSummary, totalTokens, totalCostUSD := telemetryTotals(roundResults)
+	_, totalTokens, totalCostUSD := telemetryTotals(roundResults)
 	if err := telemetry.WriteRoundTelemetry(started.RunRoot, 1, 1, &telemetry.RoundTelemetry{
 		Round:         1,
 		ReviewerCount: len(roundResults),
@@ -320,6 +327,32 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	}); err != nil {
 		return err
 	}
+	originalFailureReason := reviewerFailureResolutionReason(roundResults)
+	postResults, postResult, postRan, err := maybeRunPostReviewDedup(ctx, started.Params.PostReviewer, spawner, roundPrompts{
+		User:            started.Params.Prompt,
+		ArtifactType:    started.Params.ArtifactType,
+		ArtifactContent: started.Params.ArtifactContent,
+		ContextContent:  started.Params.ContextContent,
+		RunRoot:         started.RunRoot,
+		Root:            started.Env.Root,
+		RuntimeMode:     started.Params.Mode,
+		Iteration:       1,
+		Consensus:       started.Params.Consensus,
+		FailurePriority: started.Params.FailurePriority,
+	}, roundResults)
+	if err != nil {
+		return err
+	}
+	if postRan {
+		_, postTokens, postCostUSD := telemetryTotals(postResults)
+		totalTokens.Input += postTokens.Input
+		totalTokens.Output += postTokens.Output
+		totalCostUSD += postCostUSD
+		roundResults = postResults
+		result = postResult
+		endedAt = time.Now().UTC()
+	}
+	reviewerSummary, _, _ := telemetryTotals(roundResults)
 	gatePath := state.GateStatePath(started.RunRoot)
 	gate, err := state.ReadGateState(gatePath)
 	if err != nil {
@@ -336,7 +369,7 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 	}); err != nil {
 		return err
 	}
-	if reason := reviewerFailureResolutionReason(roundResults); reason != "" {
+	if reason := firstNonEmpty(originalFailureReason, reviewerFailureResolutionReason(roundResults)); reason != "" {
 		state.MarkResolved(gate, result.Verdict, endedAt, reason)
 	} else {
 		state.MarkResolved(gate, result.Verdict, endedAt)

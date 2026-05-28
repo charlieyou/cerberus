@@ -142,6 +142,30 @@ func TestStartDebateRejectsWhenExistingGateIsPending(t *testing.T) {
 	}
 }
 
+func TestStartDebatePreflightsDefaultPostReviewer(t *testing.T) {
+	env := testEnv(t)
+	providerDir := t.TempDir()
+	writeFakeProvider(t, providerDir, "claude")
+	writeFakeProvider(t, providerDir, "gemini")
+	t.Setenv("PATH", providerDir)
+
+	_, err := (Orchestrator{Env: env}).StartDebate(Params{
+		Prompt:       []byte("review this"),
+		ArtifactType: "code",
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub", InstanceIndex: 1},
+			{ID: "gemini#1", Provider: "gemini", Model: "stub", InstanceIndex: 1},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `post-reviewer preflight: provider CLI "codex" is not available on PATH`) {
+		t.Fatalf("StartDebate() error = %v, want missing default post-reviewer codex preflight", err)
+	}
+	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
+	if _, statErr := os.Stat(gatePath); !os.IsNotExist(statErr) {
+		t.Fatalf("gate state stat err = %v, want no pending gate created", statErr)
+	}
+}
+
 func TestRunDebateRunsPeerRoundWhenRoundOnePasses(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
@@ -223,6 +247,88 @@ func TestRunDebateRoundTwoReviewerFailureResolvesRequiresDecision(t *testing.T) 
 	}
 	if !strings.Contains(gate.ResolutionReason, "debate degraded below 2 active reviewers") {
 		t.Fatalf("resolution reason = %q, want degraded active reviewer count", gate.ResolutionReason)
+	}
+}
+
+func TestRunDebateSkipsPostReviewDedupWhenFinalRoundDegrades(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &degradedDedupSpawner{}
+
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v, want nil", err)
+	}
+	if verdict.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("verdict = %q, want %q", verdict.Verdict, state.VerdictRequiresDecision)
+	}
+	if spawner.dedupCalled {
+		t.Fatal("post-review dedup agent ran despite degraded final round")
+	}
+	gate := readGate(t, env)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
+		t.Fatalf("gate verdict = %v, want requires_decision", gate.Verdict)
+	}
+	if !strings.Contains(gate.ResolutionReason, "debate degraded below 2 active reviewers") {
+		t.Fatalf("resolution reason = %q, want degraded active reviewer count", gate.ResolutionReason)
+	}
+}
+
+func TestRunDebateIncludesPostReviewDedupUsageInRunTelemetry(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &debateDedupUsageSpawner{}
+
+	verdict, err := (Orchestrator{Env: env, Spawner: spawner}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v", err)
+	}
+	if verdict.Verdict != state.VerdictPass {
+		t.Fatalf("verdict = %q, want dedup pass", verdict.Verdict)
+	}
+	runTelemetry := readRunTelemetry(t, env)
+	tokens, ok := runTelemetry["total_tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("total_tokens = %#v, want object", runTelemetry["total_tokens"])
+	}
+	if tokens["input"] != float64(18) || tokens["output"] != float64(10) {
+		t.Fatalf("total_tokens = %#v, want original reviewer plus dedup usage", tokens)
+	}
+	if runTelemetry["total_cost_usd"] != 0.18 {
+		t.Fatalf("total_cost_usd = %#v, want dedup cost included", runTelemetry["total_cost_usd"])
+	}
+}
+
+func TestRunDebateUsesConfiguredPostReviewerFromOrchestrator(t *testing.T) {
+	env := testEnv(t)
+	providerDir := t.TempDir()
+	writeFakeProvider(t, providerDir, "gemini")
+	t.Setenv("PATH", providerDir)
+	spawner := &debateDedupUsageSpawner{}
+
+	_, err := (Orchestrator{
+		Env:     env,
+		Spawner: spawner,
+		PostReviewer: ReviewerSlot{
+			Provider: "gemini",
+			Model:    "gemini-test",
+			Mode:     "fast",
+		},
+	}).RunDebate(context.Background(), []ReviewerSlot{
+		{ID: "gemini#1", Provider: "gemini", Model: "stub", InstanceIndex: 1},
+		{ID: "gemini#2", Provider: "gemini", Model: "stub", InstanceIndex: 2},
+	}, []byte("review this"), 2)
+	if err != nil {
+		t.Fatalf("RunDebate() error = %v", err)
+	}
+	if spawner.dedupProvider != "gemini" || spawner.dedupModel != "gemini-test" || spawner.dedupMode != "fast" {
+		t.Fatalf("dedup slot = %s/%s/%s, want configured gemini/gemini-test/fast", spawner.dedupProvider, spawner.dedupModel, spawner.dedupMode)
 	}
 }
 
@@ -439,4 +545,53 @@ func (spawner *verdictByRoundSpawner) roundCalls(round int) int {
 	spawner.mu.Lock()
 	defer spawner.mu.Unlock()
 	return spawner.calls[round]
+}
+
+type degradedDedupSpawner struct {
+	mu          sync.Mutex
+	dedupCalled bool
+}
+
+func (spawner *degradedDedupSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	spawner.mu.Lock()
+	defer spawner.mu.Unlock()
+	if request.ID == "cerberus-dedup#1" {
+		spawner.dedupCalled = true
+		return passResponse(request.ID)
+	}
+	if request.Round == 2 && request.ID == "codex#2" {
+		return reviewer.Response{}, fmt.Errorf("round two failed")
+	}
+	return responseForVerdict(request.ID, "FAIL")
+}
+
+type debateDedupUsageSpawner struct {
+	mu            sync.Mutex
+	dedupProvider string
+	dedupModel    string
+	dedupMode     string
+}
+
+func (spawner *debateDedupUsageSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	spawner.mu.Lock()
+	defer spawner.mu.Unlock()
+	if request.ID == "cerberus-dedup#1" {
+		spawner.dedupProvider = request.Provider
+		spawner.dedupModel = request.Model
+		spawner.dedupMode = request.Mode
+		response, err := passResponse(request.ID)
+		if err != nil {
+			return reviewer.Response{}, err
+		}
+		response.Tokens = reviewer.Tokens{Input: 10, Output: 6}
+		response.CostUSD = 0.10
+		return response, nil
+	}
+	response, err := responseForVerdict(request.ID, "FAIL")
+	if err != nil {
+		return reviewer.Response{}, err
+	}
+	response.Tokens = reviewer.Tokens{Input: 2, Output: 1}
+	response.CostUSD = 0.02
+	return response, nil
 }

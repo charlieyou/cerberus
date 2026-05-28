@@ -63,6 +63,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 			ArtifactContent:    opts.artifactContent,
 			ContextContent:     opts.contextContent,
 			Reviewers:          resolved.reviewers,
+			PostReviewer:       opts.postReviewSlot(),
 			RosterDefaults:     resolved.defaults,
 			Mode:               opts.mode,
 			MaxRounds:          opts.explicitMaxRounds(),
@@ -94,6 +95,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		ArtifactContent:    opts.artifactContent,
 		ContextContent:     opts.contextContent,
 		Reviewers:          resolved.reviewers,
+		PostReviewer:       opts.postReviewSlot(),
 		RosterDefaults:     resolved.defaults,
 		Mode:               opts.mode,
 		MaxRounds:          opts.explicitMaxRounds(),
@@ -135,6 +137,7 @@ func normalizeReviewArgs(args []string, artifactType string) []string {
 		"-mode": true, "--mode": true, "-max-rounds": true, "--max-rounds": true,
 		"-consensus": true, "--consensus": true, "-fail-priority": true, "--fail-priority": true,
 		"-agents": true, "--agents": true,
+		"-post-reviewer": true, "--post-reviewer": true,
 		"-roster": true, "--roster": true, "-reviewer": true, "--reviewer": true,
 		"-replace-slot": true, "--replace-slot": true, "-exclude": true, "--exclude": true,
 		"-base": true, "--base": true, "-commit": true, "--commit": true,
@@ -389,6 +392,7 @@ type spawnCodeReviewOptions struct {
 	agents             string
 	roster             string
 	reviewers          []string
+	postReviewer       string
 	replaceSlot        string
 	excludes           []string
 	uncommitted        bool
@@ -401,6 +405,11 @@ type spawnCodeReviewOptions struct {
 	positionals        []string
 	artifactContent    string
 	contextContent     string
+}
+
+func (opts spawnCodeReviewOptions) postReviewSlot() orchestrator.ReviewerSlot {
+	slot, _ := parsePostReviewer(opts.postReviewer)
+	return slot
 }
 
 func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
@@ -425,6 +434,7 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 	fs.StringVar(&opts.agents, "agents", "", "legacy comma-separated reviewer providers")
 	fs.StringVar(&opts.roster, "roster", "", "roster name")
 	fs.Var(&reviewers, "reviewer", "reviewer provider:model[:strategy]")
+	fs.StringVar(&opts.postReviewer, "post-reviewer", "codex:"+config.DefaultCodexModel+":low", "post-review dedup agent provider:model[:effort]")
 	fs.StringVar(&opts.replaceSlot, "replace-slot", "", "slot id to replace")
 	fs.Var(&excludes, "exclude", "pathspec to exclude")
 	fs.BoolVar(&opts.uncommitted, "uncommitted", false, "review uncommitted changes")
@@ -535,6 +545,9 @@ func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
 			}
 		}
 	}
+	if _, err := parsePostReviewer(opts.postReviewer); err != nil {
+		return err
+	}
 	if opts.uncommitted && (opts.base != "" || len(opts.commits) > 0) {
 		return fmt.Errorf("--uncommitted is mutually exclusive with --base and --commit")
 	}
@@ -542,6 +555,56 @@ func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
 		return fmt.Errorf("--base is mutually exclusive with --commit")
 	}
 	return nil
+}
+
+func parsePostReviewer(value string) (orchestrator.ReviewerSlot, error) {
+	if value == "" {
+		value = "codex:" + config.DefaultCodexModel + ":low"
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return orchestrator.ReviewerSlot{}, fmt.Errorf("--post-reviewer must use provider:model[:effort]")
+	}
+	for _, part := range parts {
+		if part == "" {
+			return orchestrator.ReviewerSlot{}, fmt.Errorf("--post-reviewer must use provider:model[:effort]")
+		}
+	}
+	provider := parts[0]
+	switch provider {
+	case "claude", "codex", "gemini":
+	default:
+		return orchestrator.ReviewerSlot{}, fmt.Errorf("--post-reviewer provider must be claude, codex, or gemini")
+	}
+	mode := "fast"
+	if len(parts) == 3 {
+		parsed, err := parsePostReviewEffort(parts[2])
+		if err != nil {
+			return orchestrator.ReviewerSlot{}, err
+		}
+		mode = parsed
+	}
+	return orchestrator.ReviewerSlot{
+		ID:            "cerberus-dedup#1",
+		Provider:      provider,
+		Model:         parts[1],
+		Mode:          mode,
+		Strategy:      "independent-verifier",
+		InstanceIndex: 1,
+	}, nil
+}
+
+func parsePostReviewEffort(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "fast":
+		return "fast", nil
+	case "medium", "smart":
+		return "smart", nil
+	case "high", "max":
+		return "max", nil
+	default:
+		return "", fmt.Errorf("--post-reviewer effort must be low, medium, high, fast, smart, or max")
+	}
 }
 
 type resolvedReviewerConfig struct {

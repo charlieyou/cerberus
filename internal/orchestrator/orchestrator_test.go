@@ -74,6 +74,52 @@ func TestRunSinglePassAllReviewersFailedResolvesRequiresDecision(t *testing.T) {
 	assertEventCount(t, events, telemetry.EventReviewerFailed, 1)
 }
 
+func TestStartSinglePassPreflightsDefaultPostReviewer(t *testing.T) {
+	env := testEnv(t)
+	providerDir := t.TempDir()
+	writeFakeProvider(t, providerDir, "claude")
+	t.Setenv("PATH", providerDir)
+
+	_, err := StartSinglePass(env, Params{
+		Prompt:       []byte("review this"),
+		ArtifactType: "code",
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `post-reviewer preflight: provider CLI "codex" is not available on PATH`) {
+		t.Fatalf("StartSinglePass() error = %v, want missing default post-reviewer codex preflight", err)
+	}
+	gatePath := state.GateStatePath(state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey))
+	if _, statErr := os.Stat(gatePath); !os.IsNotExist(statErr) {
+		t.Fatalf("gate state stat err = %v, want no pending gate created", statErr)
+	}
+}
+
+func TestStartSinglePassDefaultsPostReviewerModelForSelectedProvider(t *testing.T) {
+	env := testEnv(t)
+	providerDir := t.TempDir()
+	writeFakeProvider(t, providerDir, "claude")
+	t.Setenv("PATH", providerDir)
+
+	started, err := StartSinglePass(env, Params{
+		Prompt:       []byte("review this"),
+		ArtifactType: "code",
+		PostReviewer: ReviewerSlot{
+			Provider: "claude",
+		},
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartSinglePass() error = %v", err)
+	}
+	if started.Params.PostReviewer.Provider != "claude" || started.Params.PostReviewer.Model != "claude-opus-4-7" || started.Params.PostReviewer.Mode != "fast" {
+		t.Fatalf("post reviewer = %#v, want claude provider default model and fast mode", started.Params.PostReviewer)
+	}
+}
+
 func TestRunSinglePassMajorityPassFailTieWithReviewerFailureResolvesFail(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
@@ -134,6 +180,151 @@ func TestRunSinglePassNonFailingFindingsPassByDefault(t *testing.T) {
 	row := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-1", "reviewers", "codex#1", "telemetry.json"))
 	if row["verdict"] != state.VerdictPass {
 		t.Fatalf("reviewer telemetry verdict = %v, want %q", row["verdict"], state.VerdictPass)
+	}
+}
+
+func TestRunSinglePassRunsPostReviewDedupAgentForDuplicateCodeFindings(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &dedupRecordingSpawner{dedupDelay: 20 * time.Millisecond}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:          []byte("review this"),
+		ArtifactType:    "code",
+		ArtifactContent: "diff body for verification",
+		ContextContent:  "author context for verification",
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+
+	if !spawner.dedupCalled {
+		t.Fatal("post-review dedup agent was not called")
+	}
+	if spawner.dedupProvider != "codex" || spawner.dedupModel != "gpt-5.5" || spawner.dedupMode != "fast" {
+		t.Fatalf("dedup slot = %s/%s/%s, want codex/gpt-5.5/fast", spawner.dedupProvider, spawner.dedupModel, spawner.dedupMode)
+	}
+	if !strings.Contains(spawner.dedupPrompt, "claude#1") || !strings.Contains(spawner.dedupPrompt, "codex#1") || !strings.Contains(spawner.dedupPrompt, "duplicate bug") {
+		t.Fatalf("dedup prompt = %q, want original reviewer findings", spawner.dedupPrompt)
+	}
+	for _, want := range []string{"diff body for verification", "author context for verification", "review this", `"failure_priority": 1`} {
+		if !strings.Contains(spawner.dedupPrompt, want) {
+			t.Fatalf("dedup prompt = %q, want %q", spawner.dedupPrompt, want)
+		}
+	}
+	gate := readGate(t, env)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictPass {
+		t.Fatalf("gate verdict = %v, want deduped pass", gate.Verdict)
+	}
+	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
+	output := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-99", "reviewers", "cerberus-dedup#1", "output.json"))
+	if findings, ok := output["findings"].([]any); !ok || len(findings) != 0 {
+		t.Fatalf("dedup output findings = %#v, want empty deduped output", output["findings"])
+	}
+	iteration := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "iteration-telemetry.json"))
+	summary, ok := iteration["reviewer_summary"].([]any)
+	if !ok || len(summary) != 1 {
+		t.Fatalf("reviewer summary = %#v, want one post-review summary", iteration["reviewer_summary"])
+	}
+	entry, ok := summary[0].(map[string]any)
+	if !ok || entry["reviewer_id"] != "cerberus-dedup#1" || entry["verdict"] != state.VerdictPass {
+		t.Fatalf("reviewer summary = %#v, want dedup pass summary", summary[0])
+	}
+	dedupTelemetry := readJSONFile(t, filepath.Join(runRoot, "iterations", "1", "round-99", "reviewers", "cerberus-dedup#1", "telemetry.json"))
+	dedupEndedAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(dedupTelemetry["ended_at"]))
+	if err != nil {
+		t.Fatalf("parse dedup ended_at: %v", err)
+	}
+	gate = readGate(t, env)
+	if gate.EndedAt == nil || gate.EndedAt.Before(dedupEndedAt) {
+		t.Fatalf("gate ended_at = %v, want after dedup ended_at %v", gate.EndedAt, dedupEndedAt)
+	}
+}
+
+func TestRunSinglePassPostReviewDedupReceivesEpicVerificationContext(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &dedupRecordingSpawner{}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:          []byte("verify epic"),
+		ArtifactType:    "epic-verify",
+		ArtifactContent: "epic acceptance criteria",
+		ContextContent:  "implementation context",
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+	if !spawner.dedupCalled {
+		t.Fatal("post-review dedup agent was not called")
+	}
+	for _, want := range []string{"epic-verify", "epic acceptance criteria", "implementation context", "verify epic"} {
+		if !strings.Contains(spawner.dedupPrompt, want) {
+			t.Fatalf("dedup prompt = %q, want %q", spawner.dedupPrompt, want)
+		}
+	}
+}
+
+func TestRunSinglePassUsesConfiguredPostReviewDedupSlot(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	spawner := &dedupRecordingSpawner{}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:       []byte("review this"),
+		ArtifactType: "code",
+		PostReviewer: ReviewerSlot{
+			Provider: "claude",
+			Model:    "claude-opus-test",
+			Mode:     "max",
+		},
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+			{ID: "gemini#1", Provider: "gemini", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+	if spawner.dedupProvider != "claude" || spawner.dedupModel != "claude-opus-test" || spawner.dedupMode != "max" {
+		t.Fatalf("dedup slot = %s/%s/%s, want configured claude/claude-opus-test/max", spawner.dedupProvider, spawner.dedupModel, spawner.dedupMode)
+	}
+}
+
+func TestRunSinglePassPostReviewDedupCanRetainBlockingFinding(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+	priority := 1
+	severity := "blocking"
+	spawner := &dedupRecordingSpawner{dedupFindings: []reviewer.RawFinding{{
+		Title:    "retained blocker",
+		Body:     "dedup kept the blocking source finding",
+		Priority: &priority,
+		Severity: &severity,
+	}}}
+
+	err := RunSinglePass(context.Background(), env, Params{
+		Prompt:       []byte("review this"),
+		ArtifactType: "code",
+		Reviewers: []ReviewerSlot{
+			{ID: "claude#1", Provider: "claude", Model: "stub"},
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
+		},
+	}, spawner)
+	if err != nil {
+		t.Fatalf("RunSinglePass() error = %v", err)
+	}
+	gate := readGate(t, env)
+	if gate.Verdict == nil || *gate.Verdict != state.VerdictFail {
+		t.Fatalf("gate verdict = %v, want retained dedup blocker to fail", gate.Verdict)
 	}
 }
 
@@ -788,6 +979,53 @@ func (needsWorkSpawner) Spawn(ctx context.Context, request reviewer.Request) (re
 	return reviewer.Response{ID: request.ID, Output: output, Parsed: parsed}, nil
 }
 
+type dedupRecordingSpawner struct {
+	dedupCalled   bool
+	dedupPrompt   string
+	dedupProvider string
+	dedupModel    string
+	dedupMode     string
+	dedupFindings []reviewer.RawFinding
+	dedupDelay    time.Duration
+}
+
+func (spawner *dedupRecordingSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if request.ID == "cerberus-dedup#1" {
+		if spawner.dedupDelay > 0 {
+			time.Sleep(spawner.dedupDelay)
+		}
+		spawner.dedupCalled = true
+		spawner.dedupPrompt = string(request.User)
+		spawner.dedupProvider = request.Provider
+		spawner.dedupModel = request.Model
+		spawner.dedupMode = request.Mode
+		if spawner.dedupFindings == nil {
+			return passResponse(request.ID)
+		}
+		parsed := &reviewer.RawReviewerOutput{Findings: spawner.dedupFindings}
+		output, err := json.Marshal(parsed)
+		if err != nil {
+			return reviewer.Response{}, err
+		}
+		return reviewer.Response{ID: request.ID, Output: output, Parsed: parsed}, nil
+	}
+	priority := 1
+	confidence := 0.8
+	parsed := &reviewer.RawReviewerOutput{
+		Findings: []reviewer.RawFinding{{
+			Title:      "duplicate bug",
+			Body:       "same issue from another reviewer",
+			Priority:   &priority,
+			Confidence: &confidence,
+		}},
+	}
+	output, err := json.Marshal(parsed)
+	if err != nil {
+		return reviewer.Response{}, err
+	}
+	return reviewer.Response{ID: request.ID, Output: output, Parsed: parsed}, nil
+}
+
 type errorSpawner struct {
 	err error
 }
@@ -862,6 +1100,14 @@ type mixedVerdictFailureSpawner struct {
 }
 
 func (spawner mixedVerdictFailureSpawner) Spawn(ctx context.Context, request reviewer.Request) (reviewer.Response, error) {
+	if request.ID == "cerberus-dedup#1" {
+		for _, verdict := range spawner.verdicts {
+			if verdict == "FAIL" || verdict == "fail" {
+				return responseForVerdict(request.ID, "FAIL")
+			}
+		}
+		return passResponse(request.ID)
+	}
 	if err := spawner.failures[request.ID]; err != nil {
 		return reviewer.Response{}, err
 	}
@@ -1065,6 +1311,14 @@ func setMockPath(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func writeFakeProvider(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
 }
 
 func captureStderr(t *testing.T, fn func()) string {

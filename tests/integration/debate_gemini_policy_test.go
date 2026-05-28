@@ -57,7 +57,7 @@ func TestDebateGeminiPolicy(t *testing.T) {
 		assertResolvedGate(t, runRoot)
 		assertGeminiPolicyInReviewerStderr(t, runRoot, "gemini#1")
 		assertGeminiPolicyInReviewerStderr(t, runRoot, "gemini#2")
-		assertGeminiMockInvocations(t, runRoot, recordDir, []string{"gemini#1", "gemini#2"}, 4)
+		assertGeminiMockInvocations(t, runRoot, recordDir, []string{"gemini#1", "gemini#2"}, 5)
 	})
 }
 
@@ -97,13 +97,17 @@ func assertGeminiMockInvocations(t *testing.T, runRoot, recordDir string, instan
 	if got != fmt.Sprint(want) {
 		t.Fatalf("mock invocation count = %s, want %d", got, want)
 	}
+	geminiInvocations := 0
 	for invocation := 1; invocation <= want; invocation++ {
 		data, err := os.ReadFile(filepath.Join(recordDir, fmt.Sprintf("invocation-%d.provider", invocation)))
 		if err != nil {
 			t.Fatalf("ReadFile(invocation-%d.provider) error = %v", invocation, err)
 		}
-		if strings.TrimSpace(string(data)) != "gemini" {
-			t.Fatalf("invocation-%d provider = %q, want gemini", invocation, strings.TrimSpace(string(data)))
+		if strings.TrimSpace(string(data)) == "gemini" {
+			geminiInvocations++
 		}
+	}
+	if wantGemini := len(instanceIDs) * 2; geminiInvocations != wantGemini {
+		t.Fatalf("gemini invocation count = %d, want %d", geminiInvocations, wantGemini)
 	}
 }

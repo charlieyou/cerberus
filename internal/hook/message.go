@@ -217,6 +217,7 @@ func readReviewerOutputs(runRoot string) []reviewer.RawReviewerOutput {
 		return nil
 	})
 	sort.Strings(paths)
+	paths = postReviewOutputPaths(paths)
 
 	outputs := make([]reviewer.RawReviewerOutput, 0, len(paths))
 	for _, path := range paths {
@@ -232,6 +233,20 @@ func readReviewerOutputs(runRoot string) []reviewer.RawReviewerOutput {
 		outputs = append(outputs, output)
 	}
 	return outputs
+}
+
+func postReviewOutputPaths(paths []string) []string {
+	marker := filepath.Join("reviewers", "cerberus-dedup#1", "output.json")
+	post := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.HasSuffix(path, marker) {
+			post = append(post, path)
+		}
+	}
+	if len(post) > 0 {
+		return post
+	}
+	return paths
 }
 
 func reviewerIDFromOutputPath(path string) string {

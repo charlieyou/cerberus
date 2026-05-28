@@ -22,6 +22,7 @@ type Orchestrator struct {
 	Consensus              aggregate.Mode
 	Mode                   string
 	RosterID               string
+	PostReviewer           ReviewerSlot
 	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput, []string, int) ([]anonymize.PeerRecord, error)
 }
 
@@ -29,12 +30,13 @@ type Orchestrator struct {
 // as single-pass review, inserting an anonymized peer broadcast between rounds.
 func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, prompt []byte, maxRounds int) (Verdict, error) {
 	started, err := o.StartDebate(Params{
-		Prompt:    prompt,
-		Reviewers: slots,
-		Mode:      o.Mode,
-		MaxRounds: maxRounds,
-		Consensus: o.Consensus,
-		RosterID:  o.RosterID,
+		Prompt:       prompt,
+		Reviewers:    slots,
+		PostReviewer: o.PostReviewer,
+		Mode:         o.Mode,
+		MaxRounds:    maxRounds,
+		Consensus:    o.Consensus,
+		RosterID:     o.RosterID,
 	})
 	if err != nil {
 		return Verdict{}, err
@@ -68,6 +70,9 @@ func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
 	}
 	if params.ArtifactType == "" {
 		params.ArtifactType = "code"
+	}
+	if params.PostReviewer.Provider == "" && params.PostReviewer.Model == "" && params.PostReviewer.Mode == "" {
+		params.PostReviewer = o.PostReviewer
 	}
 	return o.startDebate(params)
 }
@@ -119,6 +124,11 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	}
 	if rosterID == "" {
 		rosterID = "default"
+	}
+	postReviewer, err := preflightPostReviewSlot(params.ArtifactType, params.PostReviewer)
+	if err != nil {
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "post_reviewer", err)
+		return nil, err
 	}
 
 	gatePath := state.GateStatePath(runRoot)
@@ -187,6 +197,7 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	params.FailurePriority = failurePriority
 	params.FailurePrioritySet = true
 	params.RosterID = rosterID
+	params.PostReviewer = postReviewer
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
 }
 
@@ -341,6 +352,33 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	}
 
 	endedAt := time.Now().UTC()
+	originalFailureReason := reviewerFailureResolutionReason(finalRoundResults)
+	if degradedReason == "" {
+		postResults, postResult, postRan, err := maybeRunPostReviewDedup(ctx, started.Params.PostReviewer, spawner, roundPrompts{
+			User:            prompt,
+			ArtifactType:    started.Params.ArtifactType,
+			ArtifactContent: started.Params.ArtifactContent,
+			ContextContent:  started.Params.ContextContent,
+			RunRoot:         runRoot,
+			Root:            resolvedEnv.Root,
+			RuntimeMode:     mode,
+			Iteration:       1,
+			Consensus:       consensus,
+			FailurePriority: failurePriority,
+		}, finalRoundResults)
+		if err != nil {
+			return Verdict{}, err
+		}
+		if postRan {
+			_, postTokens, postCostUSD := telemetryTotals(postResults)
+			totalTokens.Input += postTokens.Input
+			totalTokens.Output += postTokens.Output
+			totalCostUSD += postCostUSD
+			finalRoundResults = postResults
+			final = postResult
+			endedAt = time.Now().UTC()
+		}
+	}
 	reviewerSummary, _, _ := telemetryTotals(finalRoundResults)
 	gatePath := state.GateStatePath(runRoot)
 	gate, err := state.ReadGateState(gatePath)
@@ -360,7 +398,7 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	}
 	if degradedReason != "" {
 		state.MarkResolved(gate, final.Verdict, endedAt, degradedReason)
-	} else if reason := reviewerFailureResolutionReason(finalRoundResults); reason != "" {
+	} else if reason := firstNonEmpty(originalFailureReason, reviewerFailureResolutionReason(finalRoundResults)); reason != "" {
 		state.MarkResolved(gate, final.Verdict, endedAt, reason)
 	} else {
 		state.MarkResolved(gate, final.Verdict, endedAt)

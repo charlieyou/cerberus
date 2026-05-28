@@ -924,6 +924,33 @@ func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	}
 }
 
+func TestParseSpawnCodeReviewPostReviewer(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags([]string{}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(default) error = %v", err)
+	}
+	defaultSlot := opts.postReviewSlot()
+	if defaultSlot.Provider != "codex" || defaultSlot.Model != "gpt-5.5" || defaultSlot.Mode != "fast" {
+		t.Fatalf("default post reviewer = %#v, want codex/gpt-5.5/fast", defaultSlot)
+	}
+
+	opts, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "claude:opus:high"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(custom) error = %v", err)
+	}
+	slot := opts.postReviewSlot()
+	if slot.Provider != "claude" || slot.Model != "opus" || slot.Mode != "max" {
+		t.Fatalf("custom post reviewer = %#v, want claude/opus/max", slot)
+	}
+
+	_, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:turbo"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--post-reviewer effort") {
+		t.Fatalf("invalid post reviewer error = %v, want effort error", err)
+	}
+}
+
 func TestNormalizeEpicVerifyArgsRecognizesFailPriority(t *testing.T) {
 	got := normalizeReviewArgs([]string{"--fail-priority", "p2", "docs/epic.md"}, "epic-verify")
 	want := []string{"--fail-priority", "p2", "docs/epic.md"}
@@ -935,6 +962,12 @@ func TestNormalizeEpicVerifyArgsRecognizesFailPriority(t *testing.T) {
 	want = []string{"--fail-priority=p2", "docs/epic.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeReviewArgs(equals) = %#v, want %#v", got, want)
+	}
+
+	got = normalizeReviewArgs([]string{"--post-reviewer", "claude:opus:high", "docs/epic.md"}, "epic-verify")
+	want = []string{"--post-reviewer", "claude:opus:high", "docs/epic.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeReviewArgs(post-reviewer) = %#v, want %#v", got, want)
 	}
 }
 

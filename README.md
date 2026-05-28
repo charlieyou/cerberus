@@ -65,6 +65,11 @@ The built-in default panel is Claude + Codex + Gemini. If one of those CLIs is
 missing, the built-in panel drops that reviewer and prints a warning. Custom
 rosters are strict: every reviewer you name must be available.
 
+Code review and epic verification runs with findings also run an automatic
+post-review verification/dedup agent. That agent defaults to `codex:gpt-5.5:low`,
+so install `codex` or pass `--post-reviewer <provider>:<model>:<effort>` when
+using a different available provider.
+
 The reviewer CLI contract currently used by Cerberus is below. For all
 providers, Cerberus sends the artifact or question prompt on stdin; the table
 describes argv and system-prompt shape.
@@ -228,6 +233,7 @@ Cerberus is designed for one active Cerberus review per project at a time.
 | `--agents claude,codex,gemini` | Quick built-in provider filter. Mutually exclusive with rosters and inline reviewers. |
 | `--roster <name>` | Select a named YAML roster. |
 | `--reviewer provider:model[:strategy]` | Add an inline reviewer slot. |
+| `--post-reviewer provider:model[:effort]` | Choose the automatic post-review verification/dedup agent for code and epic verification findings. Effort accepts `low`/`medium`/`high` (aliases: `fast`/`smart`/`max`). Defaults to `codex:gpt-5.5:low`. |
 | `--replace-slot <instance_id>` | Replace one resolved roster slot with the inline reviewer. |
 
 Prefer rosters over `--agents` when you need model versions, repeated providers,

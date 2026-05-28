@@ -147,6 +147,29 @@ func TestHandleClaudeStopResponseEmitsFeedbackText(t *testing.T) {
 	}
 }
 
+func TestReadReviewerOutputsPrefersPostReviewDedupOutput(t *testing.T) {
+	runRoot := t.TempDir()
+	priority := 1
+	if err := state.WriteReviewerOutput(runRoot, 1, 1, "claude#1", mustReviewerOutput(t, reviewer.RawReviewerOutput{
+		Findings: []reviewer.RawFinding{{Title: "duplicate original", Body: "old", Priority: &priority}},
+	})); err != nil {
+		t.Fatalf("WriteReviewerOutput(original) error = %v", err)
+	}
+	if err := state.WriteReviewerOutput(runRoot, 1, 99, "cerberus-dedup#1", mustReviewerOutput(t, reviewer.RawReviewerOutput{
+		Findings: []reviewer.RawFinding{{Title: "deduped final", Body: "new", Priority: &priority}},
+	})); err != nil {
+		t.Fatalf("WriteReviewerOutput(dedup) error = %v", err)
+	}
+
+	outputs := readReviewerOutputs(runRoot)
+	if len(outputs) != 1 {
+		t.Fatalf("outputs length = %d, want only post-review output", len(outputs))
+	}
+	if outputs[0].InstanceID != "cerberus-dedup#1" || len(outputs[0].Findings) != 1 || outputs[0].Findings[0].Title != "deduped final" {
+		t.Fatalf("outputs = %#v, want dedup output only", outputs)
+	}
+}
+
 func mustReviewerOutput(t *testing.T, output reviewer.RawReviewerOutput) []byte {
 	t.Helper()
 	data, err := json.Marshal(output)
