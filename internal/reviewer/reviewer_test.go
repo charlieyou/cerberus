@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,6 +146,22 @@ func TestRunnerNonZeroExitFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "reviewer claude#1 failed") {
 		t.Fatalf("Spawn() error = %q, want reviewer failure message", err)
+	}
+}
+
+func TestProviderRunErrorIncludesCodexStdoutError(t *testing.T) {
+	stdout := []byte(`{"type":"thread.started","thread_id":"thread"}
+{"type":"error","message":"Reconnecting... 1/5"}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: stream closed before response.completed"}}
+`)
+
+	err := providerRunError("reviewer cerberus-dedup#1", errors.New("exit status 1"), stdout, "Reading additional input from stdin...\n")
+
+	if !strings.Contains(err.Error(), "stderr: Reading additional input from stdin") {
+		t.Fatalf("error = %q, want stderr context", err)
+	}
+	if !strings.Contains(err.Error(), "stdout error: stream disconnected before completion: stream closed before response.completed") {
+		t.Fatalf("error = %q, want stdout provider error", err)
 	}
 }
 

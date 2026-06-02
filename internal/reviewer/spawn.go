@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/charlieyou/cerberus/internal/config"
@@ -180,9 +181,50 @@ func RunProvider(ctx context.Context, invocation ProviderInvocation) (ProviderOu
 		invocation.OnStart(pid)
 	}
 	if err := command.Wait(); err != nil {
-		return ProviderOutput{PID: pid, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("%s failed: %w; stderr: %s", firstNonEmpty(invocation.Label, invocation.Provider), err, stderr.String())
+		return ProviderOutput{PID: pid, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, providerRunError(firstNonEmpty(invocation.Label, invocation.Provider), err, stdout.Bytes(), stderr.String())
 	}
 	return ProviderOutput{PID: pid, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
+}
+
+func providerRunError(label string, err error, stdout []byte, stderr string) error {
+	if stdoutError := stdoutErrorMessage(stdout); stdoutError != "" {
+		return fmt.Errorf("%s failed: %w; stderr: %s; stdout error: %s", label, err, stderr, stdoutError)
+	}
+	return fmt.Errorf("%s failed: %w; stderr: %s", label, err, stderr)
+}
+
+func stdoutErrorMessage(stdout []byte) string {
+	scanner := bufio.NewScanner(bytes.NewReader(stdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	var messages []string
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+		message := strings.TrimSpace(firstNonEmpty(event.Error.Message, event.Message))
+		if message == "" {
+			continue
+		}
+		switch event.Type {
+		case "error", "turn.failed":
+			messages = append(messages, message)
+		}
+	}
+	if len(messages) == 0 {
+		return ""
+	}
+	return messages[len(messages)-1]
 }
 
 func writeReviewerProcessEvent(runRoot string, eventName string, request Request, iteration, round int, at time.Time, extra map[string]any) {
