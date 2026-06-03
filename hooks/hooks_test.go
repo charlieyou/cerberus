@@ -92,13 +92,11 @@ func TestCodexPluginExposesOnlySurvivingSkills(t *testing.T) {
 		}
 	}
 	want := []string{
-		"architecture-review",
 		"ask",
 		"clear-gate",
 		"create-plan",
 		"create-spec",
 		"create-tasks",
-		"healthcheck",
 		"review-code",
 		"review-plan",
 		"review-spec",

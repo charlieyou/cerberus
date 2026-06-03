@@ -11,7 +11,7 @@ func TestSkillMDGenerateInvocationsUseV2Binary(t *testing.T) {
 	t.Skip("awaiting Epic F SKILL.md bootstrap update; unskip when skills call bin/cerberus generate")
 
 	repoRoot := integrationRepoRoot(t)
-	for _, skill := range []string{"create-spec", "create-plan", "healthcheck", "architecture-review"} {
+	for _, skill := range []string{"create-spec", "create-plan"} {
 		path := filepath.Join(repoRoot, "skills", skill, "SKILL.md")
 		data, err := os.ReadFile(path)
 		if err != nil {

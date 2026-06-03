@@ -12,23 +12,15 @@ func TestGeneratePartialFailure(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	binary := buildIntegrationCerberus(t, repoRoot)
 
-	for _, generatorType := range []string{"create-spec", "create-plan", "healthcheck", "architecture-review"} {
+	for _, generatorType := range []string{"create-spec", "create-plan"} {
 		t.Run(generatorType, func(t *testing.T) {
 			root := newGeneratePromptRoot(t, generatorType, "partial "+generatorType+" template")
 			prompt := "write a " + generatorType + " draft"
-			if generatorType == "healthcheck" {
-				prompt = "review error handling"
-			}
 			fixtureDir := keyedGenerateFixtureDir(t, repoRoot, generatorType, prompt, []string{"claude", "gemini"})
 
 			outputDir := t.TempDir()
 			recordDir := t.TempDir()
-			args := []string{"generate", outputDir, "--type", generatorType}
-			if generatorType == "healthcheck" {
-				args = append(args, "--focus", "review error handling")
-			} else {
-				args = append(args, "--mode", "smart", "--prompt-file", writePromptFile(t, prompt))
-			}
+			args := []string{"generate", outputDir, "--type", generatorType, "--mode", "smart", "--prompt-file", writePromptFile(t, prompt)}
 			cmd := exec.Command(binary, args...)
 			cmd.Dir = t.TempDir()
 			cmd.Env = append(os.Environ(),

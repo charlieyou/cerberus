@@ -33,9 +33,9 @@ func TestComposeGeneratorReadsEditedTemplateFromDisk(t *testing.T) {
 
 func TestComposeGeneratorFallsBackToFlatPreservedTemplate(t *testing.T) {
 	root := t.TempDir()
-	writePrompt(t, root, filepath.Join("prompts", "generators", "healthcheck.md"), "flat generator")
+	writePrompt(t, root, filepath.Join("prompts", "generators", "create-spec.md"), "flat generator")
 
-	got, err := ComposeGeneratorFromRoot(root, "claude", "healthcheck")
+	got, err := ComposeGeneratorFromRoot(root, "claude", "create-spec")
 	if err != nil {
 		t.Fatalf("ComposeGeneratorFromRoot() error = %v", err)
 	}

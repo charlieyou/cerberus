@@ -210,12 +210,12 @@
 - `bin/review-gate` (preflight section, after flag parsing and agent resolution) — Exists — add (1) `if [[ -n "$DEBATE" ]] && [[ <bare-spawn> ]] && [[ "$REVIEW_TYPE" not in whitelist ]]; then echo to stderr; exit 2; fi`; (2) `if [[ -n "$DEBATE" ]] && [[ ${#AGENT_LIST[@]} -lt 2 ]]; then write gate-state.awaiting_decision + consensus.requires_decision per D6; exit 6; fi`. Also assert these gates fire BEFORE any reviewer template is rendered or any model invoked.
 
 **Acceptance Criteria**:
-1. `bin/review-gate spawn --debate --type healthcheck [args]` exits 2 with stderr naming `healthcheck` and the four allowed types `code, plan, spec, epic-verify`.
+1. `bin/review-gate spawn --debate --type create-tasks [args]` exits 2 with stderr naming `create-tasks` and the four allowed types `code, plan, spec, epic-verify`.
 2. `bin/review-gate spawn-code-review --debate --agents codex [args]` (only one reviewer) exits 6 with stderr `debate degraded below 2 active reviewers in the final peer round` (or the analogous preflight variant), and `gate-state.json.status="awaiting_decision"` with `consensus.verdict="requires_decision"` per D6.
 3. **Byte-parity**: invocations without `--debate` produce byte-identical artifacts to baseline (T002 passes).
 
 **Verification**:
-- Add tests to `bin/tests/test-debate-preflight.sh` (created in T006) covering whitelist positive cases (`code`, `plan`, `spec`, `epic-verify`) and negative cases (`healthcheck`, `architecture-review`, `create-tasks`, `manual`, `auto`).
+- Add tests to `bin/tests/test-debate-preflight.sh` (created in T006) covering whitelist positive cases (`code`, `plan`, `spec`, `epic-verify`) and negative cases (`create-tasks`, `manual`, `auto`).
 - **Negative case**: `--debate` with bare `spawn --type epic-verify` (whitelisted) but `--agents claude` (only one) → exit 6, on-disk shape per D6.
 - **Negative case**: `--debate` with bare `spawn --type manual` and 3 reviewers → exit 2 (whitelist fires before <2 check; whitelist is more specific).
 
@@ -302,7 +302,7 @@
 - `bin/tests/test-debate-preflight.sh` — New — covers (a) R10 whitelist: each non-judging type rejected with exit 2; each judging type accepted; (b) `<2 reviewers + --debate` exit 6 with on-disk shape per D6; (c) `--debate-seed N` no-op when `--debate` absent (T002 byte-parity asserts the artifact bytes).
 
 **Acceptance Criteria**:
-1. Whitelist tests: `bin/review-gate spawn --debate --type X` for `X ∈ {healthcheck, architecture-review, create-tasks, manual, auto}` each exit 2 with stderr naming `X` and the four allowed types.
+1. Whitelist tests: `bin/review-gate spawn --debate --type X` for `X ∈ {create-tasks, manual, auto}` each exit 2 with stderr naming `X` and the four allowed types.
 2. `<2 reviewers` tests: each named subcommand with `--debate --agents <single>` exits 6 with on-disk shape per D6.
 3. **Byte-parity preservation**: `--debate-seed` no-op (`bin/review-gate spawn --debate-seed 42 --type code [args]` produces byte-identical artifacts to the same invocation without `--debate-seed`, asserted via inline `cmp`); T002 byte-parity regression test still passes after Phase B's edits.
 

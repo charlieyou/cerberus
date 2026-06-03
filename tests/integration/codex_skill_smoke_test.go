@@ -14,13 +14,11 @@ import (
 )
 
 var survivingCodexSkills = []string{
-	"architecture-review",
 	"ask",
 	"clear-gate",
 	"create-plan",
 	"create-spec",
 	"create-tasks",
-	"healthcheck",
 	"review-code",
 	"review-plan",
 	"review-spec",
@@ -29,7 +27,7 @@ var survivingCodexSkills = []string{
 	"verify-epic",
 }
 
-func TestCodexPluginSurfaceHasThirteenSurvivingSkills(t *testing.T) {
+func TestCodexPluginSurfaceHasElevenSurvivingSkills(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	data, err := os.ReadFile(filepath.Join(repoRoot, ".codex-plugin", "plugin.json"))
 	if err != nil {
@@ -84,19 +82,17 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 		promptOnly  bool
 		setupScript string
 	}{
-		"architecture-review": {block: 2, setupScript: `ARGUMENTS="--focus codex smoke"`},
-		"ask":                 {block: 2, wantOutput: "ASK_RESULT=", setupScript: `ARGUMENTS="--agents codex codex smoke"`},
-		"clear-gate":          {block: 2, wantExit: 1, wantOutput: "gate-state.json"},
-		"create-plan":         {block: 4, setupScript: `printf 'codex smoke plan\n' > "$PROMPT_TMP"`},
-		"create-spec":         {block: 4, setupScript: `printf 'codex smoke spec\n' > "$PROMPT_TMP"`},
-		"create-tasks":        {promptOnly: true},
-		"healthcheck":         {block: 2, setupScript: `ARGUMENTS="--focus codex smoke"`},
-		"review-code":         {block: 2, setupScript: `ARGUMENTS="--agents codex codex smoke"`},
-		"review-plan":         {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-plan.md"`},
-		"review-spec":         {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-spec.md"`},
-		"review-tasks":        {promptOnly: true},
-		"status":              {block: 2, wantOutput: `"status":"no_active_gate"`},
-		"verify-epic":         {block: 2, setupScript: `EPIC_FILE="$SMOKE_EPIC_FILE"; ARGUMENTS="--agents codex"`},
+		"ask":          {block: 2, wantOutput: "ASK_RESULT=", setupScript: `ARGUMENTS="--agents codex codex smoke"`},
+		"clear-gate":   {block: 2, wantExit: 1, wantOutput: "gate-state.json"},
+		"create-plan":  {block: 4, setupScript: `printf 'codex smoke plan\n' > "$PROMPT_TMP"`},
+		"create-spec":  {block: 4, setupScript: `printf 'codex smoke spec\n' > "$PROMPT_TMP"`},
+		"create-tasks": {promptOnly: true},
+		"review-code":  {block: 2, setupScript: `ARGUMENTS="--agents codex codex smoke"`},
+		"review-plan":  {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-plan.md"`},
+		"review-spec":  {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-spec.md"`},
+		"review-tasks": {promptOnly: true},
+		"status":       {block: 2, wantOutput: `"status":"no_active_gate"`},
+		"verify-epic":  {block: 2, setupScript: `EPIC_FILE="$SMOKE_EPIC_FILE"; ARGUMENTS="--agents codex"`},
 	}
 
 	for _, skill := range survivingCodexSkills {

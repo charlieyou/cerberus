@@ -40,7 +40,7 @@
   - General-purpose MAS framework outside Cerberus.
   - New reviewer providers beyond Codex / Gemini / Claude.
   - Model fine-tuning. All primitives are prompt- and orchestration-level.
-  - Generator commands (`create-spec`, `create-plan`, `create-tasks`, `healthcheck`, `architecture-review`) — they go through `bin/generate`, not `bin/review-gate spawn`. v1 does not wire debate into them; wrapper-level rejection in slash-command markdown is a v2 polish item.
+  - Generator commands (`create-spec`, `create-plan`, `create-tasks`) — they go through `bin/generate`, not `bin/review-gate spawn`. v1 does not wire debate into them; wrapper-level rejection in slash-command markdown is a v2 polish item.
   - Stylometric flattening of peer outputs.
   - JSON-shape normalization of peer outputs in the anonymization pass.
   - Per-agent confidence prior rescaling / Bayesian recalibration.
@@ -107,7 +107,7 @@
 | `bin/review-gate-lib.sh` iteration helpers | Yes | **Reuse** | `load_iteration` / `save_iteration` / archive-reviews logic untouched; debate is per-iteration |
 | `resolve_intelligence_mode()` (`bin/review-gate-models.sh:43-83`) | Yes — **unchanged** | **Reuse as-is** | Debate inherits `--mode`; mode picks underlying models, debate adds rounds. They compose orthogonally |
 | `commands/review-*.md` slash-command wrappers | Yes | **Extend** (pass-through) | The wrappers shell out to `bin/review-gate spawn-*-review $ARGUMENTS`; `--debate` flows through `$ARGUMENTS` and the subcommand handles it. No wrapper-level validation in v1 (R10) |
-| `commands/architecture-review.md`, `healthcheck.md`, `create-*.md` | No | **Leave unchanged** | These call `bin/generate`, not `bin/review-gate spawn`. v1 explicitly does not wire debate into generators (R10 v2 polish) |
+| `commands/create-*.md` | No | **Leave unchanged** | These call `bin/generate`, not `bin/review-gate spawn`. v1 explicitly does not wire debate into generators (R10 v2 polish) |
 | `config/gemini-readonly-policy.toml` | Yes — **unchanged** | **Reuse as-is** | Policy is enforced on every Gemini call regardless of debate state; the manual Gemini-jailbreak smoke test (Launch checklist) verifies no new surface is opened by debate prompts |
 | `bin/tests/test-review-gate-*.sh` test pattern | Yes | **Extend** | New tests follow the same temp-HOME + mock-state + mock-reviewer-outputs pattern; debate fixtures sit alongside existing ones under `bin/tests/fixtures/` |
 
@@ -287,7 +287,7 @@ The coordinator writes `gate-state.json.debate` BEFORE returning control to the 
 - `prompts/reviewers/epic-verify.md` — **Exists (modify)**. Same conditional include pattern.
 - `prompts/revisions/{code,plan,spec,epic-verify}.md` — **Exists (no change required)**. Revision prompts MUST not inherit debate transcript state (R10 edge case). Confirm via test that they're untouched under `--debate`.
 - `commands/review-{code,plan,spec}.md`, `commands/verify-epic.md` — **Exists (no behavior change)**. Slash-command wrappers shell out via `$ARGUMENTS`; `--debate` already flows through. v1 deliberately does not validate at the wrapper layer.
-- `commands/architecture-review.md`, `commands/healthcheck.md`, `commands/create-{spec,plan,tasks}.md` — **Exists (no change)**. These call `bin/generate`, not `bin/review-gate spawn`. v1 defers wrapper-level rejection; `--debate` either silently ignored or fails downstream.
+- `commands/create-{spec,plan,tasks}.md` — **Exists (no change)**. These call `bin/generate`, not `bin/review-gate spawn`. v1 defers wrapper-level rejection; `--debate` either silently ignored or fails downstream.
 - `README.md` — **Exists (modify)**. New "Debate mode" section: flag, round shape, per-mode token cost band, per-mode wall-clock latency band, `<2 reviewers` hard error, byte-parity guarantee.
 
 ## Risks, Edge Cases & Breaking Changes
@@ -334,7 +334,7 @@ The coordinator writes `gate-state.json.debate` BEFORE returning control to the 
 | Byte-parity for valid non-debate invocations (R9) | Step 0 fixtures + R9 byte-parity test suite + schema-artifact fixture |
 | Falsifiable two-clause launch gate (Success criteria) | `bin/tests/fixtures/debate-bad-artifact/` + `defect-location.json` + assertion test |
 | `<2 reviewers + --debate` hard error | Preflight test in `test-debate-preflight.sh` |
-| Bare-spawn whitelist rejection (R10) | Preflight test asserting non-zero exit + clear error for `--type ∈ {healthcheck, architecture-review, create-tasks, manual, auto}`; positive-case test for `--type ∈ {code, plan, spec, epic-verify}` |
+| Bare-spawn whitelist rejection (R10) | Preflight test asserting non-zero exit + clear error for `--type ∈ {create-tasks, manual, auto}`; positive-case test for `--type ∈ {code, plan, spec, epic-verify}` |
 | Anonymization deny-list (R1) | `test-debate-anonymization.sh` + R1 fixtures (BSD + GNU grep) |
 | Anonymization adjacent-term iteration (R1) | Specific fixture: `Claude Codex Gemini` → all three redacted |
 | Per-recipient peer ordering shuffle (R1) | Fixture asserts orderings differ across recipients under same seed (with N≥3 peers) |

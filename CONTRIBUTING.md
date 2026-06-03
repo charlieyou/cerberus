@@ -107,7 +107,7 @@ document does not replace those underlying checks.
 | R1-R10 all verifiable | Green | Beads `cerberus-yd7.6` (T606), `cerberus-b31.2` (T702), `cerberus-b31.3` (T703), `cerberus-b31.4` (T704), `cerberus-ndk.1` (T801), `cerberus-ndk.2` (T802), and `cerberus-ndk.4` (T804) are closed as done. |
 | Zero `bin/*.sh` files in the v2 plugin tree | Green | T606 cleanup invariants, backed by `tests/integration/cleanup_invariants_test.go` and `make lint`. |
 | CI matrix for Claude, Codex, and generic hosts on darwin and linux | Green | T703 CI matrix, backed by `.github/workflows/ci.yml`. |
-| Codex smoke test: all 13 surviving skills runnable | Green | `tests/integration/codex_skill_smoke_test.go` verifies the Codex manifest, hooks path, and surviving skill set. |
+| Codex smoke test: all 11 surviving skills runnable | Green | `tests/integration/codex_skill_smoke_test.go` verifies the Codex manifest, hooks path, and surviving skill set. |
 | Multi-instance roster smokes (`codex` x3 models; `claude` x2 strategies) | Green | T702 integration suite, backed by `tests/integration/debate_multi_instance_test.go`. |
 | Debate smoke covers mixed-provider and same-provider multi-instance panels | Green | T702 integration suite, backed by `tests/integration/debate_multi_instance_test.go` and `tests/integration/debate_gemini_policy_test.go`. |
 | One reviewer plus `--debate` refuses at preflight | Green | T702 integration suite, backed by `internal/cli/spawn_code_review_test.go`, `internal/roster/degradation_test.go`, and `tests/integration/codex_default_roster_degradation_test.go`. |

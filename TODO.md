@@ -31,8 +31,6 @@ Task review should use multi-models
   - Categories: API/Interface, Data, UI/UX, Performance, Security, Integration, Ops/Infra, Migration, Testing, Compliance, Cost, Docs, Dependencies, Alternatives, Risks, Timeline
   - Interview asks which categories apply, then only shows relevant sections
 
-* run import-lint in architecture review
-
 ## Spec/Plan Generation
 
 * separate templates from orchestration - users can choose their own template to use

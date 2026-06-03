@@ -11,7 +11,7 @@
 - v2 is a clean Go rewrite of the v1 Bash plugin (~17 KLOC across 14 scripts under `bin/`).
 - Spec-binding stance: simplification mandate. Drop v1's fault-tolerance accretions; ship simplest implementation that delivers the same user-visible functionality. Rebuild fault tolerance incrementally as real failure modes emerge.
 - Four user-stated goals (verbatim): real-language maintainability, first-class debate, multi-instance / intra-provider model rosters, native Codex plugin support.
-- Spec ships 13 surviving skills (run-team REMOVED per D6/D9), `--debate` opt-in (D2), Stop-hook gating, dual-host plugin packaging at version `2.0.0`.
+- Spec ships 11 surviving skills (run-team REMOVED per D6/D9), `--debate` opt-in (D2), Stop-hook gating, dual-host plugin packaging at version `2.0.0`.
 
 ## Scope & Non-Goals
 
@@ -19,7 +19,7 @@
 - Single Go binary `bin/cerberus` subsuming the v1 review-gate, debate, models, generate, hook, session-init, skill-env, and telemetry libraries (R1, D1).
 - YAML roster engine at `./.cerberus/rosters.yaml` and `~/.cerberus/rosters.yaml` with multi-instance / multi-version slots; CLI `--roster <name>` and `--reviewer ...` overrides; `<provider>#<index>` instance IDs (R2, D4, D12).
 - Unified single-pass and `--debate` paths sharing aggregation, anonymization, and gate-state I/O in one Go module (R3).
-- Codex CLI as first-class host; 13 surviving skills cross-host parity; SessionStart / UserPromptSubmit / Stop hook handlers in Go (R4).
+- Codex CLI as first-class host; 11 surviving skills cross-host parity; SessionStart / UserPromptSubmit / Stop hook handlers in Go (R4).
 - Per-reviewer reasoning strategy and persona injection from on-disk Markdown (R5).
 - CI matrix (Claude × Codex × generic) × (darwin × linux) with mocked reviewer CLIs (R6).
 - `CERBERUS_*` env contract; `CLAUDE_PLUGIN_ROOT` honored as fallback for `CERBERUS_ROOT` only (R7, C2).
@@ -124,7 +124,7 @@ Spec-binding decisions (D1–D13) are restated as authoritative inputs from `doc
 | `bin/tests/` (36 bash test files + fixtures) | No (bash) | **Replace** with Go `*_test.go` (unit) + `tests/integration/` + `tests/fixtures/` | S3; R6. |
 | `prompts/**/*.md` (generators, reviewers, revisions, strategies, interview-engine.md) | Yes | **Keep** (read at runtime) | C4. |
 | `config/gemini-readonly-policy.toml`, `config/gemini-readonly-settings.json` | Yes | **Keep** | C5. |
-| `skills/<surviving>/SKILL.md` (×13) | Partial | **Update** bootstrap snippet to reach `bin/cerberus` directly; remove references to `bin/review-gate-models.sh` and `bin/review-gate` from required-file checks | R1, R3, R4. |
+| `skills/<surviving>/SKILL.md` (×11) | Partial | **Update** bootstrap snippet to reach `bin/cerberus` directly; remove references to `bin/review-gate-models.sh` and `bin/review-gate` from required-file checks | R1, R3, R4. |
 | `skills/run-team/`, `agents/implementer.md`, `templates/team-tasks-template.md` | N/A | **Delete** | D9. |
 | `templates/tasks-template.md` | Yes | **Keep** | D9. |
 | `templates/codex-hooks.json` (legacy duplicate) | No | **Delete** in v2 | R10 explicitly notes "may be removed"; D28. |
@@ -160,9 +160,9 @@ The rewrite proceeds in eight phases (D23). Each phase produces a usable interme
 - **A. Skeleton & scaffold.** `go.mod`, `cmd/cerberus`, `internal/{cli,config,host}`, `Makefile`, inline hook bootstrap. The plugin loads, `cerberus check` is a no-op stub. No user-visible behavior change yet — v1 path still active.
 - **B. Single-pass review.** `internal/{state,roster,reviewer,prompts,orchestrator,aggregate,telemetry}` plus `cerberus spawn-code-review`, `wait`, `resolve`, `status`, `check`, `artifact-path`, `author-context`. Default panel `[claude, codex, gemini]` works on Claude host with Stop-hook gating. **Adds early Codex smoke test** (boot Codex hook end-to-end on a single Codex slot) so any host-contract surprises surface in Phase B rather than Phase E.
 - **C. Debate.** Extend `internal/orchestrator` for multi-round; add `internal/anonymize` per D30; preflight refusal of 1-reviewer + `--debate` (D7), including the case where degraded panels reduce to one reviewer (D13).
-- **D. Generate.** `cerberus generate` subcommand for create-spec / create-plan / architecture-review / healthcheck multi-model drafts.
-- **E. Codex host parity.** `internal/hook` handlers for `codex-session-start`, `codex-prompt-submit`, `codex-stop`. All 13 surviving skills work on Codex.
-- **F. Cleanup & removals.** Update 13 SKILL.md bootstraps; rewrite `hooks/{hooks,codex-hooks}.json`; delete run-team surface; bump plugin manifests to `2.0.0`; remove `templates/codex-hooks.json`; remove `bin/*.sh` files; add `bin/cerberus` to `.gitignore` (D32).
+- **D. Generate.** `cerberus generate` subcommand for create-spec / create-plan multi-model drafts.
+- **E. Codex host parity.** `internal/hook` handlers for `codex-session-start`, `codex-prompt-submit`, `codex-stop`. All 11 surviving skills work on Codex.
+- **F. Cleanup & removals.** Update 11 SKILL.md bootstraps; rewrite `hooks/{hooks,codex-hooks}.json`; delete run-team surface; bump plugin manifests to `2.0.0`; remove `templates/codex-hooks.json`; remove `bin/*.sh` files; add `bin/cerberus` to `.gitignore` (D32).
 - **G. CI & tests.** Port test fixtures; write Go unit + integration tests; mock reviewer CLIs; structural lint (zero-bash, no-run-team-refs); cross-platform build matrix; binary-size assertion (D35).
 - **H. Docs & GA.** Rewrite `README.md`, `docs/CODEX.md`; add `CONTRIBUTING.md` covering `make install` (D26); migration / rollback notes per D11; tag `v2.0.0` and publish.
 
@@ -212,7 +212,7 @@ internal/anonymize/                      # peer-N ID assignment; provider/model 
 internal/state/                          # filesystem layout: <state_root>/<project>/<run>/iterations/<N>/round-<R>/reviewers/<instance_id>/
 internal/telemetry/                      # JSON event writer; per-iteration + run-level rollups
 internal/hook/                           # poll loop, transcript reading, host-specific session-init logic
-internal/generate/                       # multi-model draft generator (create-spec / create-plan / architecture-review / healthcheck)
+internal/generate/                       # multi-model draft generator (create-spec / create-plan)
 Makefile                                 # build, install, test, lint, fixtures-refresh
 go.mod, go.sum
 .github/workflows/ci.yml                 # OS × host matrix; build-matrix; binary-size assertion (D35)
@@ -345,7 +345,7 @@ cerberus check
 cerberus completion-check
 cerberus artifact-path
 cerberus author-context [--clear] [text]
-cerberus generate <output-dir> --type <create-plan|create-spec|healthcheck|architecture-review> [...]
+cerberus generate <output-dir> --type <create-plan|create-spec> [...]
 cerberus hook claude-session-start
 cerberus hook claude-stop
 cerberus hook codex-session-start
@@ -695,7 +695,7 @@ The canonical version of the **shared resolver body** lives at `prompts/host-neu
 | `templates/tasks-template.md` | Exists (kept) | D9. |
 | `prompts/**/*.md` | Exists (kept) | C4. |
 | `config/gemini-readonly-policy.toml`, `config/gemini-readonly-settings.json` | Exists (kept) | C5. |
-| `skills/<13 surviving>/SKILL.md` | Modify | Bootstrap snippet updated to reach `bin/cerberus`; remove refs to `bin/review-gate*` helper files. |
+| `skills/<11 surviving>/SKILL.md` | Modify | Bootstrap snippet updated to reach `bin/cerberus`; remove refs to `bin/review-gate*` helper files. |
 | `hooks/hooks.json` | Modify | Remove TaskCompleted + TeammateIdle; rewrite SessionStart + Stop to inline `sh -c` lazy-build bootstrap. |
 | `hooks/codex-hooks.json` | Modify | Rewrite all three (SessionStart, UserPromptSubmit, Stop) to inline `sh -c` lazy-build bootstrap. |
 | `.claude-plugin/plugin.json` | Modify | Version → `2.0.0`. |
@@ -744,7 +744,7 @@ The canonical version of the **shared resolver body** lives at `prompts/host-neu
 - `bin/cerberus` is `.gitignore`d (D32); `git clone` consumers must run `make build` (or trigger lazy build via skill/hook).
 
 ### Risks
-- **Implementation effort underestimate** — v1 is 17 KLOC bash; equivalent Go is plausibly 6–10 KLOC, but the spec mandates feature parity across 13 skills, two hosts, four hook types, debate, and a multi-instance roster. Mitigation: phase A–H ordering keeps the v1 path active until v2 is GA; v1 marketplace pin per D11; Codex smoke test pulled forward into Phase B (not E) so host-contract surprises surface early.
+- **Implementation effort underestimate** — v1 is 17 KLOC bash; equivalent Go is plausibly 6–10 KLOC, but the spec mandates feature parity across 11 skills, two hosts, four hook types, debate, and a multi-instance roster. Mitigation: phase A–H ordering keeps the v1 path active until v2 is GA; v1 marketplace pin per D11; Codex smoke test pulled forward into Phase B (not E) so host-contract surprises surface early.
 - **Codex host quirks** — Codex hook contract is less mature than Claude's; v1's `bin/codex-stop-hook` (958 LOC) plus `bin/codex-session-init` (224 LOC) reflect accumulated edge-case fixes. Mitigation: port behavior, not bash; integration tests on `CERBERUS_HOST=codex` block merge; Phase B early Codex smoke test.
 - **Reviewer JSON parsing drift** — Upstream `claude`, `codex`, `gemini` CLI output formats may change. Mitigation: strict JSON schema validation at ingest; loud failure (non-zero exit), no silent repair; full `stdout.log` archived for post-mortem (simplification mandate).
 - **Binary size budget breach** — 30 MB stripped on darwin-arm64 (D35). Adding a heavy dependency (e.g., cobra, full YAML toolchain, embedded prompts ≥ 10 MB) could blow it. Mitigation: D18 stdlib-flag + D19 yaml.v3 keep dependencies minimal; CI assertion fails build if exceeded.
@@ -764,10 +764,10 @@ The canonical version of the **shared resolver body** lives at `prompts/host-neu
   - `internal/aggregate`: `majority`, `all`, `any`, blocking findings, raw verdict normalization (D44).
   - `internal/anonymize`: deterministic peer IDs and provider/model scrubbing; D30 falsifiability cases.
   - `internal/state` and `internal/telemetry`: schema versioning, expected paths, event JSONL append.
-- **Integration (`tests/integration/`)** — Cross-package end-to-end flows: spawn → wait → resolve; debate round 1→2 anonymization (with falsifiability test fixtures from D30); multi-instance roster spawning (`codex#1`, `codex#2`, `codex#3` mixed strategies); persona/strategy injection; default panel degradation on partial-availability host; custom roster rejection on missing CLI; Gemini policy enforcement (write tool blocked); generator flows for create-plan, create-spec, healthcheck, architecture-review.
+- **Integration (`tests/integration/`)** — Cross-package end-to-end flows: spawn → wait → resolve; debate round 1→2 anonymization (with falsifiability test fixtures from D30); multi-instance roster spawning (`codex#1`, `codex#2`, `codex#3` mixed strategies); persona/strategy injection; default panel degradation on partial-availability host; custom roster rejection on missing CLI; Gemini policy enforcement (write tool blocked); generator flows for create-plan and create-spec.
 - **Reviewer prompt size round-trip (D46)** — A `tests/integration/reviewer_largeprompt_test.go` case composes a ≥ 256 KB user prompt and pipes it through the reviewer subprocess (mock CLI) on darwin and linux; asserts no `E2BIG` / `argument list too long`, the mock receives the full prompt on stdin, the prompt's sha256 round-trips intact, and the canonical reviewer output JSON parses. Runs in the OS × host CI matrix.
 - **Hook bootstrap end-to-end** — A test case boots a fresh worktree (no `bin/cerberus`), invokes the hook command directly via `sh -c "$COMMAND"`, asserts the binary builds and the hook runs.
-- **Smoke (manual at GA)** — All 13 surviving skills on Claude and Codex with real `claude`/`codex`/`gemini` CLIs; verify launch checklist items in spec §4. Custom roster with at least three Codex models, one Gemini, and two Claude slots. `--debate` on Codex with mixed-provider and same-provider multi-instance panels.
+- **Smoke (manual at GA)** — All 11 surviving skills on Claude and Codex with real `claude`/`codex`/`gemini` CLIs; verify launch checklist items in spec §4. Custom roster with at least three Codex models, one Gemini, and two Claude slots. `--debate` on Codex with mixed-provider and same-provider multi-instance panels.
 - **Structural lint (CI)** — Zero `bin/*.sh`; no `task-completed-hook` / `teammate-idle-hook` references; `bin/cerberus` binary builds without Cgo on darwin × linux × amd64 × arm64; binary size ≤ 30 MB stripped on darwin-arm64 (D35).
 - **Regression** — Surviving skills no longer reference `bin/review-gate`, `bin/generate`, `bin/review-gate-models.sh`, `bin/cerberus-skill-env`, or `REVIEW_GATE_*`. Run-team references absent from `skills/`, `hooks/`, `agents/`, `templates/`, and docs except migration notes. `templates/tasks-template.md`, create-tasks, and review-tasks remain present.
 
@@ -863,7 +863,7 @@ func main() {
 | **R1** (single Go binary, zero `bin/*.sh`, lazy build) | Phase A scaffold + Phase F cleanup; structural lint in CI; D5 / D17 / D20 / D34 implement the bootstrap; binary-size assertion (D35). |
 | **R2** (multi-instance / multi-version roster) | Phase B `internal/roster/`; D15 finalized YAML schema; CLI `--roster`, `--reviewer` (D36), `--replace-slot`, `--agents` (D42); `--consensus` (D43). |
 | **R3** (unified debate path) | Phase C; `internal/orchestrator/` extension; `internal/aggregate/`, `internal/anonymize/`, and `internal/state/` (for `gate-state.json` I/O) are single sources of truth. R3's grep test bans duplicate DEFINITIONS outside those packages, but explicitly allows imports from `internal/orchestrator` and `*_test.go` files. |
-| **R4** (Codex first-class) | Phase E `internal/hook/`; 13 surviving skills cross-host parity; D13/D39 default-roster degradation; Phase B early Codex smoke. |
+| **R4** (Codex first-class) | Phase E `internal/hook/`; 11 surviving skills cross-host parity; D13/D39 default-roster degradation; Phase B early Codex smoke. |
 | **R5** (strategies + personas) | Phase B `internal/prompts/`; on-disk Markdown read at runtime. |
 | **R6** (CI matrix) | Phase G `.github/workflows/ci.yml` + structural lint + mock CLIs (D22, D31) + binary-size assertion (D35). |
 | **R7** (env contract) | Phase A `internal/config/`; `CLAUDE_PLUGIN_ROOT` fallback for `CERBERUS_ROOT`. |

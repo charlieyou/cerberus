@@ -57,8 +57,8 @@ func TestCleanupInvariants(t *testing.T) {
 
 	t.Run("surviving skills reference cerberus binary only", func(t *testing.T) {
 		skills := skillMarkdownFiles(t, repoRoot)
-		if len(skills) != 13 {
-			t.Fatalf("found %d surviving SKILL.md files, want 13: %v", len(skills), skills)
+		if len(skills) != 11 {
+			t.Fatalf("found %d surviving SKILL.md files, want 11: %v", len(skills), skills)
 		}
 		for _, rel := range skills {
 			data, err := os.ReadFile(filepath.Join(repoRoot, rel))

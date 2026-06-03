@@ -57,7 +57,7 @@ plan_link: docs/2026-04-25-debate-plan.md#L142-L143
 - `bin/review-gate` (Exists) — add `--debate` and `--debate-seed N` to the spawn `case` block (existing flag-parsing block, lines 2128-2202) and to each of the four `spawn-*-review` named-subcommand wrappers; add the bare-spawn `--type` whitelist preflight (R10) that rejects any `--type` outside `{code, plan, spec, epic-verify}` with exit code 2 before any model is invoked; add the `<2 active reviewers + --debate` hard-error preflight; wire `--debate-seed N` as a no-op pass-through. At end of this task, `--debate` accepted with ≥2 reviewers must fall through to the existing detached-spawn path (no debate behavior yet).
 - `bin/review-gate-models.sh` (Exists) — `spawn_reviewer` gains an OPTIONAL output-directory parameter (additive only). Default behavior (no override) writes to `$REVIEWS_DIR` exactly as today; non-debate invocations must remain byte-identical (asserted by the byte-parity test below).
 - `bin/tests/test-debate-preflight.sh` (New) — preflight tests:
-  - Whitelist rejection: `bin/review-gate spawn --type X --debate` for `X ∈ {healthcheck, architecture-review, create-tasks, manual, auto}` → exit 2, stderr names X and the four allowed values, no model invoked.
+  - Whitelist rejection: `bin/review-gate spawn --type X --debate` for `X ∈ {create-tasks, manual, auto}` → exit 2, stderr names X and the four allowed values, no model invoked.
   - Whitelist positive: same shape with `X ∈ {code, plan, spec, epic-verify}` → preflight passes (no model needed for the preflight test; just check exit-code path).
   - <2 reviewers hard error: `--debate` with one or zero available reviewers → non-zero exit, clear error, no model invoked.
   - Generator slash command (`/cerberus:create-spec --debate` etc.) — assert either silent ignore OR downstream fail at `bin/generate`; both acceptable per R10 v1 commitment.
@@ -96,7 +96,7 @@ Make `--debate` and `--debate-seed N` accepted CLI flags on the five invocation 
 - `bash bin/tests/test-debate-byte-parity.sh` → all assertions pass against `pre-debate-baseline/` fixtures.
 - `bash bin/tests/test-debate-end-to-end.sh` → at least one assertion fails (intended; the test marks this as the "red" state for the integration-path-test).
 - Manual: `bin/review-gate spawn --type code --debate` with the existing test harness → preflight passes, falls through to existing detached path, no aggregate.json written, exit 0 if ≥2 reviewers (or exit code per existing spawn convention).
-- Manual: `bin/review-gate spawn --type healthcheck --debate` → exit 2, stderr names `healthcheck` and the four allowed values; no model invoked.
+- Manual: `bin/review-gate spawn --type create-tasks --debate` → exit 2, stderr names `create-tasks` and the four allowed values; no model invoked.
 - Manual: `bin/review-gate spawn-code-review --debate-seed 42` (without `--debate`) → run completes, captured artifacts byte-identical to a run with the same args minus `--debate-seed 42`.
 - **Negative case test:** `bin/review-gate spawn --type auto --debate` → preflight rejects with exit 2 and a clear error (covers "auto" auto-detection-rejection edge case from spec).
 
@@ -907,7 +907,7 @@ T012 ──→ T013 (Phase F.3 README + --help)
 | Acceptance Criterion | Primary Task | Verified |
 |----------------------|--------------|----------|
 | AC-FlagAccept: `--debate` / `--debate-seed N` accepted on bare spawn + 4 named subcommands; `--debate-seed N` no-op preserves byte-parity when `--debate` absent (R9) | T002 | [ ] |
-| AC-PreflightReject: Bare-spawn whitelist rejection (4 allowed types accept; healthcheck/architecture-review/create-tasks/manual/auto reject) + <2 reviewers hard error before model invocation (R10) | T002 | [ ] |
+| AC-PreflightReject: Bare-spawn whitelist rejection (4 allowed types accept; create-tasks/manual/auto reject) + <2 reviewers hard error before model invocation (R10) | T002 | [ ] |
 | AC-Skeleton: spawn_reviewer accepts optional output-dir; non-debate behavior byte-identical; integration-path test fails for intended reason (no debate behavior yet) | T002 | [ ] |
 | AC-AssetsExist: prompts/strategies/{confidence-anchors, verification-first, falsification-first, decompose}.md exist with anchored content | T003 | [ ] |
 | AC-AnchorByteEqualToSpec: prompts/strategies/confidence-anchors.md byte-identical to spec R2 fenced literal | T003 | [ ] |

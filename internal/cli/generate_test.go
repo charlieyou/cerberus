@@ -25,18 +25,27 @@ func TestGenerateSubcommandRejectsMissingArgs(t *testing.T) {
 }
 
 func TestGenerateSubcommandRejectsInvalidType(t *testing.T) {
-	var stdout, stderr bytes.Buffer
+	for _, invalidType := range []string{"bogus", "healthcheck", "architecture-review"} {
+		t.Run(invalidType, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
 
-	code := run([]string{"generate", t.TempDir(), "--type", "bogus", "prompt"}, &stdout, &stderr)
+			code := run([]string{"generate", t.TempDir(), "--type", invalidType, "prompt"}, &stdout, &stderr)
 
-	if code != 2 {
-		t.Fatalf("run(generate) exit code = %d, want 2; stderr: %s", code, stderr.String())
-	}
-	got := stderr.String()
-	for _, want := range []string{"create-plan", "create-spec", "healthcheck", "architecture-review"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("run(generate) stderr = %q, want valid type %q", got, want)
-		}
+			if code != 2 {
+				t.Fatalf("run(generate) exit code = %d, want 2; stderr: %s", code, stderr.String())
+			}
+			got := stderr.String()
+			for _, want := range []string{"create-plan", "create-spec"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("run(generate) stderr = %q, want valid type %q", got, want)
+				}
+			}
+			for _, removed := range []string{"healthcheck", "architecture-review"} {
+				if strings.Contains(got, removed) {
+					t.Fatalf("run(generate) stderr = %q, must not advertise removed type %q", got, removed)
+				}
+			}
+		})
 	}
 }
 
@@ -98,23 +107,8 @@ func TestGenerateSubcommandRejectsMissingPromptInput(t *testing.T) {
 	if !strings.Contains(stderr.String(), "one of --prompt-file, --focus, or prompt text is required") {
 		t.Fatalf("run(generate) stderr = %q, want missing prompt input message", stderr.String())
 	}
-}
-
-func TestGenerateSubcommandDefaultsPromptForReviewSkills(t *testing.T) {
-	tests := []string{"architecture-review", "healthcheck"}
-	for _, generatorType := range tests {
-		t.Run(generatorType, func(t *testing.T) {
-			opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", generatorType, "--mode", "fast"}, &bytes.Buffer{})
-			if err != nil {
-				t.Fatalf("parseGenerateFlags() error = %v", err)
-			}
-			if opts.Prompt == "" {
-				t.Fatal("Prompt is empty, want default prompt")
-			}
-			if opts.Focus != "" {
-				t.Fatalf("Focus = %q, want empty", opts.Focus)
-			}
-		})
+	if strings.Contains(stderr.String(), "healthcheck") || strings.Contains(stderr.String(), "architecture-review") {
+		t.Fatalf("run(generate) stderr = %q, must not advertise removed generator types", stderr.String())
 	}
 }
 
@@ -247,7 +241,7 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 }
 
 func TestGenerateSubcommandFocusBecomesPrompt(t *testing.T) {
-	opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", "healthcheck", "--focus", "foo bar"}, &bytes.Buffer{})
+	opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", "create-spec", "--focus", "foo bar"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("parseGenerateFlags() error = %v", err)
 	}
@@ -260,7 +254,7 @@ func TestGenerateSubcommandFocusBecomesPrompt(t *testing.T) {
 }
 
 func TestGenerateSubcommandTrailingArgsBecomePrompt(t *testing.T) {
-	opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", "healthcheck", "focus", "on", "errors"}, &bytes.Buffer{})
+	opts, err := parseGenerateFlags([]string{t.TempDir(), "--type", "create-plan", "focus", "on", "errors"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("parseGenerateFlags() error = %v", err)
 	}

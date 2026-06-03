@@ -5,7 +5,7 @@ Three-headed guardian of code quality.
 Cerberus is a plugin and local Go binary that asks multiple coding agents to
 review the same thing, then turns their answers into a quality gate. Use it when
 you want a second, third, or fourth opinion before shipping code, plans, specs,
-task breakdowns, architecture changes, or an open-ended technical decision.
+task breakdowns, or an open-ended technical decision.
 
 ![Cerberus](cerberus.png)
 
@@ -34,7 +34,6 @@ The project deliberately keeps the runtime small: one Go binary,
 | Review a plan or spec | `/cerberus:review-plan docs/plan.md` or `/cerberus:review-spec docs/spec.md` |
 | Verify an epic | `/cerberus:verify-epic docs/epic.md` |
 | Generate a spec or plan | `/cerberus:create-spec` or `/cerberus:create-plan` |
-| Run a broader codebase check | `/cerberus:healthcheck` or `/cerberus:architecture-review` |
 | Inspect or clear the current gate | `/cerberus:status` or `/cerberus:clear-gate` |
 
 Add `--debate` to review and ask commands when you want a multi-round panel
@@ -50,8 +49,7 @@ Use Cerberus at whichever point you need independent pressure on the work:
   `/cerberus:review-plan`, or `/cerberus:review-tasks`.
 - **Gate implementation changes**: `/cerberus:review-code`, usually after the
   local tests for the change pass.
-- **Get broader judgment**: `/cerberus:ask`, `/cerberus:healthcheck`, or
-  `/cerberus:architecture-review`.
+- **Get broader judgment**: `/cerberus:ask`.
 
 ## Requirements
 
@@ -218,8 +216,6 @@ Cerberus is designed for one active Cerberus review per project at a time.
 /cerberus:create-spec "Add team audit logs"
 /cerberus:create-plan --from-spec docs/spec.md
 /cerberus:create-tasks --beads --from-plan docs/plan.md
-/cerberus:healthcheck "focus on persistence"
-/cerberus:architecture-review
 ```
 
 ### Shared review flags
@@ -369,7 +365,7 @@ Important direct subcommands:
 | `wait` | Poll a gate until it resolves or times out. |
 | `status` / `check` | Print active gate status. |
 | `resolve` | Mark the active gate resolved. |
-| `generate` | Produce multi-model drafts for specs, plans, healthchecks, or architecture review. |
+| `generate` | Produce multi-model drafts for specs or plans. |
 | `hook` | Entry point for host lifecycle hooks. |
 
 ## Environment contract

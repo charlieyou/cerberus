@@ -142,7 +142,7 @@ func TestGenerateRunWritesRawJSONForParseableProviderOutput(t *testing.T) {
 func TestRunPartialFailureReturnsNilAndWritesFailureOutputs(t *testing.T) {
 	root := t.TempDir()
 	writeGeneratorPolicy(t, root)
-	writeGeneratePrompt(t, root, "prompts/generators/healthcheck.md", "healthcheck generator")
+	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	binDir := t.TempDir()
 	writeMockProvider(t, binDir, "claude", "")
@@ -154,12 +154,13 @@ func TestRunPartialFailureReturnsNilAndWritesFailureOutputs(t *testing.T) {
 	var stderr bytes.Buffer
 
 	err := Run(context.Background(), Options{
-		OutputDir: outputDir,
-		Type:      "healthcheck",
-		Mode:      "smart",
-		Prompt:    "fixture prompt",
-		Root:      root,
-		Stderr:    &stderr,
+		OutputDir:     outputDir,
+		Type:          "create-plan",
+		Mode:          "smart",
+		Prompt:        "fixture prompt",
+		Root:          root,
+		Stderr:        &stderr,
+		SkipInterview: true,
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil for partial failure", err)
@@ -193,7 +194,7 @@ func TestRunPartialFailureReturnsNilAndWritesFailureOutputs(t *testing.T) {
 func TestRunAllFailureReturnsErrorAndWritesFailureOutputs(t *testing.T) {
 	root := t.TempDir()
 	writeGeneratorPolicy(t, root)
-	writeGeneratePrompt(t, root, "prompts/generators/healthcheck.md", "healthcheck generator")
+	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	binDir := t.TempDir()
 	for _, provider := range []string{"claude", "codex", "gemini"} {
@@ -205,12 +206,13 @@ func TestRunAllFailureReturnsErrorAndWritesFailureOutputs(t *testing.T) {
 	var stderr bytes.Buffer
 
 	err := Run(context.Background(), Options{
-		OutputDir: outputDir,
-		Type:      "healthcheck",
-		Mode:      "smart",
-		Prompt:    "fixture prompt",
-		Root:      root,
-		Stderr:    &stderr,
+		OutputDir:     outputDir,
+		Type:          "create-plan",
+		Mode:          "smart",
+		Prompt:        "fixture prompt",
+		Root:          root,
+		Stderr:        &stderr,
+		SkipInterview: true,
 	})
 	if err == nil {
 		t.Fatal("Run() error = nil, want all-provider failure")

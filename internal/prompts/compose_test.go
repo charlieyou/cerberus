@@ -165,23 +165,6 @@ func TestComposeGeneratorSkipInterviewChangesPrompt(t *testing.T) {
 	}
 }
 
-func TestComposeGeneratorHealthcheckDoesNotUseInterview(t *testing.T) {
-	root := t.TempDir()
-	writePrompt(t, root, "prompts/interview-engine.md", "interview engine")
-	writePrompt(t, root, "prompts/generators/healthcheck.md", "healthcheck generator")
-
-	system, err := ComposeGeneratorWithOptionsFromRoot(root, "gemini", "healthcheck", "max", false)
-	if err != nil {
-		t.Fatalf("ComposeGeneratorFromRoot() error = %v", err)
-	}
-	if strings.Contains(system, "interview engine") {
-		t.Fatalf("healthcheck system prompt = %q, want no interview prompt", system)
-	}
-	if !strings.Contains(system, "Cerberus generate mode: max.") {
-		t.Fatalf("healthcheck system prompt = %q, want mode", system)
-	}
-}
-
 func writePrompt(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, rel)

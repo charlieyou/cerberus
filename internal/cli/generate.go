@@ -13,7 +13,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/generate"
 )
 
-const generateUsage = "usage: cerberus generate <output-dir> --type <create-plan|create-spec|healthcheck|architecture-review> [--mode <fast|smart|max>] [--prompt-file <path>|--focus <text>|prompt text...]"
+const generateUsage = "usage: cerberus generate <output-dir> --type <create-plan|create-spec> [--mode <fast|smart|max>] [--prompt-file <path>|--focus <text>|prompt text...]"
 
 type generateUsageError struct {
 	err error
@@ -64,7 +64,7 @@ func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
 		return generate.Options{}, usagef("%w", err)
 	}
 	if !validGenerateType(opts.Type) {
-		return generate.Options{}, usagef("--type must be one of create-plan, create-spec, healthcheck, architecture-review")
+		return generate.Options{}, usagef("--type must be one of create-plan, create-spec")
 	}
 	if !validGenerateMode(opts.Mode) {
 		return generate.Options{}, usagef("--mode must be one of fast, smart, max")
@@ -85,11 +85,7 @@ func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
 	case fs.NArg() > 0:
 		opts.Prompt = strings.Join(fs.Args(), " ")
 	default:
-		defaultPrompt, ok := defaultGeneratePrompt(opts.Type)
-		if !ok {
-			return generate.Options{}, usagef("one of --prompt-file, --focus, or prompt text is required")
-		}
-		opts.Prompt = defaultPrompt
+		return generate.Options{}, usagef("one of --prompt-file, --focus, or prompt text is required")
 	}
 	return opts, nil
 }
@@ -100,7 +96,7 @@ func usagef(format string, args ...any) error {
 
 func validGenerateType(value string) bool {
 	switch value {
-	case "create-plan", "create-spec", "healthcheck", "architecture-review":
+	case "create-plan", "create-spec":
 		return true
 	default:
 		return false
@@ -113,17 +109,6 @@ func validGenerateMode(value string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func defaultGeneratePrompt(generatorType string) (string, bool) {
-	switch generatorType {
-	case "architecture-review":
-		return "Review the codebase architecture for high-leverage design improvements and refactors.", true
-	case "healthcheck":
-		return "Run a broad code health check for correctness, maintainability, and implementation risks.", true
-	default:
-		return "", false
 	}
 }
 

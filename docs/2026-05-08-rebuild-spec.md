@@ -23,7 +23,7 @@ A clean Go core fixes the complexity ceiling, makes debate native, and lets Code
 
 ### Simplification mandate
 
-v2 is a clean rewrite, NOT a v1 port. The same user-visible functionality (13 surviving skills, `--debate`, `--mode`, `--max-rounds`, multi-instance roster, Stop-hook gating, dual-host plugin packaging) ships, but v1's fault-tolerance accretions — JSON output repair, mid-debate degradation paths, hook fail-open semantics, gate-state migration, byte-parity guarantees, BSD/GNU portability gymnastics, env-var alias chains — are NOT carried forward in v2.0 GA. Errors surface loudly (log + non-zero exit). Future iterations rebuild fault tolerance incrementally as real failure modes emerge.
+v2 is a clean rewrite, NOT a v1 port. The same user-visible functionality (11 surviving skills, `--debate`, `--mode`, `--max-rounds`, multi-instance roster, Stop-hook gating, dual-host plugin packaging) ships, but v1's fault-tolerance accretions — JSON output repair, mid-debate degradation paths, hook fail-open semantics, gate-state migration, byte-parity guarantees, BSD/GNU portability gymnastics, env-var alias chains — are NOT carried forward in v2.0 GA. Errors surface loudly (log + non-zero exit). Future iterations rebuild fault tolerance incrementally as real failure modes emerge.
 
 This is the binding design stance for the rest of the spec. Every R below is stated in its simplest form; do not infer additional fault-tolerance requirements from v1's behavior.
 
@@ -35,7 +35,7 @@ Ship **Cerberus v2**: a Go-based review/debate engine with one CLI binary, plugi
 
 | # | Metric | Threshold | Timeframe |
 |---|--------|-----------|-----------|
-| S1 | Skill parity between Claude and Codex | 13/13 surviving `/cerberus:*` skills work on both hosts (per D9 cascade; run-team removed) | by v2.0 GA |
+| S1 | Skill parity between Claude and Codex | 11/11 surviving `/cerberus:*` skills work on both hosts (per D9 cascade; run-team removed) | by v2.0 GA |
 | S2 | Roster expressiveness | A roster of `{codex×3 different models, gemini×1, claude×2 with distinct strategies}` can be defined without editing source and runs end-to-end | by v2.0 GA |
 | S3 | Bash footprint | Zero `bin/*.sh` files in the v2 plugin tree (per Decision D1). All user-facing workflows dispatch through `bin/cerberus`. Plugin manifests contain no shell references beyond the inline hook bootstrap command. | by v2.0 GA |
 | S4 | Debate code consolidation | Debate is preserved as the `--debate` opt-in flag (per Decision D2 — same surface as v1), but the implementation is unified: no duplication of state-machine, aggregation, or anonymization between debate and non-debate paths. | by v2.0 GA |
@@ -180,10 +180,10 @@ Multi-instance roster support (R2) extends to debate: a debate panel of `[codex#
 
 ### R4 — Codex CLI is a first-class plugin host
 
-**Requirement.** Per Decisions D6 + D9 (surgical run-team removal), the surviving 13 `/cerberus:*` skills MUST be available on Codex CLI with feature parity to Claude Code: `review-code`, `review-plan`, `review-spec`, `review-tasks`, `ask`, `status`, `clear-gate`, `healthcheck`, `architecture-review`, `verify-epic`, `create-spec`, `create-plan`, `create-tasks`. The Codex `SessionStart`, `UserPromptSubmit`, and `Stop` hooks are wired the same way Claude's `SessionStart` and `Stop` hooks are. `/cerberus:run-team` MUST be absent.
+**Requirement.** Per Decisions D6 + D9 (surgical run-team removal), the surviving 11 `/cerberus:*` skills MUST be available on Codex CLI with feature parity to Claude Code: `review-code`, `review-plan`, `review-spec`, `review-tasks`, `ask`, `status`, `clear-gate`, `verify-epic`, `create-spec`, `create-plan`, `create-tasks`. The Codex `SessionStart`, `UserPromptSubmit`, and `Stop` hooks are wired the same way Claude's `SessionStart` and `Stop` hooks are. `/cerberus:run-team` MUST be absent.
 
 **Verification.**
-- *Given* Codex CLI installed and the cerberus plugin enabled, *Then* exactly the 13 surviving skills are listed and `run-team` is not available.
+- *Given* Codex CLI installed and the cerberus plugin enabled, *Then* exactly the 11 surviving skills are listed and `run-team` is not available.
 - *Given* the same fixture artifact on Claude and Codex, *When* each surviving review skill is invoked, *Then* the final verdict, gate lifecycle, and telemetry shape are equivalent.
 - *Given* an active gate in Codex, *When* the Codex Stop hook runs, *Then* it blocks via the same poll-wait state machine as Claude's Stop hook.
 - *Given* a host where `claude` CLI is absent, *When* `/cerberus:review-code` is invoked with no roster flags, *Then* the panel reduces to `[codex, gemini]`, exactly one stderr warning is emitted, and the review proceeds.
@@ -281,7 +281,7 @@ On-disk prompt content (strategy and persona) MUST be read at run time so users 
 - Run a custom roster (`codex×3` different models).
 - Run debate on Codex CLI.
 - Confirm Gemini Policy Engine still blocks write tools in multi-instance Gemini panels (C5, R9).
-- Given a real Codex CLI session, when each surviving skill is invoked at least once, then all 13 skills execute or fail only for expected fixture reasons (R4, S1).
+- Given a real Codex CLI session, when each surviving skill is invoked at least once, then all 11 skills execute or fail only for expected fixture reasons (R4, S1).
 
 ### Instrumentation events
 
@@ -300,7 +300,7 @@ On-disk prompt content (strategy and persona) MUST be read at run time so users 
 - [ ] R1–R10 all verifiable
 - [ ] Zero `bin/*.sh` files in the v2 plugin tree (S3)
 - [ ] CI matrix (Claude × Codex × generic, darwin × linux) green (R6)
-- [x] Codex smoke test: all 13 surviving skills runnable (R4, S1)
+- [x] Codex smoke test: all 11 surviving skills runnable (R4, S1)
 - [ ] Multi-instance roster smoke tests (`codex×3` different models; `claude×2` different strategies) (R2, R5, S2)
 - [ ] Debate smoke test covers mixed-provider and same-provider multi-instance panels (R3, R9)
 - [ ] 1-reviewer plus `--debate` refuses at preflight (D7)
