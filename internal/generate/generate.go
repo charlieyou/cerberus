@@ -150,13 +150,21 @@ func runGeneratorProvider(ctx context.Context, root string, opts Options, provid
 	if err != nil {
 		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
 	}
+	draftText, err := extractDraftText(provider.name, draft)
+	if err != nil {
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+	}
+	if len(bytes.TrimSpace(draftText)) == 0 {
+		err := fmt.Errorf("generator %s produced empty draft", provider.name)
+		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+	}
 	stats.Tokens = parsedStats.Tokens
 	stats.CostUSD = parsedStats.CostUSD
 	stats.ExitCode = 0
 	endedAt := time.Now().UTC()
 	stats.EndedAt = endedAt
 	stats.TimeToFinishMs = endedAt.Sub(startedAt).Milliseconds()
-	if err := WriteSuccess(opts.OutputDir, provider.name, draft, rawJSON); err != nil {
+	if err := WriteSuccess(opts.OutputDir, provider.name, draftText, rawJSON); err != nil {
 		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
 	}
 	if err := WriteStats(opts.OutputDir, provider.name, stats); err != nil {
