@@ -115,7 +115,7 @@ func TestStartSinglePassDefaultsPostReviewerModelForSelectedProvider(t *testing.
 	if err != nil {
 		t.Fatalf("StartSinglePass() error = %v", err)
 	}
-	if started.Params.PostReviewer.Provider != "claude" || started.Params.PostReviewer.Model != "claude-opus-4-7" || started.Params.PostReviewer.Mode != "fast" {
+	if started.Params.PostReviewer.Provider != "claude" || started.Params.PostReviewer.Model != "opus" || started.Params.PostReviewer.Mode != "fast" {
 		t.Fatalf("post reviewer = %#v, want claude provider default model and fast mode", started.Params.PostReviewer)
 	}
 }

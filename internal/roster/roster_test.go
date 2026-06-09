@@ -45,7 +45,7 @@ func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "gemini#1"})
-	assertSlotModels(t, slots, []string{"claude-opus-4-7", "gpt-5.5", "gemini-3.1-pro-preview"})
+	assertSlotModels(t, slots, []string{"opus", "gpt-5.5", "gemini-3.1-pro-preview"})
 }
 
 func TestBuiltInDefaultPanelDebateRejectsZeroAvailableReviewersWithDebateMinimum(t *testing.T) {
@@ -286,7 +286,7 @@ func TestEnforceDebateMinimumRejectsZeroReviewers(t *testing.T) {
 func TestEnforceDebateMinimumAcceptsTwoReviewers(t *testing.T) {
 	err := EnforceDebateMinimum([]RosterSlot{
 		{Provider: "codex", Model: "gpt-5.5"},
-		{Provider: "claude", Model: "claude-opus-4-7"},
+		{Provider: "claude", Model: "opus"},
 	}, true)
 	if err != nil {
 		t.Fatalf("EnforceDebateMinimum() error = %v, want nil", err)
@@ -331,7 +331,7 @@ func TestInstanceIDAssignmentWalksListByProvider(t *testing.T) {
 		"gemini:gemini-3.1-pro:",
 		"codex:gpt-5.5:",
 		"gemini:gemini-3.1-flash:",
-		"claude:claude-opus-4-7:",
+		"claude:opus:",
 		"codex:gpt-5.4:",
 	})
 

@@ -57,8 +57,11 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
 					t.Fatalf("claude argv = %q, want system prompt flag", args)
 				}
-				if !strings.Contains(args, "--model\nmodel-name") {
-					t.Fatalf("claude argv = %q, want model flag", args)
+				if !strings.Contains(args, "--model\nfable") {
+					t.Fatalf("claude argv = %q, want max-mode model flag", args)
+				}
+				if strings.Contains(args, "--model\nmodel-name") {
+					t.Fatalf("claude argv = %q, want fable to override configured model in max mode", args)
 				}
 			}
 			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name") {

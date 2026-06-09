@@ -41,7 +41,7 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	if gate.RosterID != "agents" {
 		t.Fatalf("gate roster_id = %q, want agents", gate.RosterID)
 	}
-	assertRecordedModel(t, "claude", "claude-opus-4-7")
+	assertRecordedModel(t, "claude", "opus")
 	assertRecordedModel(t, "codex", "gpt-5.5")
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }
@@ -101,7 +101,7 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 	if gate.RosterID != "default" {
 		t.Fatalf("gate roster_id = %q, want default", gate.RosterID)
 	}
-	assertRecordedModel(t, "claude", "claude-opus-4-7")
+	assertRecordedModel(t, "claude", "opus")
 	assertRecordedModel(t, "codex", "gpt-5.5")
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }

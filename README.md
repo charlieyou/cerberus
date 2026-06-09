@@ -266,7 +266,7 @@ rosters:
   default:
     reviewers:
       - provider: claude
-        model: claude-opus-4-7
+        model: opus
       - provider: codex
         model: gpt-5.5
         strategy: verification-first
@@ -299,7 +299,7 @@ rosters:
         model: gpt-5.3-codex
         strategy: decompose
       - provider: claude
-        model: claude-opus-4-7
+        model: opus
       - provider: gemini
         model: gemini-3.1-pro-preview
 ```

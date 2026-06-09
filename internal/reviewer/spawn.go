@@ -342,7 +342,7 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 		outputFormat := firstNonEmpty(invocation.ClaudeOutputFormat, "json")
 		args = []string{"--print", "--output-format", outputFormat}
 		if invocation.ClaudeModelFlag {
-			args = append(args, "--model", invocation.Model)
+			args = append(args, "--model", effectiveProviderModel(invocation))
 		}
 		args = append(args, "--append-system-prompt", string(system))
 	case "codex":
@@ -365,6 +365,13 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, err
 		command.Env = append(os.Environ(), "CERBERUS_MOCK_INSTANCE_ID="+invocation.InstanceID)
 	}
 	return command, nil
+}
+
+func effectiveProviderModel(invocation ProviderInvocation) string {
+	if invocation.Provider == "claude" && invocation.Mode == "max" {
+		return config.ClaudeMaxModeModel
+	}
+	return invocation.Model
 }
 
 func systemPromptWithMode(system []byte, mode string) []byte {
