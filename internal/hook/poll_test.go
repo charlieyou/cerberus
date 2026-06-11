@@ -57,6 +57,54 @@ func TestPollGateStateReturnsErrorAfterMaxWait(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxWaitForGateUsesOneHourForMaxMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gate-state.json")
+	if err := state.WriteGateState(path, &state.GateState{Status: state.StatusPending, Mode: "max"}); err != nil {
+		t.Fatalf("seed max-mode gate: %v", err)
+	}
+
+	got := defaultMaxWaitForGate(path)
+	if want := MaxModeWaitSeconds * time.Second; got != want {
+		t.Fatalf("defaultMaxWaitForGate() = %s, want %s", got, want)
+	}
+}
+
+func TestPollGateStateExplicitMaxWaitOverridesMaxModeDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gate-state.json")
+	if err := state.WriteGateState(path, &state.GateState{Status: state.StatusPending, Mode: "max"}); err != nil {
+		t.Fatalf("seed max-mode gate: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- PollGateState(path, 5*time.Millisecond, 20*time.Millisecond)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("PollGateState() error = nil, want explicit timeout")
+		}
+		if !strings.Contains(err.Error(), "after 20ms") {
+			t.Fatalf("PollGateState() error = %q, want explicit 20ms timeout", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("PollGateState() did not honor explicit max wait for max-mode gate")
+	}
+}
+
+func TestDefaultMaxWaitForGateKeepsDefaultForNonMaxMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gate-state.json")
+	if err := state.WriteGateState(path, &state.GateState{Status: state.StatusPending, Mode: "smart"}); err != nil {
+		t.Fatalf("seed smart-mode gate: %v", err)
+	}
+
+	got := defaultMaxWaitForGate(path)
+	if want := MaxWaitSeconds * time.Second; got != want {
+		t.Fatalf("defaultMaxWaitForGate() = %s, want %s", got, want)
+	}
+}
+
 func TestPollGateStateRetriesTransientUnreadableState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gate-state.json")
 	if err := os.WriteFile(path, []byte(`{"status":`), 0o644); err != nil {

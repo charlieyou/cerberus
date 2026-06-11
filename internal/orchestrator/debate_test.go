@@ -101,6 +101,30 @@ func TestRunDebateRunsTwoRoundsAndWritesRoundTwoPeerBroadcast(t *testing.T) {
 	}
 }
 
+func TestStartDebateRecordsMaxModeForHookTimeout(t *testing.T) {
+	env := testEnv(t)
+	setMockPath(t)
+
+	started, err := (Orchestrator{Env: env}).StartDebate(Params{
+		Prompt: []byte("review this"),
+		Mode:   "max",
+		Reviewers: []ReviewerSlot{
+			{ID: "codex#1", Provider: "codex", Model: "stub", InstanceIndex: 1},
+			{ID: "codex#2", Provider: "codex", Model: "stub", InstanceIndex: 2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartDebate() error = %v", err)
+	}
+	if started.Params.Mode != "max" {
+		t.Fatalf("started mode = %q, want max", started.Params.Mode)
+	}
+	gate := readGate(t, env)
+	if gate.Mode != "max" {
+		t.Fatalf("gate mode = %q, want max", gate.Mode)
+	}
+}
+
 func TestStartDebateRejectsWhenExistingGateIsPending(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)

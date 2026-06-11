@@ -182,6 +182,7 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 		Status:           state.StatusPending,
 		Verdict:          nil,
 		CurrentIteration: 1,
+		Mode:             gateStateMode(mode),
 		MaxRounds:        maxRounds,
 		Debate:           false,
 		RosterID:         rosterID,
@@ -257,6 +258,13 @@ func acquireStartLock(runRoot, runKey string) (func(), error) {
 	}
 	_ = file.Close()
 	return func() { _ = os.Remove(path) }, nil
+}
+
+func gateStateMode(mode string) string {
+	if mode == "max" {
+		return mode
+	}
+	return ""
 }
 
 // RecordPreflightFailure records a pre-run validation failure when the CLI

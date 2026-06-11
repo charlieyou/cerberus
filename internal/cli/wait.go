@@ -13,6 +13,7 @@ func runWait(args []string, stdout, stderr io.Writer) int {
 	var jsonOut bool
 	var finalize bool
 	var timeoutSeconds int
+	var timeoutSet bool
 	var pollIntervalSeconds int
 	var sessionKey string
 	var sessionID string
@@ -21,7 +22,7 @@ func runWait(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.BoolVar(&jsonOut, "json", false, "print JSON")
 	fs.BoolVar(&finalize, "finalize", false, "reserved compatibility flag")
-	fs.IntVar(&timeoutSeconds, "timeout", int(hook.MaxWaitSeconds), "maximum seconds to wait")
+	fs.IntVar(&timeoutSeconds, "timeout", int(hook.MaxWaitSeconds), "maximum seconds to wait (default extends to 3600 for max-mode gates)")
 	fs.IntVar(&pollIntervalSeconds, "poll-interval", int(hook.PollIntervalSeconds), "poll interval in seconds")
 	fs.StringVar(&sessionKey, "session-key", "", "run key to inspect")
 	fs.StringVar(&sessionID, "session-id", "", "session id to inspect")
@@ -29,6 +30,11 @@ func runWait(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == "timeout" {
+			timeoutSet = true
+		}
+	})
 	_ = finalize
 	if timeoutSeconds < 0 {
 		fmt.Fprintln(stderr, "--timeout must be >= 0")
@@ -48,7 +54,11 @@ func runWait(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return printNoActiveStatus(stdout, jsonOut)
 	}
-	if err := hook.PollGateState(path, time.Duration(pollIntervalSeconds)*time.Second, time.Duration(timeoutSeconds)*time.Second); err != nil {
+	maxWait := time.Duration(timeoutSeconds) * time.Second
+	if !timeoutSet {
+		maxWait = 0
+	}
+	if err := hook.PollGateState(path, time.Duration(pollIntervalSeconds)*time.Second, maxWait); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

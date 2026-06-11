@@ -35,6 +35,7 @@ type GateState struct {
 	Verdict          *string    `json:"verdict"`
 	ResolutionReason string     `json:"resolution_reason,omitempty"`
 	CurrentIteration int        `json:"current_iteration"`
+	Mode             string     `json:"mode,omitempty"`
 	MaxRounds        int        `json:"max_rounds"`
 	Debate           bool       `json:"debate"`
 	RosterID         string     `json:"roster_id"`

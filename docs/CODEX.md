@@ -236,17 +236,18 @@ The first Cerberus invocation after clone, upgrade, or source change may spend
 time building `bin/cerberus`. The Codex hook manifest performs this lazy build
 inside the hook command before executing `cerberus hook ...`.
 
-D38 sets two separate budgets:
+Cerberus uses two Stop-hook budgets:
 
-- Codex Stop hook manifest timeout: `2100` seconds.
-- Internal Go-side Stop wait limit: `MAX_WAIT_SECONDS = 1800` seconds.
+- Codex Stop hook manifest timeout: `3900` seconds.
+- Internal Go-side Stop wait limit: `MAX_WAIT_SECONDS = 1800` seconds by
+  default, or `3600` seconds for gates started with `--mode max`.
 
-The 300-second difference is reserved for lazy build time, cleanup, stderr
-messages, and host overhead before Codex enforces its outer timeout. A clean
+For `--mode max`, the 300-second difference is reserved for lazy build time,
+cleanup, stderr messages, and host overhead before Codex enforces its outer
+timeout. Non-max gates still use the shorter 1800-second internal wait. A clean
 first build usually consumes seconds to tens of seconds, but that time still
-comes out of the `2100` second Stop hook budget. Steady-state hooks skip the
-build when `make -q -C "$CERBERUS_ROOT" build` reports that `bin/cerberus` is
-current.
+comes out of the Stop hook manifest budget. Steady-state hooks skip the build
+when `make -q -C "$CERBERUS_ROOT" build` reports that `bin/cerberus` is current.
 
 Operationally:
 
@@ -308,4 +309,4 @@ First hook invocation is slow
 
 Look for `cerberus: building... (this happens once after clone or upgrade)` on
 stderr. That build time is expected after clone, upgrade, or source edits and
-counts against the D38 Stop hook timeout budget.
+counts against the Stop hook timeout budget.

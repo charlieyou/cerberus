@@ -552,6 +552,9 @@ func TestRunSinglePassUsesRosterDefaultsWhenParamsOmitted(t *testing.T) {
 	if gate.MaxRounds != 3 {
 		t.Fatalf("gate max_rounds = %d, want 3", gate.MaxRounds)
 	}
+	if gate.Mode != "max" {
+		t.Fatalf("gate mode = %q, want max", gate.Mode)
+	}
 	runTelemetry := readRunTelemetry(t, env)
 	if got, want := runTelemetry["mode"], "max"; got != want {
 		t.Fatalf("run telemetry mode = %v, want %q", got, want)
@@ -579,6 +582,9 @@ func TestRunSinglePassCLIParamsOverrideRosterDefaults(t *testing.T) {
 	gate := readGate(t, env)
 	if gate.MaxRounds != 1 {
 		t.Fatalf("gate max_rounds = %d, want 1", gate.MaxRounds)
+	}
+	if gate.Mode != "" {
+		t.Fatalf("gate mode = %q, want empty for non-max", gate.Mode)
 	}
 	runTelemetry := readRunTelemetry(t, env)
 	if got, want := runTelemetry["mode"], "smart"; got != want {

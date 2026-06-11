@@ -95,7 +95,7 @@ The existing-user case keeps working: `/cerberus:review-code` with no flags spaw
 | State | Trigger | Stop-hook behavior |
 |---|---|---|
 | **Empty** | No active gate | `cerberus status` reports "no active review"; Stop hook allows termination. |
-| **Pending** | Reviewers in flight | Stop hook blocks; polls `gate-state.json.status` every `POLL_INTERVAL_SECONDS` (default 3s) up to `MAX_WAIT_SECONDS` (default 1800s). |
+| **Pending** | Reviewers in flight | Stop hook blocks; polls `gate-state.json.status` every `POLL_INTERVAL_SECONDS` (default 3s) up to `MAX_WAIT_SECONDS` (default 1800s; 3600s for `--mode max`). |
 | **Resolved** | Consensus pass / max rounds auto-resolve / manual resolve | Stop hook allows termination. |
 
 A reviewer error is just a non-zero exit; v2 does not fail-open or invent a defensive `error` state.

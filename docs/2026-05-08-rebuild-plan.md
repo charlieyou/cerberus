@@ -91,7 +91,7 @@ Spec-binding decisions (D1–D13) are restated as authoritative inputs from `doc
 | **D35 — CI binary-size assertion: 30 MB stripped on darwin-arm64; 35 MB elsewhere** | Spec R1 sets a 30 MB cap on darwin-arm64; other GOOS/GOARCH combos run slightly larger. Hard fail in CI prevents accidental dependency bloat. | R1 edge case; D18 stdlib-flag rationale. | Risk: legitimate growth (e.g., embedded prompts) blocks a release. Process: bump cap in a Decision-Log row, reviewed at PR time. |
 | **D36 — CLI `--reviewer` grammar is `provider:model[:strategy]`; persona and per-slot mode are YAML-only in v2.0** | Avoids colon-escaping and path ambiguity in shell CLI flags. R2 requires inline reviewer override but only YAML must express persona/mode. | R2 spec text; CLI ergonomics. | Less inline expressiveness; users needing persona/mode create a roster file. Acceptable. |
 | **D37 — Hook commands read hook payload from stdin and do not rely on `"$@"` forwarding through `sh -c`** | Host hooks typically pass event data on stdin; `sh -c` argument forwarding is brittle, especially when shell quoting nests inside JSON. Go hook subcommands read `os.Stdin` directly and parse it as the host event payload. | Current hook manifests are command strings; v1 hooks consume host payloads on stdin. | Must verify Claude/Codex hook payload contracts in integration tests. The bootstrap `command` string still includes `"$@"` for any positional args the host injects, but Go hook code does not depend on them. |
-| **D38 — Internal Stop hook wait default is 1800 s; manifest timeout stays 2100 s** | Preserves v1's outer host budget while giving the Go hook a 5-minute cleanup/logging buffer before host hard-kills the process. Internal `MAX_WAIT_SECONDS` matches spec §2 default. | Spec §2 key-state table (MAX_WAIT_SECONDS=1800); v1 `hooks/hooks.json` and `hooks/codex-hooks.json` Stop entries (`"timeout": 2100`). | Long blocking window remains; documented and tested. |
+| **D38 — Internal Stop hook wait default is 1800 s; max-mode wait is 3600 s; manifest timeout is 3900 s** | Preserves the shorter default wait for fast/smart runs while giving `--mode max` up to one hour. The manifest keeps a 5-minute cleanup/logging buffer above the max-mode internal wait before the host hard-kills the process. | Spec §2 key-state table (MAX_WAIT_SECONDS=1800); `hooks/hooks.json` and `hooks/codex-hooks.json` Stop entries (`"timeout": 3900`). | Long blocking window remains for max mode; documented and tested. |
 | **D39 — Built-in default roster degrades on missing CLIs; YAML rosters (including a YAML roster named `default`) reject missing CLIs** | Keeps the no-flag existing-user flow forgiving when a host lacks one provider, while treating any user-authored roster file as explicit configuration that must be honored or rejected loudly. | Spec D13 default-roster degradation; spec D13 custom-roster rejection. | A user-defined roster named `default` is stricter than the built-in default; documented in README. |
 | **D40 — No embedded prompt fallback in v2.0 GA** | Keeps the binary small and makes the on-disk editability of `prompts/**/*.md` obvious. C4 allows embedding but requires disk to win when present. Disk-required is simpler. | C4 spec text; D18/D19 minimal-deps stance. | Installations missing prompt files fail loudly; embedding can return in v2.x if read-only-install environments emerge. |
 | **D41 — `create-tasks --agent-team` output is removed alongside run-team** | The agent-team output mode depends on removed `templates/team-tasks-template.md` and the removed `cerberus-task-completed-hook` / `agents/implementer.md` cascade. Beads, Linear, and TODO-style outputs survive. | D6/D9 removal cascade; current `templates/team-tasks-template.md` exists only for run-team. | Breaks users of that option; documented in README. |
@@ -174,7 +174,7 @@ The phases above are a logical ordering for the rewrite, not a release schedule.
 
 `cmd/cerberus/main.go` is a thin entry point that calls `internal/cli.Run(os.Args)`. `internal/cli` parses the leading subcommand, dispatches to a per-subcommand handler, and threads a `*config.Env` (resolved from `CERBERUS_*` env vars + flags) through every call. Spawn-* subcommands compose: `internal/host` resolves the host adapter; `internal/roster` loads and resolves the roster (file + CLI overrides); `internal/orchestrator` instantiates a Run, which fans out via `internal/reviewer` to one subprocess per slot, collects per-reviewer JSON, runs `internal/aggregate` for the verdict, and writes through `internal/state` (filesystem state tree) and `internal/telemetry` (event JSON). Debate is a method on the same orchestrator that loops the round runner with `internal/anonymize` interposed between rounds; it does NOT live in a separate package, satisfying R3's "one Go module" requirement.
 
-Hook subcommands (`cerberus hook claude-stop`, `codex-stop`, `claude-session-start`, `codex-session-start`, `codex-prompt-submit`) live under `internal/hook/` and are invoked by `internal/cli` after the same `*config.Env` resolution. The Stop hook runs a poll loop against `gate-state.json.status` until `resolved` or `MAX_WAIT_SECONDS`. Session-start and prompt-submit hooks initialize per-session state (transcript path, run key) so the next subcommand sees a consistent environment. The hook surface is host-aware but state-tree shape is host-neutral; this is what makes Codex a peer host (R4) rather than an adapter.
+Hook subcommands (`cerberus hook claude-stop`, `codex-stop`, `claude-session-start`, `codex-session-start`, `codex-prompt-submit`) live under `internal/hook/` and are invoked by `internal/cli` after the same `*config.Env` resolution. The Stop hook runs a poll loop against `gate-state.json.status` until `resolved` or the mode-aware Stop wait limit (`MAX_WAIT_SECONDS`, extended to one hour for `--mode max`). Session-start and prompt-submit hooks initialize per-session state (transcript path, run key) so the next subcommand sees a consistent environment. The hook surface is host-aware but state-tree shape is host-neutral; this is what makes Codex a peer host (R4) rather than an adapter.
 
 ### Module / Package Layout
 
@@ -251,6 +251,7 @@ type GateState struct {
     Status           string    `json:"status"` // pending | resolved
     Verdict          *string   `json:"verdict"` // pass | fail | requires_decision | nil
     CurrentIteration int       `json:"current_iteration"`
+    Mode             string    `json:"mode,omitempty"` // max when max-mode timeout applies
     MaxRounds        int       `json:"max_rounds"`
     Debate           bool      `json:"debate"`
     RosterID         string    `json:"roster_id"`
@@ -419,6 +420,7 @@ The exact provider CLI flag names are subject to validation against the upstream
   "status": "pending | resolved",
   "verdict": null | "pass" | "fail" | "requires_decision",
   "current_iteration": 1,
+  "mode": "max",
   "max_rounds": 3,
   "debate": false,
   "roster_id": "default",
@@ -584,7 +586,7 @@ exec "$bin" hook ${HOOK_NAME}
     "Stop": [{"hooks": [{
       "type": "command",
       "command": "sh -c 'root=\"${CERBERUS_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook claude-stop'",
-      "timeout": 2100
+      "timeout": 3900
     }]}]
   }
 }
@@ -606,7 +608,7 @@ exec "$bin" hook ${HOOK_NAME}
     "Stop": [{"hooks": [{
       "type": "command",
       "command": "sh -c 'root=\"${CERBERUS_ROOT:-${PLUGIN_ROOT:-}}\"; bin=\"$root/bin/cerberus\"; [ -n \"$root\" ] || { echo \"cerberus: plugin root not set\" >&2; exit 127; }; command -v make >/dev/null 2>&1 || { echo \"cerberus: make not found on PATH; install make and retry.\" >&2; exit 127; }; if ! make -q -C \"$root\" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo \"cerberus: Go >= 1.22 not found on PATH; install Go and retry.\" >&2; exit 127; }; echo \"cerberus: building... (this happens once after clone or upgrade)\" >&2; start=$(date +%s); make -C \"$root\" build >&2 || exit $?; end=$(date +%s); echo \"cerberus: build complete in $((end-start))s\" >&2; fi; exec \"$bin\" hook codex-stop'",
-      "timeout": 2100
+      "timeout": 3900
     }]}]
   }
 }
@@ -618,11 +620,11 @@ exec "$bin" hook ${HOOK_NAME}
 - `make` and `go` are checked separately. The `make` check runs unconditionally because we use `make -q` for staleness; the `go` check only runs when a rebuild is actually needed (avoids spurious `go not found` errors when the binary already exists).
 - Build duration is logged on stderr (D34); the build chatter from `make` itself is also redirected to stderr (`>&2`) so it doesn't pollute stdout that the host might parse as event data.
 - Hook payload (host event JSON) is read from stdin by Go hook code (D37); `"$@"` is intentionally NOT forwarded because it's brittle through `sh -c`.
-- Timeouts: Stop hooks keep v1's 2100 s budget (manifest `timeout`); the internal Go-side `MAX_WAIT_SECONDS` is 1800 s (D38), giving a 5-minute buffer for cleanup/logging before host hard-kill. SessionStart and UserPromptSubmit have no manifest timeout in v1; v2 preserves that.
+- Timeouts: Stop hooks use a 3900 s manifest `timeout`; the internal Go-side `MAX_WAIT_SECONDS` is 1800 s by default and 3600 s for `--mode max` (D38), giving max-mode runs a 5-minute buffer for cleanup/logging before host hard-kill. SessionStart and UserPromptSubmit have no manifest timeout in v1; v2 preserves that.
 
 **Concurrency caveat.** Two simultaneous hook invocations on a freshly cloned plugin both observe `make -q` reporting stale and both run `make build`. The second writer wins; the first invocation may fail once with `exec format error` or `text file busy`. Acceptable per D29 (no concurrency primitives in v2.0 GA); rare in practice; documented in README.
 
-**Hook timeout vs build time.** Stop-hook timeout is 2100 s. `make build` on a clean clone takes ~10–30 s (depends on Go module cache). Hook callers should expect the first invocation to be ~30 s slower than steady state. Documented in `docs/CODEX.md` and the v2 README.
+**Hook timeout vs build time.** Stop-hook manifest timeout is 3900 s. `make build` on a clean clone takes ~10–30 s (depends on Go module cache). Hook callers should expect the first invocation to be ~30 s slower than steady state. Documented in `docs/CODEX.md` and the v2 README.
 
 ### Lazy Build Trigger (D5 / D20 / D34)
 
@@ -727,7 +729,7 @@ The canonical version of the **shared resolver body** lives at `prompts/host-neu
 - **Concurrent runs in same project** — Two simultaneous `cerberus spawn-code-review` invocations may clobber each other's `gate-state.json`. v2.0 GA does not lock; emits a stderr warning if `gate-state.json` exists in `pending` state at spawn time. README documents single-active-run guidance (D29).
 - **Concurrent hook invocations on first build** — Two parallel `make build` runs may stomp on `bin/cerberus` mid-write; first invocation may fail once with `exec format error` / `text file busy`. Documented limitation; rare; acceptable per D29.
 - **Anonymization false positives** — Provider name appearing in a non-AI context (e.g., the identifier `claude_handler` in a code review finding) gets scrubbed to `<peer>_handler`. Accepted tradeoff per D30; falsifiability test in `internal/anonymize`.
-- **Hook timeout consumed by lazy build** — Stop hook timeout 2100 s; first invocation's `make build` consumes ~10–30 s. Internal Go-side `MAX_WAIT_SECONDS` is 1800 s (D38), giving a 5-minute buffer. Documented in CODEX.md.
+- **Hook timeout consumed by lazy build** — Stop hook manifest timeout 3900 s; first invocation's `make build` consumes ~10–30 s. Internal Go-side `MAX_WAIT_SECONDS` is 1800 s by default and 3600 s for `--mode max` (D38), giving max-mode runs a 5-minute buffer. Documented in CODEX.md.
 - **Stop hook exceeds internal wait** — Go hook exits non-zero before host manifest timeout; host timeout remains a hard outer bound (D38).
 - **Embedded prompts fallback** — v2.0 GA does NOT embed (D40); on-disk read is mandatory. Installations missing prompt files fail loudly. Embedding can return in v2.x.
 
@@ -748,7 +750,7 @@ The canonical version of the **shared resolver body** lives at `prompts/host-neu
 - **Codex host quirks** — Codex hook contract is less mature than Claude's; v1's `bin/codex-stop-hook` (958 LOC) plus `bin/codex-session-init` (224 LOC) reflect accumulated edge-case fixes. Mitigation: port behavior, not bash; integration tests on `CERBERUS_HOST=codex` block merge; Phase B early Codex smoke test.
 - **Reviewer JSON parsing drift** — Upstream `claude`, `codex`, `gemini` CLI output formats may change. Mitigation: strict JSON schema validation at ingest; loud failure (non-zero exit), no silent repair; full `stdout.log` archived for post-mortem (simplification mandate).
 - **Binary size budget breach** — 30 MB stripped on darwin-arm64 (D35). Adding a heavy dependency (e.g., cobra, full YAML toolchain, embedded prompts ≥ 10 MB) could blow it. Mitigation: D18 stdlib-flag + D19 yaml.v3 keep dependencies minimal; CI assertion fails build if exceeded.
-- **Hook timeout misconfiguration** — Stop hook timeout is 2100 s in v1; Codex SessionStart and UserPromptSubmit have no manifest timeout. Mitigation: copy v1 manifest timeouts verbatim into the new manifests; internal Go-side `MAX_WAIT_SECONDS` is 1800 s (D38) for cleanup buffer; documented in plan-phase Decision Log.
+- **Hook timeout misconfiguration** — Stop hook manifest timeout is 3900 s; Codex SessionStart and UserPromptSubmit have no manifest timeout. Mitigation: test manifest timeouts and keep the internal Go-side waits mode-aware (`MAX_WAIT_SECONDS` default 1800 s, max-mode 3600 s per D38); documented in plan-phase Decision Log.
 - **Anonymization completeness** — Free-text scrub (D30) is a heuristic; sophisticated linguistic identity leaks (writing-style fingerprints, citation patterns) are not addressed in v2.0. Mitigation: documented as a known v2.0 limitation; revisit if real users observe sycophancy in debate runs (referenced in TODO.md as v2.x candidate).
 - **Concurrent gate-state clobber** — Per D29. Mitigation: stderr warning at spawn time; README single-active-run guidance; revisit when real users hit it.
 - **Provider CLI flag drift** — Adapters assume specific flag names (per Reviewer Subprocess Contract section); upstream renames break the build (OQ-Plan-1). Mitigation: Phase B implementation validates flags against installed CLIs; flag changes recorded in a Decision-Log row.

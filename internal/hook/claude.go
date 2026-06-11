@@ -20,12 +20,12 @@ type claudePayload struct {
 }
 
 func HandleClaudeStop(stdinPayload []byte, env *config.Env) error {
-	_, err := handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	_, err := handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, 0)
 	return err
 }
 
 func HandleClaudeStopResponse(stdinPayload []byte, env *config.Env) (string, error) {
-	return handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	return handleClaudeStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, 0)
 }
 
 func handleClaudeStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) (string, error) {

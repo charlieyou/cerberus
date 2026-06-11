@@ -165,11 +165,11 @@ func assertStopTimeout(t *testing.T, path, event string, timeout *int) {
 		}
 		return
 	}
-	if timeout == nil || *timeout != 2100 {
+	if timeout == nil || *timeout != 3900 {
 		if timeout == nil {
-			t.Fatalf("%s Stop timeout missing, want 2100", path)
+			t.Fatalf("%s Stop timeout missing, want 3900", path)
 		}
-		t.Fatalf("%s Stop timeout = %d, want 2100", path, *timeout)
+		t.Fatalf("%s Stop timeout = %d, want 3900", path, *timeout)
 	}
 }
 

@@ -26,12 +26,12 @@ type codexPayload struct {
 }
 
 func HandleCodexStop(stdinPayload []byte, env *config.Env) error {
-	_, err := handleCodexStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	_, err := handleCodexStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, 0)
 	return err
 }
 
 func HandleCodexStopResponse(stdinPayload []byte, env *config.Env) (string, error) {
-	return handleCodexStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, MaxWaitSeconds*time.Second)
+	return handleCodexStopWithWait(stdinPayload, env, PollIntervalSeconds*time.Second, 0)
 }
 
 func handleCodexStopWithWait(stdinPayload []byte, env *config.Env, pollInterval, maxWait time.Duration) (string, error) {

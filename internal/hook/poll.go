@@ -14,6 +14,7 @@ import (
 const (
 	PollIntervalSeconds = 3
 	MaxWaitSeconds      = 1800
+	MaxModeWaitSeconds  = 3600
 )
 
 type PollResult struct {
@@ -37,7 +38,7 @@ func PollGateStateResult(path string, pollInterval, maxWait time.Duration) (*Pol
 		pollInterval = PollIntervalSeconds * time.Second
 	}
 	if maxWait <= 0 {
-		maxWait = MaxWaitSeconds * time.Second
+		maxWait = defaultMaxWaitForGate(path)
 	}
 
 	deadline := time.NewTimer(maxWait)
@@ -84,6 +85,15 @@ func PollGateStateResult(path string, pollInterval, maxWait time.Duration) (*Pol
 		case <-tick:
 		}
 	}
+}
+
+func defaultMaxWaitForGate(path string) time.Duration {
+	maxWait := MaxWaitSeconds * time.Second
+	gate, err := state.ReadGateState(path)
+	if err != nil || gate.Mode != "max" {
+		return maxWait
+	}
+	return MaxModeWaitSeconds * time.Second
 }
 
 func writeHookEvent(gatePath, eventName string, payload map[string]any) {

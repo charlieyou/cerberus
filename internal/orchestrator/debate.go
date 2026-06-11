@@ -153,6 +153,7 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		TranscriptPath:   resolvedEnv.TranscriptPath,
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
+		Mode:             gateStateMode(mode),
 		MaxRounds:        maxRounds,
 		Debate:           true,
 		RosterID:         rosterID,
