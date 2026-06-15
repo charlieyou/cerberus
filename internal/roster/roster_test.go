@@ -45,7 +45,7 @@ func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "gemini#1"})
-	assertSlotModels(t, slots, []string{"opus", "gpt-5.5", "gemini-3.1-pro-preview"})
+	assertSlotModels(t, slots, []string{"opus[1m]", "gpt-5.5", "gemini-3.1-pro-preview"})
 }
 
 func TestBuiltInDefaultPanelDebateRejectsZeroAvailableReviewersWithDebateMinimum(t *testing.T) {

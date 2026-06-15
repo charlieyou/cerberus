@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	DefaultClaudeModel = "opus"
+	DefaultClaudeModel = "opus[1m]"
 	ClaudeMaxModeModel = "fable"
 	DefaultCodexModel  = "gpt-5.5"
 	DefaultGeminiModel = "gemini-3.1-pro-preview"
