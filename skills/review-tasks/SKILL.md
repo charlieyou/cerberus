@@ -141,6 +141,7 @@ For task graphs with more than 10 tasks, partition local checks by epic, sub-epi
 7. **Graph Integrity**: Every task is reachable from `br ready` via dependency completions
 8. **Consistency & Fidelity**: Consistency Audit + Deviation Log + Requirement Snapshot are present; tasks do not rewrite plan requirements
 9. **No Followups on Close**: No task or epic is marked "needs-followup" or similar unresolved state
+10. **Premise Grounding (sampled)**: Sampled tasks check out against the actual repo — cited components/oracles exist and are reachable, acceptance checks are runnable at scale, no wiring/"make-green" task hides net-new construction, and claimed requirements are exercisable by an available input. (A PASS certifies internal consistency + sampled external grounding, NOT full external correctness.)
 
 **Verdict is FAIL if ANY blocking gate has issues. Attempt safe fixes and re-run validation; stop only under the PASS, max-iterations, or unfixable-plan conditions in the Iteration Loop.**
 
@@ -412,6 +413,20 @@ If these artifacts exist, load them and verify consistency with recomputed state
 5. **Rollup verification**:
    - Mentally simulate: "If I close T001, T002, T003... is the plan done?"
    - Flag any remaining plan work not captured
+
+### Phase 2b: Premise Grounding (external correctness — sampled)
+
+**Why**: The other phases mostly check *internal consistency* (tasks map to plan items, deps acyclic, sections present, sizes within limits). A task graph can be perfectly self-consistent and uniformly **wrong** because every task inherited a false premise from the plan. This phase samples tasks and checks them against the **actual repo/data**, not the plan's prose. It is the gate that catches "looked rigorous, was ungrounded."
+
+Take a representative sample — all foundation/skeleton/capstone tasks plus a spread of implementation tasks; for large graphs, ≥1 per subsystem and every `[system-wiring]`/"make-green" task — and verify:
+
+1. **Cited reality exists**: the files, symbols, APIs, and components a task says it will *reuse* actually exist and are reachable (exported/public). A "reuse X" that silently requires building X is a missing task → **BLOCKING**. (Exception: not a gap if an earlier task in this same graph builds X and the depending task has an explicit dependency on it — that's a legitimate forward reference.)
+2. **Runnable verification**: each task's Verification/ACs compare against a reference (oracle/baseline/golden/fixture) that exists and is computable at the task's scale within a test budget. An acceptance check that cannot actually be executed (intractable oracle, a reference that doesn't model the input) → **BLOCKING**; require a tractable substitute.
+3. **Build-vs-wire**: any wiring / "make the integration test green" / `[system-wiring]` task depends only on already-built components. If turning the test green requires net-new construction, that construction must be separate task(s) the wiring task blocks on → **BLOCKING**.
+4. **Requirement applicability**: hazards/requirements the tasks claim to cover are actually exercised by an available input/fixture. A requirement no fixture can trigger is untestable coverage → flag (**BLOCKING** if it is a claimed binding gate).
+5. **Scale/variation axes**: input-variation dimensions that need different code paths each have a task; one task does not silently cover materially different paths (e.g. small vs streaming-large, single- vs multi-tenant, identity vs non-identity transform).
+
+If the substrate cannot be inspected from the review environment, you **MUST NOT emit a bare PASS**: either FAIL, or label the verdict `PASS (GROUNDING_UNVERIFIED)` and list which premises went unchecked (mirrors the `FORMAT_ONLY` pattern — a caveated PASS is not a clean PASS and must not read as one). A clean PASS certifies internal consistency **+ sampled external grounding**, never full external correctness.
 
 ### Phase 3: Dependency Analysis
 
@@ -783,6 +798,10 @@ None
 | **Task mapping** | BLOCKING | Every task maps to plan item or justified as infra | Remove orphan tasks or add justification |
 | **AC ownership** | BLOCKING | Each AC has exactly one primary owner task | Reassign ownership |
 | **Consistency audit / requirement freeze** | BLOCKING | Requirements Snapshot, Consistency Audit, and Deviation Log are present; tasks preserve plan/spec requirements unless an approved deviation is logged | Add missing artifacts, rewrite tasks to match plan/spec, or log approved deviations |
+| **Premise grounding** (sampled) | BLOCKING | Cited files/symbols/components a sampled task reuses exist and are reachable, OR are built by an earlier in-graph task it depends on (not silently to-build) | Add the missing build task + dependency; re-slice |
+| **Runnable verification** | BLOCKING | Every acceptance check compares against a reference that exists and is computable at the task's scale (or a named tractable substitute) | Replace the unrunnable gate with a tractable reference |
+| **Build-before-wire** | BLOCKING | No wiring/"make-green"/`[system-wiring]` task depends on not-yet-built components | Split out the construction; add dependency |
+| **Requirement applicability** | BLOCKING when an emphasized hazard/requirement is exercised by no available input/fixture | Each emphasized hazard/requirement is exercised by an available input, or flagged untestable/vacuous | Add a triggering fixture, or drop/flag the requirement |
 | **File overlap deps** | BLOCKING | Tasks sharing files have explicit dependency | Add dependency |
 | **No task→ancestor epic deps** | BLOCKING | No task depends on its parent epic or any ancestor epic | Remove task→epic dependency; add same-epic task dependency or epic-to-epic dependency as appropriate |
 | **No cross-epic task deps** | BLOCKING | Task dependencies do not cross parent epic/sub-epic boundaries | Remove cross-epic task edge; add epic-to-epic dependency or reparent/re-slice tasks |

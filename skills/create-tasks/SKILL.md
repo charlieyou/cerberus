@@ -224,6 +224,14 @@ Before generating tasks, verify all referenced files:
    - Extract entity definitions from data model
    - Extract API signatures from contracts
 
+7. **Substrate grounding — measure the code/data you're decomposing over; don't infer it from the plan**:
+   The plan describes the work in prose, but tasks must be sliced against the *actual* substrate — a self-consistent task graph built on a false premise is still wrong. Before Phase 3, spend a *bounded* amount of effort (read the key existing code/symbols the tasks will touch; run any cheap diagnostic the repo already supports) to confirm **whichever of these the work actually depends on**:
+   - **Existing vs to-build** (almost always relevant): which components the plan assumes exist actually exist and are reachable (exported/public) vs must be created — a "reuse X" that turns out to need building X is a hidden task.
+   - **Runnable reference**: whether the oracle/baseline/golden each acceptance check compares against exists and is computable at real scale within a test budget (feeds Verification, Phase 4).
+   - **Scale & input-variation** (when behavior depends on them): the real sizes/counts that drive feasibility, and any input class needing a *materially different* code path (e.g. small vs streaming-large, single- vs multi-tenant, sync vs async) — each such class is its own task or explicit sub-scope.
+   - **Requirement applicability**: whether a hazard/requirement the plan emphasizes is actually exercised by an available input/fixture (one nothing can trigger is untestable or vacuous — flag it).
+   Record a short **Substrate Notes** block: what you actually checked + which plan assumptions held vs broke. For a trivial task with no external scale/reference/variation dependence, `Substrate: N/A` is a valid entry — don't manufacture analysis. **If grounding contradicts the plan, stop and surface it — do not generate tasks on a premise you have shown to be false.** (These claims are re-verified against the repo by `review-tasks` Phase 2b, so a written Notes block is not a substitute for actually checking.)
+
 ### Phase 2b: Consistency Audit (Spec → Plan)
 
 **Goal**: Prevent requirement drift between spec/legacy → plan → tasks.
@@ -289,6 +297,8 @@ Generate tasks following these rules:
    - Integration test stability: keep integration test files unchanged during implementation tasks. If integration tests must change, create a dedicated small task "Adjust integration tests" and add dependencies.
    - **Final implementation task verification**: The last implementation task in each feature must include verification that all tests pass (unit and integration). Do NOT create a separate "verify tests pass" or "run all tests" task—this verification must be part of the final implementation task's Verification section.
 
+**Build-before-wire (do not hide construction inside a "make-green" or `[system-wiring]` task)**: the skeleton→green structure only works when turning the integration test green is *wiring already-built components together*. If making a feature's integration test pass requires creating components that do not yet exist (new modules/services/handlers/algorithms/schemas/kernels), those are separate implementation tasks and the wiring/"green" task depends on them. A task whose real cost is "build the thing that makes this pass" is mis-sized — split the build out. Be suspicious of "wire up", "integrate", "make the test pass", or "system-wiring" attached to work that is mostly net-new construction (confirm against Substrate Notes: existing vs to-build).
+
 **Bugfix Variant**:
 1. Create a failing regression test first (integration or unit).
 2. Fix in an implementation task that includes unit tests + code changes (same task).
@@ -316,7 +326,7 @@ Generate tasks following these rules:
 
 #### Sizing Rules
 
-Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance criteria** — these are the best observable proxies for context window consumption and implementation obligation count.
+Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance criteria** — these are the best observable proxies for context window consumption and implementation obligation count. **These proxies undercount net-new construction:** a 3-file task that builds three new behaviors from scratch is larger than its file count implies. Also weigh the number of **not-yet-existing components** the task must create (see split triggers).
 
 **Target range**: 3-8 files, 1-2 subsystems per task.
 
@@ -338,6 +348,8 @@ Size tasks by **files touched**, **subsystems crossed**, and **atomic acceptance
 - Crosses more than 3 subsystems (over hard limit); 3 subsystems is allowed but should be split when the work is not one coherent outcome
 - Contains "figure out", "investigate", or "determine where"
 - Red flags: "central integration point", "ties everything together"
+- The task must CREATE more than ~1–2 not-yet-existing components (new modules/services/handlers/algorithms/schemas/kernels) to satisfy its ACs — count unbuilt dependencies, not just files; a few files of net-new construction is bigger than many files of a mechanical edit
+- The task needs two or more **materially different** implementations for different input classes (genuinely separate code paths, not trivial if/else branches) — split by input class
 
 **Prefer fewer, larger tasks** — batching small fixes beats many micro-tasks. Aim for 5-15 tasks per feature/epic.
 
@@ -499,6 +511,9 @@ The concrete outcome this task accomplishes (1-2 sentences). Phrase as the desir
 - In: what will be changed
 - Out: explicit non-goals and constraints
 
+**Premises** (assumptions this task relies on — each grounded in Substrate Notes, not the plan's prose):
+- e.g. "component X already exists and is importable", "input has ≤ N items", "the Y reference/oracle is computable at this scale", "the Z hazard occurs in fixture F". If a premise is unverified, say so and raise the task's risk. A premise that is false makes the task wrong even if every section is filled in.
+
 **Changes**:
 - `path/to/file.ts` — [Exists|New] — what to do
 - `path/to/other.ts` — [Exists|New] — what to do
@@ -518,6 +533,7 @@ The concrete outcome this task accomplishes (1-2 sentences). Phrase as the desir
 - **Config override test** (required for new configurable values): At least one test proving a non-default override reaches runtime via the normal load/construction path (not by constructing config objects directly in the test)
 - **Merge/precedence semantics** (if applicable): Explicit tests for merge/override/precedence/default behavior
 - **Negative cases** (if applicable): At least one test covering rejection/error/invalid input behavior
+- **Runnable reference** (required when the task compares against an oracle/baseline/golden/reference): name the reference and confirm it exists and is computable at this task's scale within the test budget. If the natural reference is intractable or doesn't model this input, specify the substitute up front (a smaller tractable fixture, a pinned snapshot, or a property/invariant check) — never write an acceptance check that cannot actually be executed.
 
 **Integration Path Test** (per-feature, not per-task):
 - At least one task per feature must include a test exercising the top-level construction path
@@ -652,6 +668,10 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 | **Config override test** | Hard | New config values have override tests reaching runtime | Add override test |
 | **Template lifecycle** | Hard | New templates are loaded, passed through, and used | Add missing lifecycle steps |
 | **Missing referenced artifacts** | Hard | Plan-referenced docs/specs exist (or declared `New` with prereq task) | Abort or add prereq task |
+| **Substrate grounding** | Hard | Substrate Notes record what was actually checked (not merely filled in), or `Substrate: N/A` for trivial tasks; no task rests on a plan assumption the substrate contradicts | Re-measure; re-slice; surface contradictions before output |
+| **Runnable verification** | Hard | Every task's Verification/ACs compare against a reference that exists and is computable at the task's scale, or name a tractable substitute | Replace the unrunnable gate with a tractable reference |
+| **Build-before-wire** | Hard | No wiring/"make-green"/`[system-wiring]` task depends on not-yet-built components; net-new construction is its own task | Split out the build; add the dependency |
+| **Requirement applicability** | Hard | Each emphasized hazard/requirement is exercised by an available input/fixture, or is explicitly flagged as untestable/vacuous | Add a fixture that triggers it, or drop/flag the requirement |
 | **Integration path test** | Hard | At least one task marked `[integration-path-test]` per feature | Add integration test task |
 | **Source document links** | Hard | Every task has `**Source Documents**:` with valid plan link(s), spec link(s) if spec exists per Spec Exists Rule, line numbers in `#L<n>` or `#L<n>-L<m>` format, and labels matching text actually present in referenced range | Read files to get accurate line numbers; add labels matching section headings |
 | **Sizing: target** | Advisory | Aim for 3-8 files, 1-2 subsystems | Consider splitting if outside range |
@@ -676,6 +696,8 @@ Plan proposes: "Implement full password reset flow (backend + email + UI)"
 10. **Wiring Complete**: New data/config/templates have wiring maps and coverage
 11. **Consistency Audit Passes**: Spec/legacy → plan matches, or deviations logged + approved
 12. **System Wiring Covered**: Each end-to-end flow has a `[system-wiring]` task
+
+(Substrate grounding, runnable verification, build-before-wire, and requirement applicability are enforced as hard gates in the Phase 5 table — criterion #2 covers them; not restated here.)
 
 **Tasks may ONLY be output when all success criteria are met.**
 
