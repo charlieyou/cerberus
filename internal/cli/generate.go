@@ -11,6 +11,7 @@ import (
 
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/generate"
+	"github.com/charlieyou/cerberus/internal/roster"
 )
 
 const generateUsage = "usage: cerberus generate <output-dir> --type <create-plan|create-spec> [--mode <fast|smart|max>] [--prompt-file <path>|--focus <text>|prompt text...]"
@@ -35,12 +36,55 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	opts.Root = config.Resolve().Root
+	opts.Stdout = stdout
 	opts.Stderr = stderr
+	panel, err := generatorPanel()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	opts.Panel = panel
 	if err := generate.Run(context.Background(), opts); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+// generatorPanel resolves the drafter panel from rosters.yaml (project,
+// XDG_CONFIG_HOME, then ~/.cerberus precedence — the same default roster the
+// review panel uses). It returns nil when no rosters.yaml exists, so generate
+// falls back to its built-in claude/codex/gemini default. Same-provider
+// instances are disambiguated with a numeric label suffix (codex, codex-2) so
+// they write to distinct output directories.
+func generatorPanel() ([]generate.ProviderSpec, error) {
+	file, err := roster.LoadRosters("")
+	if err != nil {
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
+	}
+	// Generators copy only provider/model/label; skip review-only strategy and
+	// persona file validation so a customized review roster does not fail
+	// generation when those files aren't reachable from the generator's cwd.
+	slots, err := roster.ResolveWithOptions(file, roster.ResolveOptions{SkipStrategyPersona: true})
+	if err != nil {
+		return nil, err
+	}
+	specs := make([]generate.ProviderSpec, 0, len(slots))
+	for _, slot := range slots {
+		label := slot.Provider
+		if slot.InstanceIndex > 1 {
+			label = fmt.Sprintf("%s-%d", slot.Provider, slot.InstanceIndex)
+		}
+		specs = append(specs, generate.ProviderSpec{
+			Provider: slot.Provider,
+			Model:    slot.Model,
+			Label:    label,
+		})
+	}
+	return specs, nil
 }
 
 func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {

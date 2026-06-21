@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -15,6 +16,16 @@ import (
 	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/prompts"
 )
+
+// ProviderSpec is one resolved generator drafter: the CLI provider to invoke,
+// the model to pass it, and the output subdirectory label. Labels must be
+// unique within a run so two instances of the same provider (for example two
+// codex models) write to distinct directories.
+type ProviderSpec struct {
+	Provider string
+	Model    string
+	Label    string
+}
 
 // Options configures one generator run.
 type Options struct {
@@ -26,14 +37,27 @@ type Options struct {
 	Focus         string
 	SkipInterview bool
 
-	Root      string
+	Root string
+	// Panel, when set, is the resolved drafter panel (typically from
+	// rosters.yaml). It takes precedence over Providers and supports multiple
+	// instances of the same provider via distinct labels.
+	Panel []ProviderSpec
+	// Providers is a legacy name-only panel; each name uses its default model
+	// and its name as the output label. Used when Panel is empty.
 	Providers []string
+	Stdout    io.Writer
 	Stderr    io.Writer
 }
 
 type provider struct {
 	name  string
 	model string
+	// label is the output subdirectory name; equals name for single-instance
+	// providers and disambiguates same-provider instances (e.g. codex-2).
+	label string
+	// instanceID is the reviewer/replay identity in <provider>#<n> form (e.g.
+	// codex#1, codex#2). Single instances stay #1 for fixture compatibility.
+	instanceID string
 }
 
 var providerRunner = runProvider
@@ -61,7 +85,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	providers := providersFor(opts.Providers)
+	providers := resolvePanel(opts)
 	results := make(chan providerResult, len(providers))
 	var wg sync.WaitGroup
 	for _, provider := range providers {
@@ -78,6 +102,7 @@ func Run(ctx context.Context, opts Options) error {
 	var succeeded []string
 	var failed []string
 	var joined error
+	succeededLabels := make(map[string]bool)
 	for result := range results {
 		if result.err != nil {
 			failed = append(failed, result.provider+".failed")
@@ -85,9 +110,18 @@ func Run(ctx context.Context, opts Options) error {
 			continue
 		}
 		succeeded = append(succeeded, result.provider)
+		succeededLabels[result.provider] = true
 	}
 	sort.Strings(succeeded)
 	sort.Strings(failed)
+	// Print the draft.md path for each successful drafter, in panel order, so
+	// callers (the create-* skills) can discover outputs without hard-coding
+	// provider directories.
+	for _, p := range providers {
+		if succeededLabels[p.label] {
+			fmt.Fprintln(stdoutFor(opts), filepath.Join(opts.OutputDir, p.label, "draft.md"))
+		}
+	}
 	if len(failed) > 0 {
 		fmt.Fprintf(stderrFor(opts), "cerberus generate: %d provider%s succeeded, %d failed (%s)\n", len(succeeded), plural(len(succeeded)), len(failed), joinProviderMarkers(failed))
 	}
@@ -97,14 +131,32 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-func providersFor(names []string) []provider {
-	if len(names) == 0 {
-		names = []string{"claude", "codex", "gemini"}
+func resolvePanel(opts Options) []provider {
+	var providers []provider
+	if len(opts.Panel) > 0 {
+		for _, spec := range opts.Panel {
+			label := spec.Label
+			if label == "" {
+				label = spec.Provider
+			}
+			providers = append(providers, provider{name: spec.Provider, model: spec.Model, label: label})
+		}
+	} else {
+		names := opts.Providers
+		if len(names) == 0 {
+			names = []string{"claude", "codex", "gemini"}
+		}
+		for _, name := range names {
+			model, _ := config.DefaultModelForProvider(name)
+			providers = append(providers, provider{name: name, model: model, label: name})
+		}
 	}
-	providers := make([]provider, 0, len(names))
-	for _, name := range names {
-		model, _ := config.DefaultModelForProvider(name)
-		providers = append(providers, provider{name: name, model: model})
+	// Assign per-provider instance IDs (codex#1, codex#2). Single instances are
+	// #1, matching reviewer replay fixtures keyed by <hash>:<provider>#1.
+	counts := make(map[string]int)
+	for i := range providers {
+		counts[providers[i].name]++
+		providers[i].instanceID = fmt.Sprintf("%s#%d", providers[i].name, counts[providers[i].name])
 	}
 	return providers
 }
@@ -115,48 +167,53 @@ type providerResult struct {
 }
 
 func runGeneratorProvider(ctx context.Context, root string, opts Options, provider provider, prompt []byte) (result providerResult) {
+	// name keys the CLI invocation, prompt composition, and output parsing
+	// (all provider-type specific); label keys the output directory and result
+	// marker (unique per instance).
+	name := provider.name
+	label := provider.label
 	startedAt := time.Now().UTC()
-	result = providerResult{provider: provider.name}
+	result = providerResult{provider: label}
 	stats := Stats{
 		StartedAt: startedAt,
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			result.err = fmt.Errorf("generator %s panic: %v", provider.name, recovered)
+			result.err = fmt.Errorf("generator %s panic: %v", name, recovered)
 			stats.ExitCode = 1
 			stats.ErrorMessage = result.err.Error()
 			endedAt := time.Now().UTC()
 			stats.EndedAt = endedAt
 			stats.TimeToFinishMs = endedAt.Sub(startedAt).Milliseconds()
-			if err := writeFailureOutput(opts.OutputDir, provider.name, stats, result.err); err != nil {
+			if err := writeFailureOutput(opts.OutputDir, label, stats, result.err); err != nil {
 				result.err = errors.Join(result.err, err)
 			}
 		}
 	}()
 
-	system, err := prompts.ComposeGeneratorWithOptionsFromRoot(root, provider.name, opts.Type, opts.Mode, opts.SkipInterview)
+	system, err := prompts.ComposeGeneratorWithOptionsFromRoot(root, name, opts.Type, opts.Mode, opts.SkipInterview)
 	if err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, exitCodeFromError(err))
+		return failProvider(opts.OutputDir, label, startedAt, err, exitCodeFromError(err))
 	}
-	draft, _, err := providerRunner(ctx, root, provider.name, provider.model, system, string(prompt))
+	draft, _, err := providerRunner(ctx, root, name, provider.model, provider.instanceID, system, string(prompt))
 	if err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, exitCodeFromError(err))
+		return failProvider(opts.OutputDir, label, startedAt, err, exitCodeFromError(err))
 	}
 	if len(bytes.TrimSpace(draft)) == 0 {
-		err := fmt.Errorf("generator %s produced empty stdout", provider.name)
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+		err := fmt.Errorf("generator %s produced empty stdout", name)
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
-	rawJSON, parsedStats, err := ParseProviderJSON(provider.name, draft)
+	rawJSON, parsedStats, err := ParseProviderJSON(name, draft)
 	if err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
-	draftText, err := extractDraftText(provider.name, draft)
+	draftText, err := extractDraftText(name, draft)
 	if err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
 	if len(bytes.TrimSpace(draftText)) == 0 {
-		err := fmt.Errorf("generator %s produced empty draft", provider.name)
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+		err := fmt.Errorf("generator %s produced empty draft", name)
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
 	stats.Tokens = parsedStats.Tokens
 	stats.CostUSD = parsedStats.CostUSD
@@ -164,11 +221,11 @@ func runGeneratorProvider(ctx context.Context, root string, opts Options, provid
 	endedAt := time.Now().UTC()
 	stats.EndedAt = endedAt
 	stats.TimeToFinishMs = endedAt.Sub(startedAt).Milliseconds()
-	if err := WriteSuccess(opts.OutputDir, provider.name, draftText, rawJSON); err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+	if err := WriteSuccess(opts.OutputDir, label, draftText, rawJSON); err != nil {
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
-	if err := WriteStats(opts.OutputDir, provider.name, stats); err != nil {
-		return failProvider(opts.OutputDir, provider.name, startedAt, err, 1)
+	if err := WriteStats(opts.OutputDir, label, stats); err != nil {
+		return failProvider(opts.OutputDir, label, startedAt, err, 1)
 	}
 	return result
 }
@@ -208,6 +265,13 @@ func exitCodeFromError(err error) int {
 		return exitErr.ExitCode()
 	}
 	return 1
+}
+
+func stdoutFor(opts Options) io.Writer {
+	if opts.Stdout != nil {
+		return opts.Stdout
+	}
+	return io.Discard
 }
 
 func stderrFor(opts Options) io.Writer {

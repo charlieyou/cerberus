@@ -130,6 +130,7 @@ func TestGenerateSubcommandRejectsOutputDirRegularFile(t *testing.T) {
 }
 
 func TestGenerateSubcommand(t *testing.T) {
+	isolateRosters(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(config) error = %v", err)
@@ -174,13 +175,13 @@ func TestGenerateSubcommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(generate) exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("run(generate) stdout = %q, want empty", stdout.String())
-	}
 	for _, provider := range []string{"claude", "codex", "gemini"} {
 		path := filepath.Join(outputDir, provider, "draft.md")
 		if got, err := os.ReadFile(path); err != nil || len(got) == 0 {
 			t.Fatalf("draft %s read = %q, %v; want non-empty", provider, got, err)
+		}
+		if !strings.Contains(stdout.String(), path) {
+			t.Fatalf("run(generate) stdout = %q, want printed draft path %q", stdout.String(), path)
 		}
 	}
 	gotPrompt, err := os.ReadFile(filepath.Join(recordDir, "claude.stdin"))
@@ -193,6 +194,7 @@ func TestGenerateSubcommand(t *testing.T) {
 }
 
 func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
+	isolateRosters(t)
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
 	if err := os.WriteFile(promptFile, []byte("fixture prompt"), 0o644); err != nil {
 		t.Fatalf("WriteFile(prompt) error = %v", err)
@@ -233,7 +235,7 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(generate) exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	assertGenerateNoRecordedModel(t, recordDir, "claude")
+	assertGenerateRecordedModel(t, recordDir, "claude", "opus[1m]")
 	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.5")
 	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertGenerateJSONOutputFlag(t, recordDir, "codex")
@@ -297,17 +299,6 @@ func assertGenerateRecordedModel(t *testing.T, recordDir, provider, want string)
 	}
 }
 
-func assertGenerateNoRecordedModel(t *testing.T, recordDir, provider string) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
-	if err != nil {
-		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
-	}
-	if strings.Contains(string(data), "--model\n") {
-		t.Fatalf("%s args = %q, want no model flag", provider, data)
-	}
-}
-
 func assertGenerateJSONOutputFlag(t *testing.T, recordDir, provider string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
@@ -321,4 +312,102 @@ func assertGenerateJSONOutputFlag(t *testing.T, recordDir, provider string) {
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("%s args = %q, want JSON output flag %q", provider, data, want)
 	}
+}
+
+// isolateRosters points roster discovery at empty temp dirs so generate falls
+// back to its built-in default panel regardless of the developer's real
+// ~/.cerberus or $XDG_CONFIG_HOME.
+func isolateRosters(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+// writeInstanceRecordingMock writes a provider CLI mock that records stdin and
+// argv keyed by CERBERUS_MOCK_INSTANCE_ID, so two instances of the same
+// provider (codex, codex-2) record to distinct files.
+func writeInstanceRecordingMock(t *testing.T, dir, provider string) {
+	t.Helper()
+	path := filepath.Join(dir, provider)
+	body := "#!/bin/sh\nset -eu\nid=\"${CERBERUS_MOCK_INSTANCE_ID:-" + provider + "}\"\n" +
+		"if [ -n \"${CERBERUS_MOCK_RECORD_DIR:-}\" ]; then cat > \"$CERBERUS_MOCK_RECORD_DIR/$id.stdin\"; printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/$id.args\"; else cat >/dev/null; fi\n" +
+		"printf '# %s draft\\n' \"$id\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+func TestGenerateSubcommandTwoCodexInstancesFromRoster(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(config) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "gemini-readonly-policy.toml"), []byte("# policy\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(policy) error = %v", err)
+	}
+	writeGenerateCLIPrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
+	t.Setenv("CERBERUS_ROOT", root)
+
+	// rosters.yaml default roster: claude + two codex instances on distinct models.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Join(home, ".cerberus"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
+	}
+	// The gpt-5.4 slot carries a review-only strategy whose prompt file is not
+	// reachable from the generator cwd; generation must still succeed because
+	// generators skip strategy/persona validation.
+	rosters := "version: 1\n" +
+		"rosters:\n" +
+		"  default:\n" +
+		"    reviewers:\n" +
+		"      - provider: claude\n" +
+		"        model: \"opus[1m]\"\n" +
+		"      - provider: codex\n" +
+		"        model: gpt-5.5\n" +
+		"      - provider: codex\n" +
+		"        model: gpt-5.4\n" +
+		"        strategy: verification-first\n"
+	if err := os.WriteFile(filepath.Join(home, ".cerberus", "rosters.yaml"), []byte(rosters), 0o644); err != nil {
+		t.Fatalf("WriteFile(rosters) error = %v", err)
+	}
+
+	binDir := t.TempDir()
+	for _, provider := range []string{"claude", "codex"} {
+		writeInstanceRecordingMock(t, binDir, provider)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	recordDir := t.TempDir()
+	t.Setenv("CERBERUS_MOCK_RECORD_DIR", recordDir)
+
+	promptFile := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(promptFile, []byte("fixture prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt) error = %v", err)
+	}
+	outputDir := filepath.Join(t.TempDir(), "created-output")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"generate", outputDir, "--type", "create-spec", "--mode", "smart", "--prompt-file", promptFile, "--skip-interview"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(generate) exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	for _, label := range []string{"claude", "codex", "codex-2"} {
+		path := filepath.Join(outputDir, label, "draft.md")
+		if got, err := os.ReadFile(path); err != nil || len(got) == 0 {
+			t.Fatalf("draft %s read = %q, %v; want non-empty", label, got, err)
+		}
+		if !strings.Contains(stdout.String(), path) {
+			t.Fatalf("run(generate) stdout = %q, want printed draft path %q", stdout.String(), path)
+		}
+	}
+	// gemini must not appear — it was replaced by the second codex instance.
+	if _, err := os.Stat(filepath.Join(outputDir, "gemini")); !os.IsNotExist(err) {
+		t.Fatalf("gemini output dir stat err = %v, want not exist", err)
+	}
+	// Reviewer instance IDs stay in <provider>#<n> form; record files are keyed
+	// by CERBERUS_MOCK_INSTANCE_ID, while output dirs use the label.
+	assertGenerateRecordedModel(t, recordDir, "codex#1", "gpt-5.5")
+	assertGenerateRecordedModel(t, recordDir, "codex#2", "gpt-5.4")
 }

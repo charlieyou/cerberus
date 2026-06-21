@@ -26,7 +26,7 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 
 	for _, provider := range []string{"claude", "codex", "gemini"} {
 		t.Run(provider, func(t *testing.T) {
-			stdout, stderr, err := runProvider(context.Background(), root, provider, "model-name", "system prompt", userPrompt)
+			stdout, stderr, err := runProvider(context.Background(), root, provider, "model-name", provider, "system prompt", userPrompt)
 			if err != nil {
 				t.Fatalf("runProvider() error = %v; stderr=%q", err, stderr)
 			}
@@ -48,8 +48,8 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 				if !strings.Contains(args, "--print\n--output-format\njson\n") {
 					t.Fatalf("claude args = %q, want print json flags", args)
 				}
-				if strings.Contains(args, "--model\n") {
-					t.Fatalf("claude args = %q, want no model flag for generator", args)
+				if !strings.Contains(args, "--model\nmodel-name\n") {
+					t.Fatalf("claude args = %q, want model flag honoring configured model", args)
 				}
 			}
 			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name\n") {
@@ -94,7 +94,7 @@ func TestRunProviderReturnsStdoutStderrAndError(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", recordDir)
 
-	stdout, stderr, err := runProvider(context.Background(), root, "codex", "model-name", "system", "user")
+	stdout, stderr, err := runProvider(context.Background(), root, "codex", "model-name", "codex", "system", "user")
 	if err == nil {
 		t.Fatal("runProvider() error = nil, want failure")
 	}
@@ -148,7 +148,7 @@ func readGeneratorRecord(t *testing.T, dir, name string) string {
 }
 
 func TestRunProviderRejectsUnsupportedProvider(t *testing.T) {
-	_, _, err := runProvider(context.Background(), t.TempDir(), "unknown", "model", "system", "user")
+	_, _, err := runProvider(context.Background(), t.TempDir(), "unknown", "model", "unknown", "system", "user")
 	if err == nil {
 		t.Fatal("runProvider() error = nil, want unsupported provider")
 	}

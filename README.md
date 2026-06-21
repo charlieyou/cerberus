@@ -255,6 +255,14 @@ the first roster file in this order:
 If a roster file exists, Cerberus uses it as the source of truth. A missing
 requested roster is an error; Cerberus does not silently fall back.
 
+The generators (`cerberus generate`, behind `/cerberus:create-plan` and
+`/cerberus:create-spec`) draft with the same `default` roster, so editing it
+changes both the review panel and the drafter panel. Generators support repeated
+providers: each drafter writes to `$OUTPUT_DIR/<provider>/draft.md`, and
+additional instances of the same provider get a numeric suffix (for example a
+second codex slot writes to `$OUTPUT_DIR/codex-2/draft.md`). `cerberus generate`
+prints one `draft.md` path per successful drafter to stdout.
+
 ### Schema
 
 ```yaml

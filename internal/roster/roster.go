@@ -136,7 +136,7 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 		normalizePersonaPaths(file, slots)
 	}
 
-	if err := validateSlots(file, rosterName, slots); err != nil {
+	if err := validateSlots(file, rosterName, slots, opts.SkipStrategyPersona); err != nil {
 		return nil, err
 	}
 	assignInstanceIDs(slots)
@@ -170,7 +170,7 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 		}
 	}
 
-	if err := validateSlots(file, rosterName, slots); err != nil {
+	if err := validateSlots(file, rosterName, slots, opts.SkipStrategyPersona); err != nil {
 		return nil, err
 	}
 	assignInstanceIDs(slots)

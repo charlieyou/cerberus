@@ -148,7 +148,7 @@ func validateFile(file *RostersFile) error {
 	return nil
 }
 
-func validateSlots(file *RostersFile, rosterName string, slots []RosterSlot) error {
+func validateSlots(file *RostersFile, rosterName string, slots []RosterSlot, skipStrategyPersona bool) error {
 	path := filePath(file)
 	for i, slot := range slots {
 		slotIndex := i + 1
@@ -161,18 +161,22 @@ func validateSlots(file *RostersFile, rosterName string, slots []RosterSlot) err
 		if slot.Mode != "" && !validMode(slot.Mode) {
 			return preflightError(path, rosterName, slotIndex, "unknown mode %q", slot.Mode)
 		}
-		if slot.Strategy != "" && slot.Strategy != "none" {
-			if err := validateStrategy(file, rosterName, slotIndex, slot.Strategy); err != nil {
-				return err
-			}
-		}
-		if slot.PersonaPath != "" {
-			personaPath := resolveRosterRelativePath(file, slot.PersonaPath)
-			if _, err := os.Stat(personaPath); err != nil {
-				if os.IsNotExist(err) {
-					return preflightError(path, rosterName, slotIndex, "persona file %q does not exist", personaPath)
+		// Strategy and persona are review-only; generator panels never use them,
+		// so skip requiring their files when resolving a generator panel.
+		if !skipStrategyPersona {
+			if slot.Strategy != "" && slot.Strategy != "none" {
+				if err := validateStrategy(file, rosterName, slotIndex, slot.Strategy); err != nil {
+					return err
 				}
-				return preflightError(path, rosterName, slotIndex, "inspect persona file %q: %v", personaPath, err)
+			}
+			if slot.PersonaPath != "" {
+				personaPath := resolveRosterRelativePath(file, slot.PersonaPath)
+				if _, err := os.Stat(personaPath); err != nil {
+					if os.IsNotExist(err) {
+						return preflightError(path, rosterName, slotIndex, "persona file %q does not exist", personaPath)
+					}
+					return preflightError(path, rosterName, slotIndex, "inspect persona file %q: %v", personaPath, err)
+				}
 			}
 		}
 		if _, err := exec.LookPath(slot.Provider); err != nil {

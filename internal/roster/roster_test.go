@@ -342,6 +342,29 @@ func TestInstanceIDAssignmentWalksListByProvider(t *testing.T) {
 	assertInstanceIDs(t, slots, []string{"gemini#1", "codex#1", "gemini#2", "claude#1", "codex#2"})
 }
 
+func TestResolveWithOptionsSkipStrategyPersonaForGenerators(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)        // cwd has no prompts/strategies directory
+	withFakeCLIs(t, dir) // claude/codex available on PATH
+	file := loadDefaultRoster(t, dir, []string{
+		"claude:opus:",
+		"codex:gpt-5.5:",
+		"codex:gpt-5.4:verification-first", // strategy file intentionally absent
+	})
+
+	// Review resolution validates the strategy file and fails when it is absent.
+	if _, err := Resolve(file, "", nil, ""); err == nil {
+		t.Fatal("Resolve() error = nil, want missing strategy-file validation error")
+	}
+
+	// Generator resolution skips review-only strategy/persona validation.
+	slots, err := ResolveWithOptions(file, ResolveOptions{SkipStrategyPersona: true})
+	if err != nil {
+		t.Fatalf("ResolveWithOptions(SkipStrategyPersona) error = %v", err)
+	}
+	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "codex#2"})
+}
+
 func loadDefaultRoster(t *testing.T, dir string, specs []string) *RostersFile {
 	t.Helper()
 	var yaml strings.Builder

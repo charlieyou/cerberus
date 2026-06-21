@@ -66,7 +66,7 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 			t.Fatalf("%s raw.json stat err = %v, want not exist for markdown stdout", provider, err)
 		}
 	}
-	assertNoRecordedModel(t, recordDir, "claude")
+	assertRecordedModel(t, recordDir, "claude", "opus[1m]")
 	assertRecordedModel(t, recordDir, "codex", "gpt-5.5")
 	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertJSONOutputFlag(t, recordDir, "codex")
@@ -80,7 +80,7 @@ func TestGenerateRunFansOutInParallel(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		time.Sleep(100 * time.Millisecond)
 		return []byte("# " + providerName + " draft\n"), nil, nil
 	}
@@ -111,7 +111,7 @@ func TestGenerateRunWritesRawJSONForParseableProviderOutput(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(`{"usage":{"input_tokens":7,"output_tokens":3},"cost_usd":0.001}`), nil, nil
 	}
 	t.Cleanup(func() {
@@ -254,17 +254,6 @@ func writeMockProvider(t *testing.T, dir, provider, delay string) {
 	body := "#!/bin/sh\nset -eu\ncat >/dev/null\n" + delay + "printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nprintf '# " + provider + " draft\\n'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
-	}
-}
-
-func assertNoRecordedModel(t *testing.T, recordDir, provider string) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
-	if err != nil {
-		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
-	}
-	if strings.Contains(string(data), "--model\n") {
-		t.Fatalf("%s args = %q, want no model flag", provider, data)
 	}
 }
 

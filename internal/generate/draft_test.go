@@ -169,7 +169,7 @@ func TestGenerateRunUnwrapsClaudeAndGeminiEnvelopes(t *testing.T) {
 			writeGeneratePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 
 			originalRunner := providerRunner
-			providerRunner = func(ctx context.Context, root, providerName, model, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+			providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 				return []byte(tc.stdout), nil, nil
 			}
 			t.Cleanup(func() { providerRunner = originalRunner })
@@ -203,7 +203,7 @@ func TestGenerateRunFailsOnEmptyClaudeResult(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(`{"type":"result","result":"   "}`), nil, nil
 	}
 	t.Cleanup(func() { providerRunner = originalRunner })
@@ -242,7 +242,7 @@ func TestGenerateRunWritesCodexDraftFromAgentMessage(t *testing.T) {
 	}, "\n")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(stream), nil, nil
 	}
 	t.Cleanup(func() { providerRunner = originalRunner })

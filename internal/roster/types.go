@@ -39,4 +39,9 @@ type ResolveOptions struct {
 	ReplaceSlot  string
 	Debate       bool
 	Agents       string
+	// SkipStrategyPersona omits validation of review-only slot fields (strategy
+	// prompt files and persona files). Generator panels copy only
+	// provider/model/label and never use these, so requiring those files would
+	// fail generation spuriously.
+	SkipStrategyPersona bool
 }
