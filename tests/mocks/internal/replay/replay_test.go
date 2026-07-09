@@ -11,22 +11,22 @@ func TestValidateInvocationAcceptsCerberusProviderArgs(t *testing.T) {
 		{
 			name:     "claude reviewer",
 			provider: "claude",
-			args:     []string{"--print", "--output-format", "json", "--model", "claude-opus-4-7", "--append-system-prompt", "system"},
+			args:     []string{"--print", "--output-format", "json", "--model", "claude-opus-4-7", "--effort", "medium", "--append-system-prompt", "system"},
 		},
 		{
 			name:     "claude generator",
 			provider: "claude",
-			args:     []string{"--print", "--output-format", "json", "--append-system-prompt", "system"},
+			args:     []string{"--print", "--output-format", "json", "--effort", "medium", "--append-system-prompt", "system"},
 		},
 		{
 			name:     "codex reviewer",
 			provider: "codex",
-			args:     []string{"exec", "--json", "--model", "gpt-5.5", "system"},
+			args:     []string{"exec", "--json", "--model", "gpt-5.5", "-c", "model_reasoning_effort=\"medium\"", "system"},
 		},
 		{
 			name:     "gemini reviewer",
 			provider: "gemini",
-			args:     []string{"--output-format", "json", "--model", "gemini-3.1-pro-preview", "--prompt", "system", "--policy", "config/gemini-readonly-policy.toml"},
+			args:     []string{"--output-format", "json", "--model", "cerberus-reviewer", "--prompt", "system", "--policy", "config/gemini-readonly-policy.toml"},
 		},
 		{
 			name:     "direct mock smoke",

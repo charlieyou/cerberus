@@ -4,41 +4,37 @@ package roster
 type RosterSlot struct {
 	Provider      string `yaml:"provider"`
 	Model         string `yaml:"model"`
+	Effort        string `yaml:"effort"`
 	Strategy      string `yaml:"strategy,omitempty"`
 	PersonaPath   string `yaml:"persona,omitempty"`
-	Mode          string `yaml:"mode,omitempty"`
 	InstanceID    string `yaml:"-"`
 	InstanceIndex int    `yaml:"-"`
 }
 
-// Roster is a named YAML roster definition.
-type Roster struct {
-	Reviewers []RosterSlot `yaml:"reviewers"`
+// ModeRoster is the model panel for one runtime mode.
+type ModeRoster struct {
+	Models []RosterSlot `yaml:"models"`
 }
 
-// RosterDefaults contains optional panel-wide YAML defaults.
-type RosterDefaults struct {
+// Defaults contains optional runtime defaults.
+type Defaults struct {
 	Mode      string `yaml:"mode,omitempty"`
 	MaxRounds *int   `yaml:"max_rounds,omitempty"`
 }
 
-// RostersFile is the top-level YAML schema.
-type RostersFile struct {
-	Version  int               `yaml:"version"`
-	Defaults RosterDefaults    `yaml:"defaults,omitempty"`
-	Rosters  map[string]Roster `yaml:"rosters"`
-	FilePath string            `yaml:"-"`
-	BuiltIn  bool              `yaml:"-"`
+// Config is the top-level config.yaml schema.
+type Config struct {
+	Version  int                   `yaml:"version"`
+	Defaults Defaults              `yaml:"defaults,omitempty"`
+	Roster   map[string]ModeRoster `yaml:"roster"`
+	FilePath string                `yaml:"-"`
 }
 
 // ResolveOptions carries preflight-only inputs not present in the minimal
 // Resolve signature used by the CLI merge flow.
 type ResolveOptions struct {
-	RosterName   string
-	CLIReviewers []string
-	ReplaceSlot  string
-	Debate       bool
-	Agents       string
+	Mode   string
+	Debate bool
 	// SkipStrategyPersona omits validation of review-only slot fields (strategy
 	// prompt files and persona files). Generator panels copy only
 	// provider/model/label and never use these, so requiring those files would

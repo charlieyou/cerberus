@@ -2,7 +2,7 @@
 name: create-plan
 disable-model-invocation: true
 description: Produce a technical implementation plan (design-focused), optionally interviewing the user, then run multi-model generator and plan review gate
-argument-hint: '[--mode <fast|smart|max>] [--max-rounds <N>] [--from-spec <path/to/spec.md>] [--skip-interview] <feature or plan summary>'
+argument-hint: '[--mode <name>] [--max-rounds <N>] [--from-spec <path/to/spec.md>] [--skip-interview] <feature or plan summary>'
 ---
 
 ## Host-Neutral Execution
@@ -120,22 +120,16 @@ You **MUST** follow these phases in order. Skipping phases is **NOT ALLOWED**, e
 
 ## Mode Behavior
 
-Modes control depth and rigor. Use soft budgets—exit early when quality is sufficient.
+Modes only select a model panel from `config.yaml`. Mode names do not alter interview depth, priority scope, or refinement policy, so custom modes behave exactly like built-in modes.
 
-| Mode | Interview Depth | Review Rounds | Extras |
-|------|-----------------|---------------|--------|
-| fast | Until essentials filled (~60%) | up to 2 | minimal |
-| smart | Until ~80% filled | up to 3 | standard |
-| max | Until ~95% filled + proactive probing | up to 5 | alternatives + detailed risk register |
+Use soft budgets and exit early when the plan is decision-complete. With `--skip-interview`, apply the same completeness standard to the autonomous decision pass instead of asking questions.
 
-With `--skip-interview`, apply the same depth targets to the autonomous decision pass instead of asking questions.
-
-**Override:** `--max-rounds <N>` sets the review round cap explicitly, overriding the mode default. Accepts any integer ≥ 0 (0 skips the review refinement loop entirely after the initial gate run).
+**Override:** `--max-rounds <N>` sets the review round cap explicitly, overriding `defaults.max_rounds`. Accepts any integer >= 0; `0` runs the initial review once and disables refinement respawns.
 
 **Soft budget rules:**
 - Stop interviewing or deciding when skeleton is sufficiently filled and essentials (Prerequisites, Technical Design, Testing strategy) are covered
-- In `fast`, prioritize speed over completeness—mark unknowns as Open Questions
-- In `max`, actively probe for edge cases and failure modes even if user doesn't raise them
+- Mark nonessential unknowns as Open Questions instead of extending the interview indefinitely
+- Probe for edge cases and failure modes when the change's risk or complexity warrants it
 
 ## Input
 
@@ -151,9 +145,12 @@ The user provides either:
 
 Before Phase 0, parse command arguments:
 
+- Set `MODE` only when an explicit `--mode <name>` flag is present; otherwise leave it unset so `config.yaml` can supply `defaults.mode`.
+- Set `MAX_ROUNDS` only when an explicit `--max-rounds <N>` flag is present; otherwise leave it unset so the runtime defaults remain authoritative.
 - `SKIP_INTERVIEW=true` only when the explicit `--skip-interview` flag is present.
 - Otherwise leave `SKIP_INTERVIEW` unset or set it to `false`; command examples must check `[[ "${SKIP_INTERVIEW:-false}" == "true" ]]` before forwarding the flag.
 - Remove `--skip-interview` from the feature summary before writing the plan.
+- Remove `--mode <name>` from the feature summary before writing the plan.
 - If `--skip-interview` is not present, free-text phrases like "skip the interview" or "just generate it" are not enough to enter autonomous mode; follow the normal interview workflow.
 - If `--from-spec` is not provided and `--skip-interview` is set, treat the remaining feature summary as the starting artifact instead of asking whether a spec exists.
 
@@ -494,13 +491,13 @@ Or say "enough detail" to stop, "keep it high-level" to cap depth.
 - Compatibility: backwards compatibility, breaking changes
 - Testing: strategy, coverage requirements
 
-**P1/L1-L2 (cover in smart/max modes):**
+**P1/L1-L2 (cover when applicable):**
 - Data: schema changes, migrations
 - API: interface contracts, versioning
 - Implementation: file targets, dependencies
 - Rollout: feature flags, monitoring
 
-**P2/L2-L3 (cover in max mode):**
+**P2/L2-L3 (cover for high-risk or complex work):**
 - Failure modes, edge cases
 - Operational concerns (metrics, alerts)
 - Performance envelopes
@@ -580,20 +577,17 @@ Now append the Phase 3 context (skeleton + findings + user answers or autonomous
 EOF
 ```
 
-Spawn generators with the mode flag. The `cerberus generate` subcommand requires an output directory as the first argument and writes drafts to files, returning their paths:
-- `fast`: ~5 minutes
-- `smart`: ~10 minutes
-- `max`: ~15 minutes
+Spawn generators with the mode flag. The `cerberus generate` subcommand requires an output directory as the first argument, resolves the selected panel from `config.yaml`, and writes drafts to files, returning their paths.
 
 If `--skip-interview` was passed to this command, add `--skip-interview` to the `cerberus generate` invocation so the model drafts also make and document autonomous decisions instead of asking clarifying questions.
 
 **CRITICAL**: The command MUST start with an executable, NOT a variable assignment. Variable assignments trigger permission prompts.
 
 ```bash
-: "${PROMPT_TMP:=<paste the printed /tmp/create-plan-prompt-... path here>}" && export PROMPT_TMP && export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP" --skip-interview; else set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan --mode "${MODE:-smart}" --prompt-file "$PROMPT_TMP"; fi
+: "${PROMPT_TMP:=<paste the printed /tmp/create-plan-prompt-... path here>}" && export PROMPT_TMP && export OUTPUT_PARENT="${REVIEW_DIR:-${TMPDIR:-/tmp}}" && mkdir -p "$OUTPUT_PARENT" && export OUTPUT_DIR="$(mktemp -d "$OUTPUT_PARENT/create-plan-drafts-XXXXXX")" && test -d "$OUTPUT_DIR" && printf 'OUTPUT_DIR=%s\n' "$OUTPUT_DIR" && MODE_ARGS=() && if [ -n "${MODE:-}" ]; then MODE_ARGS=(--mode "$MODE"); fi && if [[ "${SKIP_INTERVIEW:-false}" == "true" ]]; then set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan "${MODE_ARGS[@]}" --prompt-file "$PROMPT_TMP" --skip-interview; else set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; "$bin" generate "$OUTPUT_DIR" --type create-plan "${MODE_ARGS[@]}" --prompt-file "$PROMPT_TMP"; fi
 ```
 
-Record the printed `OUTPUT_DIR=...` value, then read the `draft.md` paths `cerberus generate` prints to stdout — one line per drafter that succeeded. The panel comes from your `rosters.yaml` default roster (falling back to claude + codex + gemini), so the set of directories is dynamic: each drafter writes to `$OUTPUT_DIR/<label>/draft.md`, where `<label>` is the provider name, with additional same-provider instances suffixed (for example `codex` and `codex-2`). Use exactly the paths printed; do not assume a fixed list. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory.
+Record the printed `OUTPUT_DIR=...` value, then read the `draft.md` paths `cerberus generate` prints to stdout — one line per drafter that succeeded. The panel comes from the selected mode in `config.yaml` (falling back to claude + codex + gemini), so the set of directories is dynamic: each drafter writes to `$OUTPUT_DIR/<label>/draft.md`, where `<label>` is the provider name, with additional same-provider instances suffixed (for example `codex` and `codex-2`). Use exactly the paths printed; do not assume a fixed list. Do not pass literal `$OUTPUT_DIR/...` paths to a subagent unless you have replaced `$OUTPUT_DIR` with the actual printed directory.
 
 **IMPORTANT:** The tool result contains only file paths, not the full draft content. This preserves your context window.
 
@@ -607,7 +601,7 @@ Use the Task tool with a prompt like:
 Synthesize the following generator drafts into the plan file.
 
 Draft files to read:
-[Paste the actual draft.md paths printed by `cerberus generate` — one per successful drafter. The panel is whatever your rosters.yaml default roster resolves to; the example shape below may differ from your run.]
+[Paste the actual draft.md paths printed by `cerberus generate` — one per successful drafter. The panel is whatever the selected `config.yaml` mode resolves to; the example shape below may differ from your run.]
 - /actual/output/dir/claude/draft.md
 - /actual/output/dir/codex/draft.md
 - /actual/output/dir/codex-2/draft.md
@@ -649,14 +643,14 @@ If `--skip-interview` was used, also confirm `### Decision Log` documents the au
 
 ### Phase 7: Review Gate with Prioritized BFS Refinement
 
-Spawn external reviewers on the plan file. Pass `--max-rounds` so the daemon's auto-respawn limit matches the command-level cap:
+Spawn external reviewers on the plan file. Forward `--max-rounds` only when the user supplied an explicit command-level override:
 
 - If `--max-rounds <N>` was passed to this command, forward that N.
-- Otherwise forward the mode default: `fast=2`, `smart=3`, `max=5`.
+- Otherwise omit the flag so `config.yaml` and the CLI defaults remain authoritative for built-in and custom modes.
 - When running under Codex, ensure `CERBERUS_HOST=codex` and `CERBERUS_SESSION_ID=$CODEX_THREAD_ID` are exported before spawning if the host variables are not already set; the command below does this automatically when `CODEX_THREAD_ID` is present and `CERBERUS_HOST` is unset or already `codex`.
 
 ```bash
-set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; "$bin" spawn-plan-review --max-rounds "$MAX_ROUNDS" docs/YYYY-MM-DD-FEATURE-plan.md
+set +u; if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${PLUGIN_ROOT:-}" ]; then host=codex; elif [ -n "${CLAUDE_SESSION_ID}" ] || [ -n "${CLAUDE_PLUGIN_ROOT}" ] || [ -n "${CLAUDE_SKILL_DIR}" ]; then host=claude; else host="${CERBERUS_HOST:-}"; if [ "$host" = claude-code ]; then host=claude; fi; fi; root="${CERBERUS_ROOT:-}"; if [ -z "$root" ] && [ "$host" = codex ]; then root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then cache_home="${HOME:-}"; [ -n "$cache_home" ] || cache_home="${USERPROFILE:-}"; if [ -n "$cache_home" ]; then cache_file="$cache_home/.codex/cerberus/sessions/$CODEX_THREAD_ID/plugin-root"; if [ -r "$cache_file" ]; then IFS= read -r root < "$cache_file" || true; fi; fi; fi; if [ -z "$root" ] && [ "$host" != codex ]; then root="${CLAUDE_PLUGIN_ROOT}"; [ -n "$root" ] || root="${PLUGIN_ROOT:-}"; fi; if [ -z "$root" ] && [ "$host" != codex ]; then skill_dir="${CLAUDE_SKILL_DIR}"; if [ -n "$skill_dir" ]; then root="$(cd "$skill_dir/../.." && pwd)"; fi; fi; [ -n "$root" ] || { echo "cerberus: plugin root not set; set CERBERUS_ROOT and retry" >&2; exit 127; }; bin="$root/bin/cerberus"; export CERBERUS_ROOT="$root"; claude_session="${CLAUDE_SESSION_ID}"; if [ "$host" = claude ]; then export CERBERUS_HOST=claude; elif [ "$host" = codex ]; then export CERBERUS_HOST=codex; fi; if [ "$host" = codex ] && [ -n "${CODEX_THREAD_ID:-}" ]; then export CERBERUS_HOST=codex CERBERUS_SESSION_ID="$CODEX_THREAD_ID"; elif [ "$host" = claude ] && [ -n "$claude_session" ]; then export CERBERUS_HOST=claude CERBERUS_SESSION_ID="${CERBERUS_SESSION_ID:-$claude_session}"; fi; command -v make >/dev/null 2>&1 || { echo "cerberus: make not found on PATH; install make and retry." >&2; exit 127; }; if ! make -q -C "$root" build >/dev/null 2>&1; then command -v go >/dev/null 2>&1 || { echo "cerberus: Go >= 1.22 not found on PATH; install Go and retry." >&2; exit 127; }; echo "cerberus: building... (this happens once after clone or upgrade)" >&2; start=$(date +%s); make -C "$root" build >&2 || exit $?; end=$(date +%s); echo "cerberus: build complete in $((end-start))s" >&2; fi; MODE_ARGS=(); if [ -n "${MODE:-}" ]; then MODE_ARGS=(--mode "$MODE"); fi; ROUND_ARGS=(); if [ -n "${MAX_ROUNDS:-}" ]; then ROUND_ARGS=(--max-rounds "$MAX_ROUNDS"); fi; "$bin" spawn-plan-review "${MODE_ARGS[@]}" "${ROUND_ARGS[@]}" docs/YYYY-MM-DD-FEATURE-plan.md
 ```
 
 **CRITICAL: After running the spawn command, STOP IMMEDIATELY. Do NOT poll, sleep, wait, or run any further commands.** The Stop hook will automatically wait for reviewers and present their findings when you stop. Any attempt to manually check reviewer status will fail.
@@ -726,12 +720,9 @@ Reply "enough detail" to stop, or "skip P2/P3" to focus only on blockers.
 
 **OK to silently fix:** Typos, formatting, and purely mechanical issues.
 
-#### Round limits by mode:
-- `fast`: up to 2 rounds (P0/P1 only)
-- `smart`: up to 3 rounds (P0-P2)
-- `max`: up to 5 rounds (all priorities)
+#### Round limits
 
-If `--max-rounds <N>` was passed, use N instead of the mode default. Priority scope still follows the mode (fast=P0/P1, smart=P0–P2, max=all). `--max-rounds 0` skips refinement entirely — record any reviewer findings as Open Questions and exit.
+Use the gate's resolved round cap from explicit `--max-rounds <N>` or `config.yaml`/CLI defaults. Process findings in priority order regardless of mode name. If the cap is reached, record unresolved findings as Open Questions. `--max-rounds 0` runs the initial review once, records its unresolved findings, and performs no refinement respawn.
 
 ## Done
 

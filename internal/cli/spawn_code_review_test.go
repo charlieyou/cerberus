@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,12 +22,12 @@ import (
 	"github.com/charlieyou/cerberus/internal/telemetry"
 )
 
-func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
+func TestSpawnCodeReviewModeConsensusHappyPath(t *testing.T) {
 	setSpawnTestEnv(t)
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--consensus", "majority", "--agents", "claude,codex,gemini"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--consensus", "majority"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -38,11 +39,11 @@ func TestSpawnCodeReviewAgentsConsensusHappyPath(t *testing.T) {
 	if gate.Status != state.StatusResolved {
 		t.Fatalf("gate status = %q, want resolved", gate.Status)
 	}
-	if gate.RosterID != "agents" {
-		t.Fatalf("gate roster_id = %q, want agents", gate.RosterID)
+	if gate.Mode != "smart" {
+		t.Fatalf("gate mode = %q, want smart", gate.Mode)
 	}
 	assertRecordedModel(t, "claude", "opus[1m]")
-	assertRecordedModel(t, "codex", "gpt-5.5")
+	assertRecordedModel(t, "codex", "gpt-5.6-sol")
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }
 
@@ -56,7 +57,7 @@ func TestSpawnCodeReviewRejectsPendingGate(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        1,
-		RosterID:         "default",
+		Mode:             "smart",
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestSpawnCodeReviewRejectsPendingGate(t *testing.T) {
 	t.Cleanup(func() { startReviewRuntime = old })
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 6 {
 		t.Fatalf("spawn-code-review exit code = %d, want 6; stderr: %s", code, stderr.String())
@@ -98,11 +99,11 @@ func TestSpawnCodeReviewBuiltInDefaultUsesConcreteModels(t *testing.T) {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	gate := waitForSpawnGateStatus(t, state.StatusResolved)
-	if gate.RosterID != "default" {
-		t.Fatalf("gate roster_id = %q, want default", gate.RosterID)
+	if gate.Mode != "smart" {
+		t.Fatalf("gate mode = %q, want smart", gate.Mode)
 	}
 	assertRecordedModel(t, "claude", "opus[1m]")
-	assertRecordedModel(t, "codex", "gpt-5.5")
+	assertRecordedModel(t, "codex", "gpt-5.6-sol")
 	assertRecordedModel(t, "gemini", "gemini-3.1-pro-preview")
 }
 
@@ -116,32 +117,31 @@ func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
 		{
 			name:       "plan file",
 			subcommand: "spawn-plan-review",
-			args:       []string{"--agents", "codex", writeSpawnFixture(t, "plan.md", "PLAN BODY")},
+			args:       []string{writeSpawnFixture(t, "plan.md", "PLAN BODY")},
 			wantPrompt: []string{"Implementation Plan Review Guidelines", "<plan>\nPLAN BODY\n</plan>"},
 		},
 		{
 			name:       "plan file with focus",
 			subcommand: "spawn-plan-review",
-			args:       []string{"--agents", "codex", writeSpawnFixture(t, "focused-plan.md", "PLAN BODY"), "focus", "on", "error", "handling"},
+			args:       []string{writeSpawnFixture(t, "focused-plan.md", "PLAN BODY"), "focus", "on", "error", "handling"},
 			wantPrompt: []string{"Implementation Plan Review Guidelines", "<plan>\nPLAN BODY\n</plan>", "Focus: focus on error handling"},
 		},
 		{
 			name:       "spec file",
 			subcommand: "spawn-spec-review",
-			args:       []string{"--agents", "codex", writeSpawnFixture(t, "spec.md", "SPEC BODY")},
+			args:       []string{writeSpawnFixture(t, "spec.md", "SPEC BODY")},
 			wantPrompt: []string{"Feature Specification Review Guidelines", "<spec>\nSPEC BODY\n</spec>"},
 		},
 		{
 			name:       "ask inline",
 			subcommand: "spawn-ask",
-			args:       []string{"--agents", "codex", "codex smoke question"},
+			args:       []string{"codex smoke question"},
 			wantPrompt: []string{"Ask Panel Guidelines", "<ask_prompt>\ncodex smoke question\n</ask_prompt>"},
 		},
 		{
 			name:       "ask prompt and context files",
 			subcommand: "spawn-ask",
 			args: []string{
-				"--agents", "codex",
 				"--prompt-file", writeSpawnFixture(t, "question.md", "FILE QUESTION"),
 				"--context-file", writeSpawnFixture(t, "context.md", "FILE CONTEXT"),
 			},
@@ -150,13 +150,13 @@ func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
 		{
 			name:       "epic file",
 			subcommand: "spawn-epic-verify",
-			args:       []string{"--agents", "codex", writeSpawnFixture(t, "epic.md", "EPIC BODY")},
+			args:       []string{writeSpawnFixture(t, "epic.md", "EPIC BODY")},
 			wantPrompt: []string{"Epic Verification Guidelines", "<epic_context>\nEPIC BODY\n</epic_context>"},
 		},
 		{
 			name:       "epic raw criteria",
 			subcommand: "spawn-epic-verify",
-			args:       []string{"--agents", "codex", "- Users can login"},
+			args:       []string{"- Users can login"},
 			wantPrompt: []string{"<epic_context>\n- Users can login\n</epic_context>"},
 		},
 	}
@@ -188,22 +188,89 @@ func TestSurvivingSpawnAliasesDispatchReviewGate(t *testing.T) {
 	}
 }
 
-func TestSpawnCodeReviewRejectsAgentsWithRoster(t *testing.T) {
+func TestSpawnCodeReviewRejectsRemovedRosterFlag(t *testing.T) {
 	setSpawnTestEnv(t)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "claude,codex,gemini", "--roster", "default"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--roster", "default"}, &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("spawn-code-review exit code = 0, want non-zero")
 	}
-	if !strings.Contains(stderr.String(), "--agents is mutually exclusive with --roster and --reviewer") {
-		t.Fatalf("stderr = %q, want --agents mutex error", stderr.String())
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -roster") {
+		t.Fatalf("stderr = %q, want removed flag error", stderr.String())
 	}
 	events := readSpawnEventLog(t)
 	event := findSpawnEvent(t, events, telemetry.EventPreflightFailed)
 	if got, want := event["stage"], "flags"; got != want {
 		t.Fatalf("preflight failed stage = %v, want %q", got, want)
+	}
+}
+
+func TestSpawnEpicVerifyRejectsRemovedFlagsAfterArtifact(t *testing.T) {
+	for _, flagName := range []string{"--agents", "--roster", "--reviewer", "--replace-slot"} {
+		t.Run(flagName, func(t *testing.T) {
+			setSpawnTestEnv(t)
+			var stdout, stderr bytes.Buffer
+
+			code := run([]string{"spawn-epic-verify", "epic.md", flagName, "removed-value"}, &stdout, &stderr)
+
+			if code == 0 {
+				t.Fatalf("spawn-epic-verify %s exit code = 0, want non-zero", flagName)
+			}
+			want := "flag provided but not defined: -" + strings.TrimLeft(flagName, "-")
+			if !strings.Contains(stderr.String(), want) {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+			}
+		})
+	}
+}
+
+func TestArtifactReviewsParseFlagsAfterArtifact(t *testing.T) {
+	for _, artifactType := range []string{"plan", "spec", "epic-verify"} {
+		t.Run(artifactType, func(t *testing.T) {
+			normalized, err := normalizeReviewArgs([]string{"artifact.md", "focus on auth", "--mode", "deep-review", "--consensus=all"}, artifactType)
+			if err != nil {
+				t.Fatalf("normalizeReviewArgs() error = %v", err)
+			}
+			opts, err := parseSpawnCodeReviewFlags(normalized, &bytes.Buffer{})
+			if err != nil {
+				t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
+			}
+			if opts.mode != "deep-review" {
+				t.Fatalf("mode = %q, want deep-review", opts.mode)
+			}
+			if opts.consensus != "all" {
+				t.Fatalf("consensus = %q, want all", opts.consensus)
+			}
+			if got, want := opts.positionals, []string{"artifact.md", "focus on auth"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("positionals = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestReviewFlagsRejectFlagShapedValues(t *testing.T) {
+	for _, artifactType := range []string{"code", "plan", "spec", "epic-verify"} {
+		t.Run(artifactType, func(t *testing.T) {
+			_, err := normalizeReviewArgs([]string{"--context-file", "--roster", "artifact.md"}, artifactType)
+			if err == nil || !strings.Contains(err.Error(), "flag needs an argument: --context-file") {
+				t.Fatalf("normalizeReviewArgs() error = %v, want missing context-file value", err)
+			}
+		})
+	}
+}
+
+func TestReviewHelpFlagsReachFlagParser(t *testing.T) {
+	for _, artifactType := range []string{"code", "epic-verify"} {
+		normalized, err := normalizeReviewArgs([]string{"--help"}, artifactType)
+		if err != nil {
+			t.Fatalf("normalizeReviewArgs(%s) error = %v", artifactType, err)
+		}
+		_, err = parseSpawnCodeReviewFlags(normalized, &bytes.Buffer{})
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Fatalf("parseSpawnCodeReviewFlags(%s) error = %v, want flag.ErrHelp", artifactType, err)
+		}
 	}
 }
 
@@ -265,7 +332,7 @@ func TestSpawnCodeReviewDebateTwoReviewersDefaultMaxRounds(t *testing.T) {
 	startDebateRuntimeCaptureForTest(t)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--debate"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review --debate exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -287,7 +354,7 @@ func TestSpawnCodeReviewDebateMaxRoundsOverride(t *testing.T) {
 	startDebateRuntimeCaptureForTest(t)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate", "--max-rounds", "5"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--debate", "--max-rounds", "5"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review --debate exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -301,27 +368,47 @@ func TestSpawnCodeReviewDebateMaxRoundsOverride(t *testing.T) {
 	}
 }
 
-func TestSpawnCodeReviewDebateUsesRosterDefaultsWhenFlagsOmitted(t *testing.T) {
+func TestSpawnCodeReviewZeroMaxRoundsRunsSingleIteration(t *testing.T) {
+	setSpawnTestEnv(t)
+	started := startDebateRuntimeCaptureForTest(t)
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"spawn-code-review", "--debate", "--max-rounds", "0"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("spawn-code-review --max-rounds 0 exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if (*started).Params.MaxRounds != 1 {
+		t.Fatalf("started max_rounds = %d, want 1", (*started).Params.MaxRounds)
+	}
+	if gate := readSpawnGate(t); gate.MaxRounds != 1 {
+		t.Fatalf("gate max_rounds = %d, want 1", gate.MaxRounds)
+	}
+}
+
+func TestSpawnCodeReviewDebateUsesConfigDefaultsWhenFlagsOmitted(t *testing.T) {
 	setSpawnTestEnv(t)
 	started := startDebateRuntimeCaptureForTest(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".cerberus"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
 	}
-	rosters := []byte(`version: 1
+	configData := []byte(`version: 1
 defaults:
   mode: max
   max_rounds: 5
-rosters:
-  default:
-    reviewers:
+roster:
+  max:
+    models:
       - provider: codex
         model: gpt
+        effort: high
       - provider: claude
         model: opus
+        effort: high
 `)
-	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "rosters.yaml"), rosters, 0o644); err != nil {
-		t.Fatalf("WriteFile(rosters.yaml) error = %v", err)
+	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "config.yaml"), configData, 0o644); err != nil {
+		t.Fatalf("WriteFile(config.yaml) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -362,7 +449,7 @@ func TestSpawnCodeReviewDebateRuntimeLaunchFailureResolvesPendingGate(t *testing
 	})
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex,claude", "--debate"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--debate"}, &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("spawn-code-review exit code = 0, want non-zero")
@@ -383,17 +470,17 @@ func TestSpawnCodeReviewRecordsResolvePreflightFailure(t *testing.T) {
 	setSpawnTestEnv(t)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "unknown"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review", "--mode", "unknown"}, &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("spawn-code-review exit code = 0, want non-zero")
 	}
 	events := readSpawnEventLog(t)
 	event := findSpawnEvent(t, events, telemetry.EventPreflightFailed)
-	if got, want := event["stage"], "roster"; got != want {
+	if got, want := event["stage"], "config"; got != want {
 		t.Fatalf("preflight failed stage = %v, want %q", got, want)
 	}
-	if !strings.Contains(event["error"].(string), `unsupported provider "unknown"`) {
+	if !strings.Contains(event["error"].(string), `mode "unknown"`) {
 		t.Fatalf("preflight failed error = %v, want unsupported provider", event["error"])
 	}
 }
@@ -406,7 +493,7 @@ func TestSpawnCodeReviewCreatesPendingGateObservedByHookPoll(t *testing.T) {
 	})
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "claude,codex,gemini"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -445,7 +532,7 @@ func TestSpawnCodeReviewWarnsGenericHostNeedsManualWait(t *testing.T) {
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -492,6 +579,7 @@ func TestSpawnCodeReviewInfersCodexHostFromPluginRoot(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
 	t.Setenv("CERBERUS_RUN_KEY", "")
 	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 	t.Setenv("PLUGIN_ROOT", repoRoot)
 	t.Setenv("HOME", home)
@@ -500,7 +588,7 @@ func TestSpawnCodeReviewInfersCodexHostFromPluginRoot(t *testing.T) {
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -543,6 +631,7 @@ func TestSpawnCodeReviewInfersCodexHostAndProjectKeyFromCurrentRepo(t *testing.T
 	t.Setenv("CERBERUS_PROJECT_KEY", "")
 	t.Setenv("CERBERUS_RUN_KEY", "")
 	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 	t.Setenv("PLUGIN_ROOT", repoRoot)
 	t.Setenv("HOME", home)
@@ -551,7 +640,7 @@ func TestSpawnCodeReviewInfersCodexHostAndProjectKeyFromCurrentRepo(t *testing.T
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -590,6 +679,7 @@ func TestSpawnCodeReviewInfersClaudeHostFromClaudePluginRoot(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
 	t.Setenv("CERBERUS_RUN_KEY", "")
 	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", repoRoot)
 	t.Setenv("PLUGIN_ROOT", "")
 	t.Setenv("HOME", home)
@@ -598,7 +688,7 @@ func TestSpawnCodeReviewInfersClaudeHostFromClaudePluginRoot(t *testing.T) {
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -640,6 +730,7 @@ func TestSpawnCodeReviewInfersClaudeHostAndProjectKeyFromCurrentRepo(t *testing.
 	t.Setenv("CERBERUS_PROJECT_KEY", "")
 	t.Setenv("CERBERUS_RUN_KEY", "")
 	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", repoRoot)
 	t.Setenv("PLUGIN_ROOT", "")
 	t.Setenv("HOME", home)
@@ -648,7 +739,7 @@ func TestSpawnCodeReviewInfersClaudeHostAndProjectKeyFromCurrentRepo(t *testing.
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("spawn-code-review exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -673,7 +764,7 @@ func TestSpawnCodeReviewRuntimeLaunchFailureResolvesPendingGate(t *testing.T) {
 	})
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"spawn-code-review", "--agents", "codex"}, &stdout, &stderr)
+	code := run([]string{"spawn-code-review"}, &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("spawn-code-review exit code = 0, want non-zero")
@@ -861,54 +952,6 @@ func TestDebateReviewerFailureResolvesPendingGate(t *testing.T) {
 	}
 }
 
-func TestReviewersFromAgentsUsesProviderOccurrenceForInstanceIndex(t *testing.T) {
-	reviewers, rosterID, err := reviewersFromAgents("codex,claude")
-	if err != nil {
-		t.Fatalf("reviewersFromAgents() error = %v", err)
-	}
-	if rosterID != "agents" {
-		t.Fatalf("rosterID = %q, want agents", rosterID)
-	}
-	if got, want := len(reviewers), 2; got != want {
-		t.Fatalf("len(reviewers) = %d, want %d", got, want)
-	}
-	if reviewers[1].ID != "claude#1" {
-		t.Fatalf("second reviewer ID = %q, want claude#1", reviewers[1].ID)
-	}
-	if got, want := reviewers[1].InstanceIndex, 1; got != want {
-		t.Fatalf("claude#1 instance index = %d, want %d", got, want)
-	}
-}
-
-func TestParseSpawnCodeReviewReviewerGrammarAndReplace(t *testing.T) {
-	var stderr bytes.Buffer
-
-	opts, err := parseSpawnCodeReviewFlags([]string{
-		"--roster", "default",
-		"--reviewer", "claude:opus",
-		"--reviewer", "codex:gpt-5.3-codex:falsification-first",
-		"--replace-slot", "claude#1",
-		"--consensus", "all",
-	}, &stderr)
-	if err != nil {
-		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
-	}
-	if opts.roster != "default" || opts.replaceSlot != "claude#1" || opts.consensus != "all" {
-		t.Fatalf("parsed options = %#v, want roster/replace/consensus", opts)
-	}
-	if opts.mode != "" || opts.maxRounds != 3 {
-		t.Fatalf("implicit mode/maxRounds = %q/%d, want empty/3", opts.mode, opts.maxRounds)
-	}
-	if got, want := strings.Join(opts.reviewers, ","), "claude:opus,codex:gpt-5.3-codex:falsification-first"; got != want {
-		t.Fatalf("reviewers = %q, want %q", got, want)
-	}
-
-	_, err = parseSpawnCodeReviewFlags([]string{"--reviewer", "claude:model:strategy:extra"}, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "--reviewer must use provider:model[:strategy]") {
-		t.Fatalf("long reviewer parse error = %v, want grammar error", err)
-	}
-}
-
 func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	var stderr bytes.Buffer
 
@@ -924,6 +967,21 @@ func TestParseSpawnCodeReviewPreservesExplicitModeAndMaxRounds(t *testing.T) {
 	}
 }
 
+func TestParseSpawnCodeReviewTranslatesZeroMaxRoundsToSingleIteration(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseSpawnCodeReviewFlags([]string{"--max-rounds", "0"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags() error = %v", err)
+	}
+	if !opts.maxRoundsSet || opts.maxRounds != 0 {
+		t.Fatalf("parsed max rounds = set:%t value:%d, want explicit zero", opts.maxRoundsSet, opts.maxRounds)
+	}
+	if got := opts.explicitMaxRounds(); got != 1 {
+		t.Fatalf("explicitMaxRounds() = %d, want 1", got)
+	}
+}
+
 func TestParseSpawnCodeReviewPostReviewer(t *testing.T) {
 	var stderr bytes.Buffer
 
@@ -932,8 +990,8 @@ func TestParseSpawnCodeReviewPostReviewer(t *testing.T) {
 		t.Fatalf("parseSpawnCodeReviewFlags(default) error = %v", err)
 	}
 	defaultSlot := opts.postReviewSlot()
-	if defaultSlot.Provider != "codex" || defaultSlot.Model != "gpt-5.5" || defaultSlot.Mode != "fast" {
-		t.Fatalf("default post reviewer = %#v, want codex/gpt-5.5/fast", defaultSlot)
+	if defaultSlot.Provider != "codex" || defaultSlot.Model != "gpt-5.6-sol" || defaultSlot.Effort != "low" {
+		t.Fatalf("default post reviewer = %#v, want codex/gpt-5.6-sol/low", defaultSlot)
 	}
 
 	opts, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "claude:opus:high"}, &stderr)
@@ -941,31 +999,45 @@ func TestParseSpawnCodeReviewPostReviewer(t *testing.T) {
 		t.Fatalf("parseSpawnCodeReviewFlags(custom) error = %v", err)
 	}
 	slot := opts.postReviewSlot()
-	if slot.Provider != "claude" || slot.Model != "opus" || slot.Mode != "max" {
-		t.Fatalf("custom post reviewer = %#v, want claude/opus/max", slot)
+	if slot.Provider != "claude" || slot.Model != "opus" || slot.Effort != "high" {
+		t.Fatalf("custom post reviewer = %#v, want claude/opus/high", slot)
 	}
 
 	_, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:turbo"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--post-reviewer effort") {
 		t.Fatalf("invalid post reviewer error = %v, want effort error", err)
 	}
+
+	_, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:max"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "low, medium, or high") {
+		t.Fatalf("legacy post reviewer effort error = %v, want strict effort error", err)
+	}
 }
 
 func TestNormalizeEpicVerifyArgsRecognizesFailPriority(t *testing.T) {
-	got := normalizeReviewArgs([]string{"--fail-priority", "p2", "docs/epic.md"}, "epic-verify")
-	want := []string{"--fail-priority", "p2", "docs/epic.md"}
+	got, err := normalizeReviewArgs([]string{"--fail-priority", "p2", "docs/epic.md"}, "epic-verify")
+	if err != nil {
+		t.Fatalf("normalizeReviewArgs() error = %v", err)
+	}
+	want := []string{"--fail-priority", "p2", "--", "docs/epic.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeReviewArgs() = %#v, want %#v", got, want)
 	}
 
-	got = normalizeReviewArgs([]string{"--fail-priority=p2", "docs/epic.md"}, "epic-verify")
-	want = []string{"--fail-priority=p2", "docs/epic.md"}
+	got, err = normalizeReviewArgs([]string{"--fail-priority=p2", "docs/epic.md"}, "epic-verify")
+	if err != nil {
+		t.Fatalf("normalizeReviewArgs(equals) error = %v", err)
+	}
+	want = []string{"--fail-priority=p2", "--", "docs/epic.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeReviewArgs(equals) = %#v, want %#v", got, want)
 	}
 
-	got = normalizeReviewArgs([]string{"--post-reviewer", "claude:opus:high", "docs/epic.md"}, "epic-verify")
-	want = []string{"--post-reviewer", "claude:opus:high", "docs/epic.md"}
+	got, err = normalizeReviewArgs([]string{"--post-reviewer", "claude:opus:high", "docs/epic.md"}, "epic-verify")
+	if err != nil {
+		t.Fatalf("normalizeReviewArgs(post-reviewer) error = %v", err)
+	}
+	want = []string{"--post-reviewer", "claude:opus:high", "--", "docs/epic.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeReviewArgs(post-reviewer) = %#v, want %#v", got, want)
 	}
@@ -974,14 +1046,14 @@ func TestNormalizeEpicVerifyArgsRecognizesFailPriority(t *testing.T) {
 func TestParseSpawnCodeReviewRejectsExplicitInvalidRuntimeFlags(t *testing.T) {
 	var stderr bytes.Buffer
 
-	_, err := parseSpawnCodeReviewFlags([]string{"--max-rounds", "0"}, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "--max-rounds must be positive") {
-		t.Fatalf("zero max-rounds error = %v, want positive error", err)
+	_, err := parseSpawnCodeReviewFlags([]string{"--max-rounds", "-1"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--max-rounds must be non-negative") {
+		t.Fatalf("negative max-rounds error = %v, want non-negative error", err)
 	}
 
 	_, err = parseSpawnCodeReviewFlags([]string{"--mode", ""}, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "--mode must be fast, smart, or max") {
-		t.Fatalf("empty mode error = %v, want mode enum error", err)
+	if err == nil || !strings.Contains(err.Error(), "--mode must not be empty") {
+		t.Fatalf("empty mode error = %v, want non-empty mode error", err)
 	}
 }
 
@@ -1015,81 +1087,25 @@ func TestParseSpawnCodeReviewCommitKeepsTrailingFocus(t *testing.T) {
 	}
 }
 
-func TestResolveReviewersAppendsCLIReviewer(t *testing.T) {
-	setRosterTestCWD(t)
-
-	resolved, err := resolveReviewers(spawnCodeReviewOptions{
-		roster:    "default",
-		reviewers: []string{"claude:opus"},
-	})
-	if err != nil {
-		t.Fatalf("resolveReviewers() error = %v", err)
-	}
-	if resolved.rosterID != "default" {
-		t.Fatalf("rosterID = %q, want default", resolved.rosterID)
-	}
-	if got, want := len(resolved.reviewers), 2; got != want {
-		t.Fatalf("len(reviewers) = %d, want %d", got, want)
-	}
-	if resolved.reviewers[0].ID != "codex#1" || resolved.reviewers[1].ID != "claude#1" {
-		t.Fatalf("reviewer IDs = %#v, want codex#1 then claude#1", resolved.reviewers)
-	}
-}
-
-func TestResolveReviewersReplacesSlot(t *testing.T) {
-	setRosterTestCWD(t)
-
-	resolved, err := resolveReviewers(spawnCodeReviewOptions{
-		roster:      "default",
-		reviewers:   []string{"claude:opus"},
-		replaceSlot: "codex#1",
-	})
-	if err != nil {
-		t.Fatalf("resolveReviewers() error = %v", err)
-	}
-	if got, want := len(resolved.reviewers), 1; got != want {
-		t.Fatalf("len(reviewers) = %d, want %d", got, want)
-	}
-	if resolved.reviewers[0].ID != "claude#1" || resolved.reviewers[0].Provider != "claude" || resolved.reviewers[0].Model != "opus" {
-		t.Fatalf("reviewer = %#v, want claude#1 opus", resolved.reviewers[0])
-	}
-}
-
-func TestResolveReviewersPreservesStrategy(t *testing.T) {
-	setRosterTestCWD(t)
-	writeStrategy(t, "falsification-first")
-
-	resolved, err := resolveReviewers(spawnCodeReviewOptions{
-		roster:    "default",
-		reviewers: []string{"claude:opus:falsification-first"},
-	})
-	if err != nil {
-		t.Fatalf("resolveReviewers() error = %v", err)
-	}
-	if got, want := resolved.reviewers[1].Strategy, "falsification-first"; got != want {
-		t.Fatalf("reviewer strategy = %q, want %q", got, want)
-	}
-}
-
-func TestResolveReviewersCarriesRosterDefaultsAndSlotMode(t *testing.T) {
+func TestResolveReviewersCarriesConfigDefaultsAndModelEffort(t *testing.T) {
 	setSpawnTestEnv(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".cerberus"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
 	}
-	rosters := []byte(`version: 1
+	configData := []byte(`version: 1
 defaults:
-  mode: max
+  mode: deep-review
   max_rounds: 3
-rosters:
-  default:
-    reviewers:
+roster:
+  deep-review:
+    models:
       - provider: codex
         model: gpt
-        mode: fast
+        effort: high
 `)
-	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "rosters.yaml"), rosters, 0o644); err != nil {
-		t.Fatalf("WriteFile(rosters.yaml) error = %v", err)
+	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "config.yaml"), configData, 0o644); err != nil {
+		t.Fatalf("WriteFile(config.yaml) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -1108,11 +1124,11 @@ rosters:
 	if err != nil {
 		t.Fatalf("resolveReviewers() error = %v", err)
 	}
-	if resolved.defaults.Mode != "max" || resolved.defaults.MaxRounds != 3 {
-		t.Fatalf("defaults = %#v, want mode max max_rounds 3", resolved.defaults)
+	if resolved.defaults.Mode != "deep-review" || resolved.defaults.MaxRounds != 3 {
+		t.Fatalf("defaults = %#v, want mode deep-review max_rounds 3", resolved.defaults)
 	}
-	if got, want := resolved.reviewers[0].Mode, "fast"; got != want {
-		t.Fatalf("reviewer mode = %q, want %q", got, want)
+	if got, want := resolved.reviewers[0].Effort, "high"; got != want {
+		t.Fatalf("reviewer effort = %q, want %q", got, want)
 	}
 	if got, want := resolved.reviewers[0].InstanceIndex, 1; got != want {
 		t.Fatalf("reviewer instance index = %d, want %d", got, want)
@@ -1199,7 +1215,7 @@ func TestResolvePersistsReason(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        1,
-		RosterID:         "default",
+		Mode:             "smart",
 	}); err != nil {
 		t.Fatalf("WriteGateState() error = %v", err)
 	}
@@ -1232,6 +1248,9 @@ func setSpawnTestEnv(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", "project")
 	t.Setenv("CERBERUS_RUN_KEY", "run")
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", t.TempDir())
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("PLUGIN_ROOT", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 }
 
 func spawnTestMockPath(t *testing.T, repoRoot string) string {
@@ -1316,9 +1335,9 @@ func setRosterTestCWD(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, ".cerberus"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.cerberus) error = %v", err)
 	}
-	rosters := []byte("version: 1\nrosters:\n  default:\n    reviewers:\n      - provider: codex\n        model: gpt\n")
-	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "rosters.yaml"), rosters, 0o644); err != nil {
-		t.Fatalf("WriteFile(rosters.yaml) error = %v", err)
+	configData := []byte("version: 1\nroster:\n  smart:\n    models:\n      - provider: codex\n        model: gpt\n        effort: medium\n")
+	if err := os.WriteFile(filepath.Join(dir, ".cerberus", "config.yaml"), configData, 0o644); err != nil {
+		t.Fatalf("WriteFile(config.yaml) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -1469,6 +1488,19 @@ func assertRecordedModel(t *testing.T, provider, want string) {
 	data, err := os.ReadFile(filepath.Join(os.Getenv("CERBERUS_MOCK_RECORD_DIR"), provider+".args"))
 	if err != nil {
 		t.Fatalf("ReadFile(%s.args) error = %v", provider, err)
+	}
+	if provider == "gemini" {
+		if !strings.Contains(string(data), "--model\ncerberus-reviewer\n") {
+			t.Fatalf("gemini args = %q, want effort model alias", string(data))
+		}
+		settings, err := os.ReadFile(filepath.Join(os.Getenv("CERBERUS_MOCK_RECORD_DIR"), provider+".settings.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s.settings.json) error = %v", provider, err)
+		}
+		if !strings.Contains(string(settings), `"model": "`+want+`"`) {
+			t.Fatalf("gemini settings = %q, want model %q", settings, want)
+		}
+		return
 	}
 	if !strings.Contains(string(data), "--model\n"+want+"\n") {
 		t.Fatalf("%s args = %q, want model %q", provider, string(data), want)

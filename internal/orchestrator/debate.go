@@ -21,7 +21,6 @@ type Orchestrator struct {
 	Spawner                reviewer.Spawner
 	Consensus              aggregate.Mode
 	Mode                   string
-	RosterID               string
 	PostReviewer           ReviewerSlot
 	AnonymizePeerBroadcast func([]reviewer.RawReviewerOutput, []string, int) ([]anonymize.PeerRecord, error)
 }
@@ -36,7 +35,6 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 		Mode:         o.Mode,
 		MaxRounds:    maxRounds,
 		Consensus:    o.Consensus,
-		RosterID:     o.RosterID,
 	})
 	if err != nil {
 		return Verdict{}, err
@@ -47,13 +45,13 @@ func (o Orchestrator) RunDebate(ctx context.Context, slots []ReviewerSlot, promp
 // StartDebate creates the pending gate for a detached debate runtime.
 func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
 	if params.Mode == "" {
-		params.Mode = params.RosterDefaults.Mode
+		params.Mode = params.ConfigDefaults.Mode
 	}
 	if params.Mode == "" {
 		params.Mode = "smart"
 	}
 	if params.MaxRounds <= 0 {
-		params.MaxRounds = params.RosterDefaults.MaxRounds
+		params.MaxRounds = params.ConfigDefaults.MaxRounds
 	}
 	if params.MaxRounds <= 0 {
 		params.MaxRounds = 3
@@ -65,13 +63,10 @@ func (o Orchestrator) StartDebate(params Params) (*StartedRun, error) {
 		params.FailurePriority = aggregate.DefaultFailurePriority
 		params.FailurePrioritySet = true
 	}
-	if params.RosterID == "" {
-		params.RosterID = "default"
-	}
 	if params.ArtifactType == "" {
 		params.ArtifactType = "code"
 	}
-	if params.PostReviewer.Provider == "" && params.PostReviewer.Model == "" && params.PostReviewer.Mode == "" {
+	if params.PostReviewer.Provider == "" && params.PostReviewer.Model == "" && params.PostReviewer.Effort == "" {
 		params.PostReviewer = o.PostReviewer
 	}
 	return o.startDebate(params)
@@ -118,13 +113,6 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	if mode == "" {
 		mode = "smart"
 	}
-	rosterID := o.RosterID
-	if rosterID == "" {
-		rosterID = params.RosterID
-	}
-	if rosterID == "" {
-		rosterID = "default"
-	}
 	postReviewer, err := preflightPostReviewSlot(params.ArtifactType, params.PostReviewer)
 	if err != nil {
 		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "post_reviewer", err)
@@ -153,29 +141,27 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 		TranscriptPath:   resolvedEnv.TranscriptPath,
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
-		Mode:             gateStateMode(mode),
+		Mode:             mode,
 		MaxRounds:        maxRounds,
 		Debate:           true,
-		RosterID:         rosterID,
 		StartedAt:        startedAt,
 	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return nil, err
 	}
 	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
-		Event:     telemetry.EventRosterSelected,
+		Event:     telemetry.EventModeSelected,
 		Timestamp: startedAt,
 		Payload: map[string]any{
 			"run_key":        resolvedEnv.RunKey,
 			"host":           resolvedEnv.Host,
-			"roster_id":      rosterID,
-			"roster_name":    rosterID,
+			"mode":           mode,
 			"reviewer_count": len(slots),
 			"providers":      providerBreakdown(slots),
 			"debate":         true,
 		},
 	}); err != nil {
-		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("roster selected telemetry failed: %v", err))
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("mode selected telemetry failed: %v", err))
 		_ = state.WriteGateState(gatePath, gate)
 		return nil, err
 	}
@@ -197,7 +183,6 @@ func (o Orchestrator) startDebate(params Params) (*StartedRun, error) {
 	params.Consensus = consensus
 	params.FailurePriority = failurePriority
 	params.FailurePrioritySet = true
-	params.RosterID = rosterID
 	params.PostReviewer = postReviewer
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
 }
@@ -224,11 +209,6 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 	if mode == "" {
 		mode = "smart"
 	}
-	rosterID := started.Params.RosterID
-	if rosterID == "" {
-		rosterID = "default"
-	}
-
 	spawner := o.Spawner
 	if spawner == nil {
 		spawner = reviewer.Runner{Root: resolvedEnv.Root, RunRoot: runRoot, Iteration: 1}
@@ -411,7 +391,6 @@ func (o Orchestrator) CompleteDebate(ctx context.Context, started *StartedRun) (
 		RunKey:       resolvedEnv.RunKey,
 		Host:         resolvedEnv.Host,
 		Mode:         mode,
-		RosterID:     rosterID,
 		Debate:       true,
 		Iterations:   1,
 		TotalRounds:  roundsCompleted,

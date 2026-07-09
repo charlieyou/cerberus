@@ -161,6 +161,7 @@ func TestActiveRunRootFallsBackToSessionCache(t *testing.T) {
 	t.Setenv("CERBERUS_PROJECT_KEY", projectKey)
 	t.Setenv("CERBERUS_RUN_KEY", "")
 	t.Setenv("CERBERUS_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 
 	got, ok, err := activeRunRoot()
 	if err != nil {

@@ -27,17 +27,16 @@ type Params struct {
 	ContextContent     string
 	Reviewers          []ReviewerSlot
 	PostReviewer       ReviewerSlot
-	RosterDefaults     RosterDefaults
+	ConfigDefaults     ConfigDefaults
 	Mode               string
 	MaxRounds          int
 	Consensus          ConsensusMode
 	FailurePriority    int
 	FailurePrioritySet bool
-	RosterID           string
 }
 
-// RosterDefaults carries panel-wide defaults from rosters.yaml.
-type RosterDefaults struct {
+// ConfigDefaults carries runtime defaults from config.yaml.
+type ConfigDefaults struct {
 	Mode      string
 	MaxRounds int
 }
@@ -47,9 +46,9 @@ type ReviewerSlot struct {
 	ID            string
 	Provider      string
 	Model         string
+	Effort        string
 	Strategy      string
 	PersonaPath   string
-	Mode          string
 	InstanceIndex int
 }
 
@@ -114,7 +113,7 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	}
 	slots, defaults, err := resolveSlots(params)
 	if err != nil {
-		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "roster", err)
+		_ = writePreflightFailureEvent(runRoot, resolvedEnv, "config", err)
 		return nil, err
 	}
 	if err := preflightExplicitSlots(slots, params.Reviewers != nil); err != nil {
@@ -136,10 +135,6 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 	}
 	if maxRounds <= 0 {
 		maxRounds = 1
-	}
-	rosterID := params.RosterID
-	if rosterID == "" {
-		rosterID = "default"
 	}
 	consensus := params.Consensus
 	if consensus == "" {
@@ -182,29 +177,27 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 		Status:           state.StatusPending,
 		Verdict:          nil,
 		CurrentIteration: 1,
-		Mode:             gateStateMode(mode),
+		Mode:             mode,
 		MaxRounds:        maxRounds,
 		Debate:           false,
-		RosterID:         rosterID,
 		StartedAt:        startedAt,
 	}
 	if err := state.WriteGateState(gatePath, gate); err != nil {
 		return nil, err
 	}
 	if err := telemetry.WriteEvent(runRoot, telemetry.Event{
-		Event:     telemetry.EventRosterSelected,
+		Event:     telemetry.EventModeSelected,
 		Timestamp: startedAt,
 		Payload: map[string]any{
 			"run_key":        resolvedEnv.RunKey,
 			"host":           resolvedEnv.Host,
-			"roster_id":      rosterID,
-			"roster_name":    rosterID,
+			"mode":           mode,
 			"reviewer_count": len(slots),
 			"providers":      providerBreakdown(slots),
 			"debate":         false,
 		},
 	}); err != nil {
-		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("roster selected telemetry failed: %v", err))
+		state.MarkResolved(gate, state.VerdictRequiresDecision, time.Now().UTC(), fmt.Sprintf("mode selected telemetry failed: %v", err))
 		_ = state.WriteGateState(gatePath, gate)
 		return nil, err
 	}
@@ -221,13 +214,12 @@ func StartSinglePass(env *config.Env, params Params) (*StartedRun, error) {
 		return nil, err
 	}
 	params.Reviewers = slots
-	params.RosterDefaults = defaults
+	params.ConfigDefaults = defaults
 	params.Mode = mode
 	params.MaxRounds = maxRounds
 	params.Consensus = consensus
 	params.FailurePriority = failurePriority
 	params.FailurePrioritySet = true
-	params.RosterID = rosterID
 	params.ArtifactType = artifactType
 	params.PostReviewer = postReviewer
 	return &StartedRun{Env: *resolvedEnv, RunRoot: runRoot, Params: params}, nil
@@ -258,13 +250,6 @@ func acquireStartLock(runRoot, runKey string) (func(), error) {
 	}
 	_ = file.Close()
 	return func() { _ = os.Remove(path) }, nil
-}
-
-func gateStateMode(mode string) string {
-	if mode == "max" {
-		return mode
-	}
-	return ""
 }
 
 // RecordPreflightFailure records a pre-run validation failure when the CLI
@@ -399,7 +384,6 @@ func CompleteSinglePass(ctx context.Context, started *StartedRun, spawner review
 		RunKey:       started.Env.RunKey,
 		Host:         started.Env.Host,
 		Mode:         started.Params.Mode,
-		RosterID:     started.Params.RosterID,
 		Debate:       false,
 		Iterations:   1,
 		TotalRounds:  1,
@@ -532,20 +516,24 @@ func applySessionCache(env *config.Env) error {
 	return nil
 }
 
-func resolveSlots(params Params) ([]ReviewerSlot, RosterDefaults, error) {
+func resolveSlots(params Params) ([]ReviewerSlot, ConfigDefaults, error) {
 	if len(params.Reviewers) > 0 {
-		return params.Reviewers, params.RosterDefaults, nil
+		return params.Reviewers, params.ConfigDefaults, nil
 	}
 
-	file, err := roster.LoadRosters("")
+	file, err := roster.LoadConfig("")
 	if err != nil {
-		return nil, RosterDefaults{}, err
+		return nil, ConfigDefaults{}, err
 	}
-	resolved, err := roster.Resolve(file, "", nil, "")
+	mode := params.Mode
+	if mode == "" && file != nil {
+		mode = file.Defaults.Mode
+	}
+	resolved, err := roster.Resolve(file, mode)
 	if err != nil {
-		return nil, RosterDefaults{}, err
+		return nil, ConfigDefaults{}, err
 	}
-	defaults := RosterDefaults{}
+	defaults := ConfigDefaults{}
 	if file != nil {
 		defaults.Mode = file.Defaults.Mode
 		if file.Defaults.MaxRounds != nil {
@@ -562,9 +550,9 @@ func reviewerSlotsFromRoster(slots []roster.RosterSlot) []ReviewerSlot {
 			ID:            slot.InstanceID,
 			Provider:      slot.Provider,
 			Model:         slot.Model,
+			Effort:        slot.Effort,
 			Strategy:      slot.Strategy,
 			PersonaPath:   slot.PersonaPath,
-			Mode:          slot.Mode,
 			InstanceIndex: slot.InstanceIndex,
 		}
 	}

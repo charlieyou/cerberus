@@ -24,8 +24,8 @@ func TestDebateGeminiPolicy(t *testing.T) {
 			Env:       env,
 			Consensus: aggregate.ModeMajority,
 		}).RunDebate(context.Background(), []orchestrator.ReviewerSlot{
-			{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Strategy: "verification-first", InstanceIndex: 1},
-			{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", InstanceIndex: 1},
+			{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Effort: "high", Strategy: "verification-first", InstanceIndex: 1},
+			{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", Effort: "high", InstanceIndex: 1},
 		}, []byte("Review Gemini policy in mixed debate."), 2)
 		if err != nil {
 			t.Fatalf("RunDebate() error = %v", err)
@@ -46,8 +46,8 @@ func TestDebateGeminiPolicy(t *testing.T) {
 			Env:       env,
 			Consensus: aggregate.ModeMajority,
 		}).RunDebate(context.Background(), []orchestrator.ReviewerSlot{
-			{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", InstanceIndex: 1},
-			{ID: "gemini#2", Provider: "gemini", Model: "gemini-3.1-pro", InstanceIndex: 2},
+			{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", Effort: "high", InstanceIndex: 1},
+			{ID: "gemini#2", Provider: "gemini", Model: "gemini-3.1-pro", Effort: "high", InstanceIndex: 2},
 		}, []byte("Review Gemini policy in same-provider debate."), 2)
 		if err != nil {
 			t.Fatalf("RunDebate() error = %v", err)

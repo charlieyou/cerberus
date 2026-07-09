@@ -24,21 +24,25 @@ func TestDebateMultiInstance(t *testing.T) {
 	installMultiDebateMockCLI(t, repoRoot, recordDir)
 
 	xdgConfigHome := t.TempDir()
-	writeIntegrationFile(t, xdgConfigHome, "cerberus/rosters.yaml", `version: 1
-rosters:
+	writeIntegrationFile(t, xdgConfigHome, "cerberus/config.yaml", `version: 1
+roster:
   debate-multi:
-    reviewers:
+    models:
       - provider: codex
         model: gpt-5.5
+        effort: high
         strategy: verification-first
       - provider: codex
         model: gpt-5.4
+        effort: high
         strategy: falsification-first
       - provider: codex
         model: gpt-5.3-codex
+        effort: high
         strategy: decompose
       - provider: gemini
         model: gemini-3.1-pro
+        effort: high
 `)
 
 	env := &config.Env{
@@ -50,7 +54,7 @@ rosters:
 	}
 
 	binary := buildIntegrationCerberus(t, repoRoot)
-	cmd := exec.Command(binary, "spawn-code-review", "--roster", "debate-multi", "--debate", "--max-rounds", "2", "multi-instance focus")
+	cmd := exec.Command(binary, "spawn-code-review", "--mode", "debate-multi", "--debate", "--max-rounds", "2", "multi-instance focus")
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"CERBERUS_ROOT="+env.Root,
@@ -65,10 +69,10 @@ rosters:
 	}
 
 	slots := []orchestrator.ReviewerSlot{
-		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Strategy: "verification-first", InstanceIndex: 1},
-		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Strategy: "falsification-first", InstanceIndex: 2},
-		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Strategy: "decompose", InstanceIndex: 3},
-		{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", InstanceIndex: 1},
+		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Effort: "high", Strategy: "verification-first", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Effort: "high", Strategy: "falsification-first", InstanceIndex: 2},
+		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Effort: "high", Strategy: "decompose", InstanceIndex: 3},
+		{ID: "gemini#1", Provider: "gemini", Model: "gemini-3.1-pro", Effort: "high", InstanceIndex: 1},
 	}
 	runRoot := state.RunDir(env.StateRoot, env.ProjectKey, env.RunKey)
 	waitForResolvedGate(t, runRoot)
@@ -99,8 +103,8 @@ func TestDebateClaudeStrategiesProduceDivergentFindings(t *testing.T) {
 		RunKey:     "debate-claude-strategies",
 	}
 	slots := []orchestrator.ReviewerSlot{
-		{ID: "claude#1", Provider: "claude", Model: "claude-opus-4-7", Strategy: "verification-first", InstanceIndex: 1},
-		{ID: "claude#2", Provider: "claude", Model: "claude-sonnet-4-5", Strategy: "falsification-first", InstanceIndex: 2},
+		{ID: "claude#1", Provider: "claude", Model: "claude-opus-4-7", Effort: "high", Strategy: "verification-first", InstanceIndex: 1},
+		{ID: "claude#2", Provider: "claude", Model: "claude-sonnet-4-5", Effort: "high", Strategy: "falsification-first", InstanceIndex: 2},
 	}
 
 	verdict, err := (orchestrator.Orchestrator{
@@ -134,9 +138,9 @@ func TestDebateCodexThreeInstancesSpawnDistinctIDs(t *testing.T) {
 		RunKey:     "debate-codex-three",
 	}
 	slots := []orchestrator.ReviewerSlot{
-		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Strategy: "verification-first", InstanceIndex: 1},
-		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Strategy: "falsification-first", InstanceIndex: 2},
-		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Strategy: "decompose", InstanceIndex: 3},
+		{ID: "codex#1", Provider: "codex", Model: "gpt-5.5", Effort: "high", Strategy: "verification-first", InstanceIndex: 1},
+		{ID: "codex#2", Provider: "codex", Model: "gpt-5.4", Effort: "high", Strategy: "falsification-first", InstanceIndex: 2},
+		{ID: "codex#3", Provider: "codex", Model: "gpt-5.3-codex", Effort: "high", Strategy: "decompose", InstanceIndex: 3},
 	}
 
 	verdict, err := (orchestrator.Orchestrator{
@@ -391,7 +395,8 @@ case "$provider:$model" in
   codex:gpt-5.5) fixture="round-$round-codex1.json" ;;
   codex:gpt-5.4) fixture="round-$round-codex2.json" ;;
   codex:gpt-5.3-codex) fixture="round-$round-codex3.json" ;;
-  gemini:gemini-3.1-pro) fixture="round-$round-gemini1.json" ;;
+  codex:gpt-5.6-sol) fixture="post-review.json" ;;
+  gemini:gemini-3.1-pro|gemini:cerberus-reviewer) fixture="round-$round-gemini1.json" ;;
   *) echo "unexpected mock invocation provider=$provider model=$model" >&2; exit 1 ;;
 esac
 cat "$fixture_dir/$fixture"

@@ -28,6 +28,7 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				ID:       provider + "#1",
 				Provider: provider,
 				Model:    "model-name",
+				Effort:   "high",
 				Mode:     "max",
 				System:   []byte("system prompt"),
 				User:     []byte("large user prompt body"),
@@ -57,23 +58,35 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				if !strings.Contains(args, "--append-system-prompt\nsystem prompt") {
 					t.Fatalf("claude argv = %q, want system prompt flag", args)
 				}
-				if !strings.Contains(args, "--model\nfable") {
-					t.Fatalf("claude argv = %q, want max-mode model flag", args)
+				if !strings.Contains(args, "--model\nmodel-name") {
+					t.Fatalf("claude argv = %q, want configured model flag", args)
 				}
-				if strings.Contains(args, "--model\nmodel-name") {
-					t.Fatalf("claude argv = %q, want fable to override configured model in max mode", args)
+				if !strings.Contains(args, "--effort\nhigh") {
+					t.Fatalf("claude argv = %q, want max-mode effort flag", args)
 				}
 			}
-			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name") {
-				t.Fatalf("codex argv = %q, want exec json and model flags", args)
+			if provider == "codex" {
+				if !strings.Contains(args, "exec\n--json\n--model\nmodel-name") {
+					t.Fatalf("codex argv = %q, want exec json and model flags", args)
+				}
+				if !strings.Contains(args, "-c\nmodel_reasoning_effort=\"high\"") {
+					t.Fatalf("codex argv = %q, want max-mode reasoning effort config", args)
+				}
 			}
 			if provider == "gemini" {
 				wantPolicy := filepath.Join(root, "config", "gemini-readonly-policy.toml")
 				if !strings.Contains(args, "--output-format\njson\n") {
 					t.Fatalf("gemini argv = %q, want JSON output-format flag", args)
 				}
+				if !strings.Contains(args, "--model\ncerberus-reviewer\n") {
+					t.Fatalf("gemini argv = %q, want effort model alias", args)
+				}
 				if !strings.Contains(args, "--prompt\nsystem prompt") {
 					t.Fatalf("gemini argv = %q, want prompt flag", args)
+				}
+				settings := readRecord(t, recordDir, provider+".settings.json")
+				if !strings.Contains(settings, `"model": "model-name"`) || !strings.Contains(settings, `"thinkingLevel": "HIGH"`) {
+					t.Fatalf("gemini settings = %q, want configured model and high thinking level", settings)
 				}
 				if !strings.Contains(args, "use only the exact function names `glob`, `grep_search`, or `read_file`") {
 					t.Fatalf("gemini argv = %q, want tool-name directive", args)

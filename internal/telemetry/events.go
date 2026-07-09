@@ -12,7 +12,7 @@ const (
 	EventBuildStarted               = "cerberus.build.started"
 	EventBuildCompleted             = "cerberus.build.completed"
 	EventBuildFailed                = "cerberus.build.failed"
-	EventRosterSelected             = "cerberus.roster.selected"
+	EventModeSelected               = "cerberus.mode.selected"
 	EventPreflightFailed            = "cerberus.preflight.failed"
 	EventReviewSpawned              = "cerberus.review.spawned"
 	EventRuntimeLaunching           = "cerberus.runtime.launching"

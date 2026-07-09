@@ -55,7 +55,7 @@ func TestCodexHostResolutionWritesGateStateUnderCodexRoot(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        1,
-		RosterID:         "codex-resolution-stub",
+		Mode:             "smart",
 		StartedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("WriteGateState() error = %v", err)

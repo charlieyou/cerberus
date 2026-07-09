@@ -25,7 +25,6 @@ func TestGateStateRoundTrips(t *testing.T) {
 		Mode:             "max",
 		MaxRounds:        3,
 		Debate:           false,
-		RosterID:         "default",
 		StartedAt:        startedAt,
 		EndedAt:          nil,
 	}
@@ -60,7 +59,6 @@ func TestGateStateRoundTrips(t *testing.T) {
 		"mode",
 		"max_rounds",
 		"debate",
-		"roster_id",
 		"started_at",
 		"ended_at",
 	})
@@ -78,7 +76,6 @@ func TestMarkResolved(t *testing.T) {
 		Status:           StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        3,
-		RosterID:         "default",
 		StartedAt:        startedAt,
 	}
 

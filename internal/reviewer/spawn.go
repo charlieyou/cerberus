@@ -52,6 +52,7 @@ func Spawn(ctx context.Context, slot roster.RosterSlot, system, user []byte) (*R
 		ID:       slot.InstanceID,
 		Provider: slot.Provider,
 		Model:    slot.Model,
+		Effort:   slot.Effort,
 		System:   system,
 		User:     user,
 	})
@@ -100,6 +101,7 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		InstanceID:         request.ID,
 		Provider:           request.Provider,
 		Model:              request.Model,
+		Effort:             request.Effort,
 		Mode:               request.Mode,
 		System:             request.System,
 		User:               user,
@@ -163,10 +165,11 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 
 // RunProvider invokes a supported model provider with the user prompt on stdin.
 func RunProvider(ctx context.Context, invocation ProviderInvocation) (ProviderOutput, error) {
-	command, err := command(ctx, invocation)
+	command, cleanup, err := command(ctx, invocation)
 	if err != nil {
 		return ProviderOutput{}, err
 	}
+	defer cleanup()
 	command.Stdin = bytes.NewReader(invocation.User)
 
 	var stdout, stderr bytes.Buffer
@@ -327,51 +330,120 @@ func (payload usagePayload) costUSD() float64 {
 	return firstPositiveFloat(payload.CostUSD, payload.TotalCostUSD, payload.Cost, payload.Stats.Cost)
 }
 
-func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, error) {
+func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, func(), error) {
 	system := systemPromptWithMode(invocation.System, invocation.Mode)
 	if bytes.Contains([]byte(invocation.Provider), []byte{0}) || bytes.Contains([]byte(invocation.Model), []byte{0}) || bytes.Contains(system, []byte{0}) {
-		return nil, fmt.Errorf("reviewer command contains NUL byte")
+		return nil, func() {}, fmt.Errorf("reviewer command contains NUL byte")
 	}
 	if bytes.Contains(invocation.User, []byte{0}) {
-		return nil, fmt.Errorf("reviewer user prompt contains NUL byte")
+		return nil, func() {}, fmt.Errorf("reviewer user prompt contains NUL byte")
 	}
 
 	args := []string{}
+	cleanup := func() {}
+	env := os.Environ()
 	switch invocation.Provider {
 	case "claude":
 		outputFormat := firstNonEmpty(invocation.ClaudeOutputFormat, "json")
 		args = []string{"--print", "--output-format", outputFormat}
 		if invocation.ClaudeModelFlag {
-			args = append(args, "--model", effectiveProviderModel(invocation))
+			args = append(args, "--model", invocation.Model)
+		}
+		if invocation.Effort != "" {
+			args = append(args, "--effort", invocation.Effort)
 		}
 		args = append(args, "--append-system-prompt", string(system))
 	case "codex":
-		args = []string{"exec", "--json", "--model", invocation.Model, string(system)}
+		args = []string{"exec", "--json", "--model", invocation.Model}
+		if invocation.Effort != "" {
+			args = append(args, "-c", "model_reasoning_effort=\""+invocation.Effort+"\"")
+		}
+		args = append(args, string(system))
 	case "gemini":
 		if invocation.Root == "" {
-			return nil, fmt.Errorf("CERBERUS_ROOT is required for gemini policy file")
+			return nil, func() {}, fmt.Errorf("CERBERUS_ROOT is required for gemini policy file")
 		}
 		policyPath := filepath.Join(invocation.Root, "config", "gemini-readonly-policy.toml")
 		if _, err := os.Stat(policyPath); err != nil {
-			return nil, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
+			return nil, func() {}, fmt.Errorf("gemini policy file %s is required: %w", policyPath, err)
+		}
+		model := invocation.Model
+		if invocation.Effort != "" {
+			settingsPath, err := writeGeminiEffortSettings(invocation.Model, strings.ToUpper(invocation.Effort))
+			if err != nil {
+				return nil, func() {}, err
+			}
+			cleanup = func() { _ = os.Remove(settingsPath) }
+			env = append(env, "GEMINI_CLI_SYSTEM_SETTINGS_PATH="+settingsPath)
+			model = geminiEffortModelAlias
 		}
 		system = withGeminiToolNameDirective(system)
-		args = []string{"--output-format", "json", "--model", invocation.Model, "--prompt", string(system), "--policy", policyPath}
+		args = []string{"--output-format", "json", "--model", model, "--prompt", string(system), "--policy", policyPath}
 	default:
-		return nil, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
+		return nil, func() {}, fmt.Errorf("unsupported reviewer provider %q", invocation.Provider)
 	}
 	command := exec.CommandContext(ctx, invocation.Provider, args...)
 	if invocation.InstanceID != "" {
-		command.Env = append(os.Environ(), "CERBERUS_MOCK_INSTANCE_ID="+invocation.InstanceID)
+		env = append(env, "CERBERUS_MOCK_INSTANCE_ID="+invocation.InstanceID)
 	}
-	return command, nil
+	command.Env = env
+	return command, cleanup, nil
 }
 
-func effectiveProviderModel(invocation ProviderInvocation) string {
-	if invocation.Provider == "claude" && invocation.Mode == "max" {
-		return config.ClaudeMaxModeModel
+const geminiEffortModelAlias = "cerberus-reviewer"
+
+func writeGeminiEffortSettings(model, thinkingLevel string) (string, error) {
+	settings := map[string]any{
+		"general": map[string]any{
+			"defaultApprovalMode": "plan",
+			"plan": map[string]any{
+				"enabled": true,
+			},
+		},
+		"experimental": map[string]any{
+			"dynamicModelConfiguration": true,
+		},
+		"modelConfigs": map[string]any{
+			"customAliases": map[string]any{
+				geminiEffortModelAlias: map[string]any{
+					"modelConfig": map[string]any{
+						"model": model,
+						"generateContentConfig": map[string]any{
+							"thinkingConfig": map[string]any{
+								"thinkingLevel": thinkingLevel,
+							},
+						},
+					},
+				},
+			},
+		},
+		"mcp": map[string]any{
+			"excluded": []string{"*"},
+		},
+		"security": map[string]any{
+			"disableAlwaysAllow": true,
+		},
 	}
-	return invocation.Model
+	body, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal gemini effort settings: %w", err)
+	}
+	body = append(body, '\n')
+	file, err := os.CreateTemp("", "cerberus-gemini-settings-*.json")
+	if err != nil {
+		return "", fmt.Errorf("create gemini effort settings: %w", err)
+	}
+	path := file.Name()
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write gemini effort settings: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close gemini effort settings: %w", err)
+	}
+	return path, nil
 }
 
 func systemPromptWithMode(system []byte, mode string) []byte {

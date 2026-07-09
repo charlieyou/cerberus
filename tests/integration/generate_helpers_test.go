@@ -113,7 +113,7 @@ func runGenerateCommand(t *testing.T, repoRoot, binary, root string, args ...str
 		"CERBERUS_ROOT="+root,
 		"CERBERUS_FIXTURE_DIR="+fixtureDir,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
-		// Isolate roster discovery so a developer/CI user roster cannot change
+		// Isolate config discovery so a developer/CI user config cannot change
 		// the generator panel out from under the built-in-default assertions.
 		"HOME="+t.TempDir(),
 		"XDG_CONFIG_HOME="+t.TempDir(),

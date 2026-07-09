@@ -38,7 +38,6 @@ type GateState struct {
 	Mode             string     `json:"mode,omitempty"`
 	MaxRounds        int        `json:"max_rounds"`
 	Debate           bool       `json:"debate"`
-	RosterID         string     `json:"roster_id"`
 	StartedAt        time.Time  `json:"started_at"`
 	EndedAt          *time.Time `json:"ended_at"`
 }

@@ -115,8 +115,8 @@ func TestStartSinglePassDefaultsPostReviewerModelForSelectedProvider(t *testing.
 	if err != nil {
 		t.Fatalf("StartSinglePass() error = %v", err)
 	}
-	if started.Params.PostReviewer.Provider != "claude" || started.Params.PostReviewer.Model != "opus[1m]" || started.Params.PostReviewer.Mode != "fast" {
-		t.Fatalf("post reviewer = %#v, want claude provider default model and fast mode", started.Params.PostReviewer)
+	if started.Params.PostReviewer.Provider != "claude" || started.Params.PostReviewer.Model != "opus[1m]" || started.Params.PostReviewer.Effort != "low" {
+		t.Fatalf("post reviewer = %#v, want claude provider default model and low effort", started.Params.PostReviewer)
 	}
 }
 
@@ -205,8 +205,8 @@ func TestRunSinglePassRunsPostReviewDedupAgentForDuplicateCodeFindings(t *testin
 	if !spawner.dedupCalled {
 		t.Fatal("post-review dedup agent was not called")
 	}
-	if spawner.dedupProvider != "codex" || spawner.dedupModel != "gpt-5.5" || spawner.dedupMode != "fast" {
-		t.Fatalf("dedup slot = %s/%s/%s, want codex/gpt-5.5/fast", spawner.dedupProvider, spawner.dedupModel, spawner.dedupMode)
+	if spawner.dedupProvider != "codex" || spawner.dedupModel != "gpt-5.6-sol" || spawner.dedupMode != "smart" {
+		t.Fatalf("dedup slot = %s/%s/%s, want codex/gpt-5.6-sol/smart", spawner.dedupProvider, spawner.dedupModel, spawner.dedupMode)
 	}
 	if !strings.Contains(spawner.dedupPrompt, "claude#1") || !strings.Contains(spawner.dedupPrompt, "codex#1") || !strings.Contains(spawner.dedupPrompt, "duplicate bug") {
 		t.Fatalf("dedup prompt = %q, want original reviewer findings", spawner.dedupPrompt)
@@ -284,8 +284,9 @@ func TestRunSinglePassUsesConfiguredPostReviewDedupSlot(t *testing.T) {
 		PostReviewer: ReviewerSlot{
 			Provider: "claude",
 			Model:    "claude-opus-test",
-			Mode:     "max",
+			Effort:   "high",
 		},
+		Mode: "max",
 		Reviewers: []ReviewerSlot{
 			{ID: "codex#1", Provider: "codex", Model: "stub"},
 			{ID: "gemini#1", Provider: "gemini", Model: "stub"},
@@ -348,7 +349,7 @@ func TestStartSinglePassTelemetryFailureResolvesGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
 	}
-	if !strings.Contains(gate.ResolutionReason, "roster selected telemetry failed") {
+	if !strings.Contains(gate.ResolutionReason, "mode selected telemetry failed") {
 		t.Fatalf("resolution reason = %q, want telemetry failure", gate.ResolutionReason)
 	}
 }
@@ -432,7 +433,6 @@ func TestRunSinglePassRejectsWhenExistingGateIsPending(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        1,
-		RosterID:         "default",
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
@@ -532,14 +532,14 @@ func TestStartSinglePassResetsAttemptScopedArtifacts(t *testing.T) {
 	}
 }
 
-func TestRunSinglePassUsesRosterDefaultsWhenParamsOmitted(t *testing.T) {
+func TestRunSinglePassUsesConfigDefaultsWhenParamsOmitted(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	spawner := modeSpawner{want: "max"}
 
 	err := RunSinglePass(context.Background(), env, Params{
 		Prompt:         []byte("review this"),
-		RosterDefaults: RosterDefaults{Mode: "max", MaxRounds: 3},
+		ConfigDefaults: ConfigDefaults{Mode: "max", MaxRounds: 3},
 		Reviewers: []ReviewerSlot{
 			{ID: "codex#1", Provider: "codex", Model: "stub"},
 		},
@@ -561,14 +561,14 @@ func TestRunSinglePassUsesRosterDefaultsWhenParamsOmitted(t *testing.T) {
 	}
 }
 
-func TestRunSinglePassCLIParamsOverrideRosterDefaults(t *testing.T) {
+func TestRunSinglePassCLIParamsOverrideConfigDefaults(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
 	spawner := modeSpawner{want: "smart"}
 
 	err := RunSinglePass(context.Background(), env, Params{
 		Prompt:         []byte("review this"),
-		RosterDefaults: RosterDefaults{Mode: "max", MaxRounds: 3},
+		ConfigDefaults: ConfigDefaults{Mode: "max", MaxRounds: 3},
 		Mode:           "smart",
 		MaxRounds:      1,
 		Reviewers: []ReviewerSlot{
@@ -583,8 +583,8 @@ func TestRunSinglePassCLIParamsOverrideRosterDefaults(t *testing.T) {
 	if gate.MaxRounds != 1 {
 		t.Fatalf("gate max_rounds = %d, want 1", gate.MaxRounds)
 	}
-	if gate.Mode != "" {
-		t.Fatalf("gate mode = %q, want empty for non-max", gate.Mode)
+	if gate.Mode != "smart" {
+		t.Fatalf("gate mode = %q, want smart", gate.Mode)
 	}
 	runTelemetry := readRunTelemetry(t, env)
 	if got, want := runTelemetry["mode"], "smart"; got != want {
@@ -652,17 +652,17 @@ func TestRunSinglePassWritesReviewerRoundAndIterationTelemetry(t *testing.T) {
 
 	events := readEventLog(t, env)
 	assertEventCount(t, events, telemetry.EventReviewSpawned, 1)
-	assertEventCount(t, events, telemetry.EventRosterSelected, 1)
+	assertEventCount(t, events, telemetry.EventModeSelected, 1)
 	assertEventCount(t, events, telemetry.EventReviewerSpawned, 2)
 	assertEventCount(t, events, telemetry.EventReviewerCompleted, 2)
 	assertEventCount(t, events, telemetry.EventReviewRoundComplete, 1)
 	assertEventCount(t, events, telemetry.EventReviewResolved, 1)
-	rosterEvent := findEvent(t, events, telemetry.EventRosterSelected)
-	if got, want := rosterEvent["roster_name"], "default"; got != want {
-		t.Fatalf("roster selected roster_name = %v, want %q", got, want)
+	modeEvent := findEvent(t, events, telemetry.EventModeSelected)
+	if got, want := modeEvent["mode"], "smart"; got != want {
+		t.Fatalf("mode selected mode = %v, want %q", got, want)
 	}
-	if got, want := rosterEvent["reviewer_count"], float64(2); got != want {
-		t.Fatalf("roster selected reviewer_count = %v, want %v", got, want)
+	if got, want := modeEvent["reviewer_count"], float64(2); got != want {
+		t.Fatalf("mode selected reviewer_count = %v, want %v", got, want)
 	}
 	for _, event := range events {
 		if event["event"] != telemetry.EventReviewerSpawned && event["event"] != telemetry.EventReviewerCompleted {
@@ -689,16 +689,16 @@ func TestRunSinglePassWritesReviewerRoundAndIterationTelemetry(t *testing.T) {
 	}
 }
 
-func TestRunSinglePassSlotModeOverridesRuntimeModeForReviewer(t *testing.T) {
+func TestRunSinglePassUsesRuntimeModeForReviewer(t *testing.T) {
 	env := testEnv(t)
 	setMockPath(t)
-	spawner := modeSpawner{want: "fast"}
+	spawner := modeSpawner{want: "max"}
 
 	err := RunSinglePass(context.Background(), env, Params{
 		Prompt:         []byte("review this"),
-		RosterDefaults: RosterDefaults{Mode: "max"},
+		ConfigDefaults: ConfigDefaults{Mode: "max"},
 		Reviewers: []ReviewerSlot{
-			{ID: "codex#1", Provider: "codex", Model: "stub", Mode: "fast"},
+			{ID: "codex#1", Provider: "codex", Model: "stub"},
 		},
 	}, spawner)
 	if err != nil {

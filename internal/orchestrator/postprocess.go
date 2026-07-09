@@ -59,7 +59,8 @@ func maybeRunPostReviewDedup(ctx context.Context, postReviewer ReviewerSlot, spa
 		ID:        dedupSlot.ID,
 		Provider:  dedupSlot.Provider,
 		Model:     dedupSlot.Model,
-		Mode:      firstNonEmpty(dedupSlot.Mode, prompts.RuntimeMode),
+		Effort:    dedupSlot.Effort,
+		Mode:      prompts.RuntimeMode,
 		System:    []byte(postReviewDedupSystemPrompt),
 		User:      input,
 		Root:      prompts.Root,
@@ -113,8 +114,8 @@ func normalizePostReviewSlot(slot ReviewerSlot) ReviewerSlot {
 			slot.Model = model
 		}
 	}
-	if slot.Mode == "" {
-		slot.Mode = "fast"
+	if slot.Effort == "" {
+		slot.Effort = "low"
 	}
 	slot.ID = postReviewDedupAgentID
 	slot.Strategy = "independent-verifier"
@@ -137,6 +138,9 @@ func preflightPostReviewSlot(artifactType string, slot ReviewerSlot) (ReviewerSl
 	}
 	if slot.Model == "" {
 		return ReviewerSlot{}, fmt.Errorf("post-reviewer preflight: model is required")
+	}
+	if slot.Effort == "" {
+		return ReviewerSlot{}, fmt.Errorf("post-reviewer preflight: effort is required")
 	}
 	if _, err := exec.LookPath(slot.Provider); err != nil {
 		return ReviewerSlot{}, fmt.Errorf("post-reviewer preflight: provider CLI %q is not available on PATH", slot.Provider)

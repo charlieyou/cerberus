@@ -70,7 +70,6 @@ type RunTelemetry struct {
 	RunKey        string     `json:"run_key"`
 	Host          string     `json:"host"`
 	Mode          string     `json:"mode"`
-	RosterID      string     `json:"roster_id"`
 	Debate        bool       `json:"debate"`
 	Iterations    int        `json:"iterations"`
 	TotalRounds   int        `json:"total_rounds"`

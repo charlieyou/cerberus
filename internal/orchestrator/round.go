@@ -79,7 +79,8 @@ func runRound(ctx context.Context, slots []ReviewerSlot, spawner reviewer.Spawne
 				ID:        slot.ID,
 				Provider:  slot.Provider,
 				Model:     slot.Model,
-				Mode:      firstNonEmpty(slot.Mode, prompts.RuntimeMode),
+				Effort:    slot.Effort,
+				Mode:      prompts.RuntimeMode,
 				System:    system,
 				User:      user,
 				Root:      prompts.Root,
@@ -221,7 +222,7 @@ func failedReviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode st
 		Model:             slot.Model,
 		Strategy:          slot.Strategy,
 		PersonaName:       personaName(slot.PersonaPath),
-		Mode:              firstNonEmpty(slot.Mode, runtimeMode),
+		Mode:              runtimeMode,
 		Tokens:            telemetry.Tokens{},
 		CostUSD:           0,
 		PeerID:            fmt.Sprintf("peer_%d", instanceIndex),
@@ -322,7 +323,7 @@ func reviewerTelemetryRow(slot ReviewerSlot, slotIndex int, runtimeMode string, 
 		Model:             slot.Model,
 		Strategy:          slot.Strategy,
 		PersonaName:       personaName(slot.PersonaPath),
-		Mode:              firstNonEmpty(slot.Mode, runtimeMode),
+		Mode:              runtimeMode,
 		Tokens:            telemetry.Tokens{Input: response.Tokens.Input, Output: response.Tokens.Output},
 		CostUSD:           response.CostUSD,
 		PeerID:            fmt.Sprintf("peer_%d", instanceIndex),
@@ -365,9 +366,9 @@ func promptsForSlot(slot ReviewerSlot, round roundPrompts) ([]byte, []byte, erro
 	system, user, err := prompts.ComposeFromRootWithReplacements(root, roster.RosterSlot{
 		Provider:    slot.Provider,
 		Model:       slot.Model,
+		Effort:      slot.Effort,
 		Strategy:    slot.Strategy,
 		PersonaPath: slot.PersonaPath,
-		Mode:        slot.Mode,
 	}, artifactType, artifactReplacements(artifactType, round.ArtifactContent, round.ContextContent))
 	if err != nil {
 		return nil, nil, err

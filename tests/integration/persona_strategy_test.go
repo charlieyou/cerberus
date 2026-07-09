@@ -17,17 +17,18 @@ func TestPersonaStrategyPromptCapture(t *testing.T) {
 	fixtureDir := t.TempDir()
 	xdgConfigHome := t.TempDir()
 	writeIntegrationFile(t, xdgConfigHome, "cerberus/security-persona.md", "Persona Marker: defend the release gate.")
-	writeIntegrationFile(t, xdgConfigHome, "cerberus/rosters.yaml", `version: 1
-rosters:
+	writeIntegrationFile(t, xdgConfigHome, "cerberus/config.yaml", `version: 1
+roster:
   persona-strategy:
-    reviewers:
+    models:
       - provider: codex
         model: gpt-5.5
+        effort: high
         strategy: verification-first
         persona: security-persona.md
 `)
 
-	cmd := exec.Command(binary, "spawn-code-review", "--roster", "persona-strategy", "persona strategy capture")
+	cmd := exec.Command(binary, "spawn-code-review", "--mode", "persona-strategy", "persona strategy capture")
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"CERBERUS_HOST=generic",

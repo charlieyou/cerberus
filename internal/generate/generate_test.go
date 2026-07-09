@@ -37,6 +37,7 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 		Mode:       "smart",
 		PromptFile: promptFile,
 		Root:       root,
+		Panel:      testPanel("claude", "codex", "gemini"),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -67,7 +68,7 @@ func TestGenerateRunWritesProviderDrafts(t *testing.T) {
 		}
 	}
 	assertRecordedModel(t, recordDir, "claude", "opus[1m]")
-	assertRecordedModel(t, recordDir, "codex", "gpt-5.5")
+	assertRecordedModel(t, recordDir, "codex", "gpt-5.6-sol")
 	assertRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertJSONOutputFlag(t, recordDir, "codex")
 	assertJSONOutputFlag(t, recordDir, "gemini")
@@ -80,7 +81,7 @@ func TestGenerateRunFansOutInParallel(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		time.Sleep(100 * time.Millisecond)
 		return []byte("# " + providerName + " draft\n"), nil, nil
 	}
@@ -95,6 +96,7 @@ func TestGenerateRunFansOutInParallel(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
+		Panel:         testPanel("claude", "codex", "gemini"),
 		SkipInterview: true,
 	})
 	if err != nil {
@@ -111,7 +113,7 @@ func TestGenerateRunWritesRawJSONForParseableProviderOutput(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-plan.md", "create plan generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(`{"usage":{"input_tokens":7,"output_tokens":3},"cost_usd":0.001}`), nil, nil
 	}
 	t.Cleanup(func() {
@@ -125,7 +127,7 @@ func TestGenerateRunWritesRawJSONForParseableProviderOutput(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
-		Providers:     []string{"codex"},
+		Panel:         testPanel("codex"),
 		SkipInterview: true,
 	})
 	if err != nil {
@@ -159,6 +161,7 @@ func TestRunPartialFailureReturnsNilAndWritesFailureOutputs(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
+		Panel:         testPanel("claude", "codex", "gemini"),
 		Stderr:        &stderr,
 		SkipInterview: true,
 	})
@@ -211,6 +214,7 @@ func TestRunAllFailureReturnsErrorAndWritesFailureOutputs(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
+		Panel:         testPanel("claude", "codex", "gemini"),
 		Stderr:        &stderr,
 		SkipInterview: true,
 	})
@@ -251,7 +255,7 @@ func writeGeneratePrompt(t *testing.T, root, rel, content string) {
 func writeMockProvider(t *testing.T, dir, provider, delay string) {
 	t.Helper()
 	path := filepath.Join(dir, provider)
-	body := "#!/bin/sh\nset -eu\ncat >/dev/null\n" + delay + "printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nprintf '# " + provider + " draft\\n'\n"
+	body := "#!/bin/sh\nset -eu\ncat >/dev/null\n" + delay + "printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nif [ \"" + provider + "\" = gemini ] && [ -n \"${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-}\" ]; then cp \"$GEMINI_CLI_SYSTEM_SETTINGS_PATH\" \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".settings.json\"; fi\nprintf '# " + provider + " draft\\n'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
@@ -262,6 +266,19 @@ func assertRecordedModel(t *testing.T, recordDir, provider, want string) {
 	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
 	if err != nil {
 		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if provider == "gemini" {
+		if !strings.Contains(string(data), "--model\ncerberus-reviewer\n") {
+			t.Fatalf("gemini args = %q, want effort model alias", data)
+		}
+		settings, err := os.ReadFile(filepath.Join(recordDir, provider+".settings.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s settings) error = %v", provider, err)
+		}
+		if !strings.Contains(string(settings), `"model": "`+want+`"`) {
+			t.Fatalf("gemini settings = %q, want model %q", settings, want)
+		}
+		return
 	}
 	if !strings.Contains(string(data), "--model\n"+want+"\n") {
 		t.Fatalf("%s args = %q, want model %q", provider, data, want)
@@ -297,4 +314,22 @@ func readStatsFile(t *testing.T, path string) Stats {
 		t.Fatalf("Unmarshal(%s) error = %v; data=%s", path, err, data)
 	}
 	return stats
+}
+
+func testPanel(providers ...string) []ProviderSpec {
+	models := map[string]string{
+		"claude": "opus[1m]",
+		"codex":  "gpt-5.6-sol",
+		"gemini": "gemini-3.1-pro-preview",
+	}
+	panel := make([]ProviderSpec, 0, len(providers))
+	for _, provider := range providers {
+		panel = append(panel, ProviderSpec{
+			Provider: provider,
+			Model:    models[provider],
+			Effort:   "medium",
+			Label:    provider,
+		})
+	}
+	return panel
 }

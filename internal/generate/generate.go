@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charlieyou/cerberus/internal/config"
 	"github.com/charlieyou/cerberus/internal/prompts"
 )
 
@@ -24,6 +23,7 @@ import (
 type ProviderSpec struct {
 	Provider string
 	Model    string
+	Effort   string
 	Label    string
 }
 
@@ -38,20 +38,17 @@ type Options struct {
 	SkipInterview bool
 
 	Root string
-	// Panel, when set, is the resolved drafter panel (typically from
-	// rosters.yaml). It takes precedence over Providers and supports multiple
-	// instances of the same provider via distinct labels.
-	Panel []ProviderSpec
-	// Providers is a legacy name-only panel; each name uses its default model
-	// and its name as the output label. Used when Panel is empty.
-	Providers []string
-	Stdout    io.Writer
-	Stderr    io.Writer
+	// Panel is the config-resolved drafter panel. It supports multiple instances
+	// of the same provider via distinct labels.
+	Panel  []ProviderSpec
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 type provider struct {
-	name  string
-	model string
+	name   string
+	model  string
+	effort string
 	// label is the output subdirectory name; equals name for single-instance
 	// providers and disambiguates same-provider instances (e.g. codex-2).
 	label string
@@ -85,7 +82,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	providers := resolvePanel(opts)
+	providers := resolvePanel(opts.Panel)
+	if len(providers) == 0 {
+		return fmt.Errorf("model panel is required")
+	}
 	results := make(chan providerResult, len(providers))
 	var wg sync.WaitGroup
 	for _, provider := range providers {
@@ -131,25 +131,14 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-func resolvePanel(opts Options) []provider {
-	var providers []provider
-	if len(opts.Panel) > 0 {
-		for _, spec := range opts.Panel {
-			label := spec.Label
-			if label == "" {
-				label = spec.Provider
-			}
-			providers = append(providers, provider{name: spec.Provider, model: spec.Model, label: label})
+func resolvePanel(panel []ProviderSpec) []provider {
+	providers := make([]provider, 0, len(panel))
+	for _, spec := range panel {
+		label := spec.Label
+		if label == "" {
+			label = spec.Provider
 		}
-	} else {
-		names := opts.Providers
-		if len(names) == 0 {
-			names = []string{"claude", "codex", "gemini"}
-		}
-		for _, name := range names {
-			model, _ := config.DefaultModelForProvider(name)
-			providers = append(providers, provider{name: name, model: model, label: name})
-		}
+		providers = append(providers, provider{name: spec.Provider, model: spec.Model, effort: spec.Effort, label: label})
 	}
 	// Assign per-provider instance IDs (codex#1, codex#2). Single instances are
 	// #1, matching reviewer replay fixtures keyed by <hash>:<provider>#1.
@@ -195,7 +184,7 @@ func runGeneratorProvider(ctx context.Context, root string, opts Options, provid
 	if err != nil {
 		return failProvider(opts.OutputDir, label, startedAt, err, exitCodeFromError(err))
 	}
-	draft, _, err := providerRunner(ctx, root, name, provider.model, provider.instanceID, system, string(prompt))
+	draft, _, err := providerRunner(ctx, root, name, provider.model, provider.effort, opts.Mode, provider.instanceID, system, string(prompt))
 	if err != nil {
 		return failProvider(opts.OutputDir, label, startedAt, err, exitCodeFromError(err))
 	}

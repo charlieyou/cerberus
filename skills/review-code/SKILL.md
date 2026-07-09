@@ -2,7 +2,7 @@
 name: review-code
 disable-model-invocation: true
 description: Iterative code review with external reviewers
-argument-hint: '[--debate] [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <fast|smart|max>] [--consensus <majority|all|any>] [--agents <list>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]'
+argument-hint: '[--debate] [--uncommitted | --base <branch> | --commit <sha...> | <range>] [--mode <name>] [--consensus <majority|all|any>] [--max-rounds <n>] [--exclude <pathspec>...] ["<focus area>"]'
 ---
 
 ## Host-Neutral Execution
@@ -89,7 +89,7 @@ Multi-model code review that automatically iterates until consensus is reached. 
 /cerberus:review-code --commit abc123    # Review a single commit (net diff)
 /cerberus:review-code --commit abc123 def456  # Review multiple commits (net diff)
 /cerberus:review-code main..feature      # Review a commit range
-/cerberus:review-code --agents codex,gemini      # Only run selected reviewers
+/cerberus:review-code --mode codex-gemini  # Use a config-defined model panel
 /cerberus:review-code --max-rounds 3     # Limit to 3 review iterations
 /cerberus:review-code --max-rounds 0     # Disable auto-respawn (single round)
 /cerberus:review-code --mode max         # Use max intelligence mode
@@ -113,7 +113,7 @@ Note: `--commit` generates a single net diff by applying the listed commits onto
 
 Use the Bash tool to spawn the code review.
 
-Pass `$ARGUMENTS` directly. The CLI accepts `--agents`, `--max-rounds`, `--mode`, `--consensus` (majority/all/any), `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus optional trailing free-text as a focus string (use `--` to force focus when needed).
+Pass `$ARGUMENTS` directly. The CLI accepts `--max-rounds`, `--mode`, `--consensus` (majority/all/any), `--exclude <pathspec>` (git pathspec exclude syntax like colon-bang or colon-exclude), diff selectors (`--uncommitted`, `--base`, `--commit <sha...>`, or a range containing `..`), plus optional trailing free-text as a focus string (use `--` to force focus when needed).
 
 **Consensus modes:**
 - `majority` (default): At least 2 reviewers PASS, or all valid reviewers PASS

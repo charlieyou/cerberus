@@ -17,7 +17,7 @@ func TestCodexDefaultRosterDegradesToCodexOnlyAndRuns(t *testing.T) {
 	stateRoot := t.TempDir()
 	reviewerBin := codexOnlyReviewerPath(t)
 
-	cmd := exec.Command(binary, "spawn-code-review", "codex host default roster")
+	cmd := exec.Command(binary, "spawn-code-review", "codex host default mode")
 	cmd.Dir = projectRoot
 	cmd.Env = append(os.Environ(),
 		"CERBERUS_HOST=codex",
@@ -88,23 +88,26 @@ func TestDefaultRosterDegradesMissingGeminiToTwoSlots(t *testing.T) {
 	}
 }
 
-func TestYAMLRosterNamedDefaultRejectsMissingGemini(t *testing.T) {
+func TestConfigModeRejectsMissingGemini(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	binary := buildIntegrationCerberus(t, repoRoot)
 	projectRoot := initIntegrationGitRepo(t)
 	stateRoot := t.TempDir()
 	reviewerBin := claudeCodexReviewerPath(t)
 	xdgConfigHome := t.TempDir()
-	writeIntegrationFile(t, xdgConfigHome, "cerberus/rosters.yaml", `version: 1
-rosters:
-  default:
-    reviewers:
+	writeIntegrationFile(t, xdgConfigHome, "cerberus/config.yaml", `version: 1
+roster:
+  smart:
+    models:
       - provider: claude
         model: claude-opus-4-7
+        effort: medium
       - provider: codex
         model: gpt-5.5
+        effort: medium
       - provider: gemini
         model: gemini-3.1-pro
+        effort: medium
 `)
 
 	cmd := exec.Command(binary, "spawn-code-review", "yaml default requires gemini")
@@ -124,8 +127,8 @@ rosters:
 		t.Fatalf("spawn-code-review succeeded, want YAML default missing-CLI rejection\n%s", output)
 	}
 	out := string(output)
-	if !strings.Contains(out, `roster "default" slot 3`) || !strings.Contains(out, `provider CLI "gemini" is not available on PATH`) {
-		t.Fatalf("output = %q, want strict YAML default missing gemini error", out)
+	if !strings.Contains(out, `mode "smart" model 3`) || !strings.Contains(out, `provider CLI "gemini" is not available on PATH`) {
+		t.Fatalf("output = %q, want strict config mode missing gemini error", out)
 	}
 }
 
@@ -141,7 +144,7 @@ func TestCodexDefaultRosterDegradationRefusesEmptyAndDebateOneReviewer(t *testin
 			t.Fatalf("MkdirAll(empty bin) error = %v", err)
 		}
 
-		cmd := exec.Command(binary, "spawn-code-review", "codex host empty default roster")
+		cmd := exec.Command(binary, "spawn-code-review", "codex host empty default mode")
 		cmd.Dir = projectRoot
 		cmd.Env = append(os.Environ(),
 			"CERBERUS_HOST=codex",

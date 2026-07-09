@@ -14,7 +14,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/roster"
 )
 
-const generateUsage = "usage: cerberus generate <output-dir> --type <create-plan|create-spec> [--mode <fast|smart|max>] [--prompt-file <path>|--focus <text>|prompt text...]"
+const generateUsage = "usage: cerberus generate <output-dir> --type <create-plan|create-spec> [--mode <config-mode>] [--prompt-file <path>|--focus <text>|prompt text...]"
 
 type generateUsageError struct {
 	err error
@@ -38,12 +38,13 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 	opts.Root = config.Resolve().Root
 	opts.Stdout = stdout
 	opts.Stderr = stderr
-	panel, err := generatorPanel()
+	panel, mode, err := generatorPanel(opts.Mode)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	opts.Panel = panel
+	opts.Mode = mode
 	if err := generate.Run(context.Background(), opts); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -51,26 +52,24 @@ func runGenerate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// generatorPanel resolves the drafter panel from rosters.yaml (project,
-// XDG_CONFIG_HOME, then ~/.cerberus precedence — the same default roster the
-// review panel uses). It returns nil when no rosters.yaml exists, so generate
-// falls back to its built-in claude/codex/gemini default. Same-provider
-// instances are disambiguated with a numeric label suffix (codex, codex-2) so
-// they write to distinct output directories.
-func generatorPanel() ([]generate.ProviderSpec, error) {
-	file, err := roster.LoadRosters("")
+// generatorPanel resolves the drafter panel for one config-defined mode.
+func generatorPanel(mode string) ([]generate.ProviderSpec, string, error) {
+	file, err := roster.LoadConfig("")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if file == nil {
-		return nil, nil
+	if mode == "" && file != nil {
+		mode = file.Defaults.Mode
 	}
-	// Generators copy only provider/model/label; skip review-only strategy and
-	// persona file validation so a customized review roster does not fail
+	if mode == "" {
+		mode = "smart"
+	}
+	// Generators copy only provider/model/effort/label; skip review-only strategy and
+	// persona file validation so a configured mode does not fail
 	// generation when those files aren't reachable from the generator's cwd.
-	slots, err := roster.ResolveWithOptions(file, roster.ResolveOptions{SkipStrategyPersona: true})
+	slots, err := roster.ResolveWithOptions(file, roster.ResolveOptions{Mode: mode, SkipStrategyPersona: true})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	specs := make([]generate.ProviderSpec, 0, len(slots))
 	for _, slot := range slots {
@@ -81,10 +80,11 @@ func generatorPanel() ([]generate.ProviderSpec, error) {
 		specs = append(specs, generate.ProviderSpec{
 			Provider: slot.Provider,
 			Model:    slot.Model,
+			Effort:   slot.Effort,
 			Label:    label,
 		})
 	}
-	return specs, nil
+	return specs, mode, nil
 }
 
 func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
@@ -100,18 +100,24 @@ func parseGenerateFlags(args []string, _ io.Writer) (generate.Options, error) {
 		fmt.Fprintln(fs.Output(), generateUsage)
 	}
 	fs.StringVar(&opts.Type, "type", "", "generator type")
-	fs.StringVar(&opts.Mode, "mode", "smart", "generator mode")
+	fs.StringVar(&opts.Mode, "mode", "", "generator mode defined in config.yaml")
 	fs.StringVar(&opts.PromptFile, "prompt-file", "", "prompt file")
 	fs.StringVar(&opts.Focus, "focus", "", "focus text")
 	fs.BoolVar(&opts.SkipInterview, "skip-interview", false, "skip interview prompt")
 	if err := fs.Parse(args[1:]); err != nil {
 		return generate.Options{}, usagef("%w", err)
 	}
+	modeSet := false
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == "mode" {
+			modeSet = true
+		}
+	})
 	if !validGenerateType(opts.Type) {
 		return generate.Options{}, usagef("--type must be one of create-plan, create-spec")
 	}
-	if !validGenerateMode(opts.Mode) {
-		return generate.Options{}, usagef("--mode must be one of fast, smart, max")
+	if modeSet && strings.TrimSpace(opts.Mode) == "" {
+		return generate.Options{}, usagef("--mode must not be empty")
 	}
 	if err := ensureGenerateOutputDir(opts.OutputDir); err != nil {
 		return generate.Options{}, err
@@ -141,15 +147,6 @@ func usagef(format string, args ...any) error {
 func validGenerateType(value string) bool {
 	switch value {
 	case "create-plan", "create-spec":
-		return true
-	default:
-		return false
-	}
-}
-
-func validGenerateMode(value string) bool {
-	switch value {
-	case "fast", "smart", "max":
 		return true
 	default:
 		return false

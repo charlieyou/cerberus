@@ -2,7 +2,7 @@
 name: ask
 disable-model-invocation: true
 description: Ask the Cerberus model panel an arbitrary question
-argument-hint: '[--debate] [--mode <fast|smart|max>] [--agents <list>] [--max-rounds <n>] [--consensus <majority|all|any>] [--context-file <path>] [--prompt-file <path> | -- <prompt>]'
+argument-hint: '[--debate] [--mode <name>] [--max-rounds <n>] [--consensus <majority|all|any>] [--context-file <path>] [--prompt-file <path> | -- <prompt>]'
 ---
 
 ## Host-Neutral Execution
@@ -89,7 +89,7 @@ Send any prompt to the Cerberus reviewer panel. Use `--debate` to route the prom
 /cerberus:ask -- --prompt text that starts with a dash
 ```
 
-The CLI accepts `--agents`, `--mode`, `--max-rounds`, `--consensus`, `--context-file`, `--prompt-file`, `--debate`, plus arbitrary prompt text after `--`.
+The CLI accepts `--mode`, `--max-rounds`, `--consensus`, `--context-file`, `--prompt-file`, `--debate`, plus arbitrary prompt text after `--`.
 
 ## Run the Panel
 

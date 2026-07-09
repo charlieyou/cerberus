@@ -68,11 +68,11 @@ func TestGenerateSubcommandRejectsInvalidMode(t *testing.T) {
 
 	code := run([]string{"generate", t.TempDir(), "--type", "create-spec", "--mode", "slow", "prompt"}, &stdout, &stderr)
 
-	if code != 2 {
-		t.Fatalf("run(generate) exit code = %d, want 2; stderr: %s", code, stderr.String())
+	if code != 1 {
+		t.Fatalf("run(generate) exit code = %d, want 1; stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "fast, smart, max") {
-		t.Fatalf("run(generate) stderr = %q, want valid modes", stderr.String())
+	if !strings.Contains(stderr.String(), `mode "slow"`) || !strings.Contains(stderr.String(), "mode is not defined under roster") {
+		t.Fatalf("run(generate) stderr = %q, want undefined mode error", stderr.String())
 	}
 }
 
@@ -236,7 +236,7 @@ func TestGenerateSubcommandUsesDefaultModels(t *testing.T) {
 		t.Fatalf("run(generate) exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	assertGenerateRecordedModel(t, recordDir, "claude", "opus[1m]")
-	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.5")
+	assertGenerateRecordedModel(t, recordDir, "codex", "gpt-5.6-sol")
 	assertGenerateRecordedModel(t, recordDir, "gemini", "gemini-3.1-pro-preview")
 	assertGenerateJSONOutputFlag(t, recordDir, "codex")
 	assertGenerateJSONOutputFlag(t, recordDir, "gemini")
@@ -268,7 +268,7 @@ func TestGenerateSubcommandTrailingArgsBecomePrompt(t *testing.T) {
 func writeGenerateCLIMockProvider(t *testing.T, dir, provider string) {
 	t.Helper()
 	path := filepath.Join(dir, provider)
-	body := "#!/bin/sh\nset -eu\nif [ -n \"${CERBERUS_MOCK_RECORD_DIR:-}\" ]; then cat > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".stdin\"; printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"; else cat >/dev/null; fi\nprintf '# " + provider + " cli draft\\n'\n"
+	body := "#!/bin/sh\nset -eu\nif [ -n \"${CERBERUS_MOCK_RECORD_DIR:-}\" ]; then cat > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".stdin\"; printf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"; if [ \"" + provider + "\" = gemini ] && [ -n \"${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-}\" ]; then cp \"$GEMINI_CLI_SYSTEM_SETTINGS_PATH\" \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".settings.json\"; fi; else cat >/dev/null; fi\nprintf '# " + provider + " cli draft\\n'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
@@ -290,6 +290,19 @@ func assertGenerateRecordedModel(t *testing.T, recordDir, provider, want string)
 	data, err := os.ReadFile(filepath.Join(recordDir, provider+".args"))
 	if err != nil {
 		t.Fatalf("ReadFile(%s args) error = %v", provider, err)
+	}
+	if provider == "gemini" {
+		if !strings.Contains(string(data), "--model\ncerberus-reviewer\n") {
+			t.Fatalf("gemini args = %q, want effort model alias", data)
+		}
+		settings, err := os.ReadFile(filepath.Join(recordDir, provider+".settings.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s settings) error = %v", provider, err)
+		}
+		if !strings.Contains(string(settings), `"model": "`+want+`"`) {
+			t.Fatalf("gemini settings = %q, want model %q", settings, want)
+		}
+		return
 	}
 	if !strings.Contains(string(data), "--model\n"+want+"\n") {
 		t.Fatalf("%s args = %q, want model %q", provider, data, want)
@@ -314,7 +327,7 @@ func assertGenerateJSONOutputFlag(t *testing.T, recordDir, provider string) {
 	}
 }
 
-// isolateRosters points roster discovery at empty temp dirs so generate falls
+// isolateRosters points config discovery at empty temp dirs so generate falls
 // back to its built-in default panel regardless of the developer's real
 // ~/.cerberus or $XDG_CONFIG_HOME.
 func isolateRosters(t *testing.T) {
@@ -348,7 +361,7 @@ func TestGenerateSubcommandTwoCodexInstancesFromRoster(t *testing.T) {
 	writeGenerateCLIPrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 	t.Setenv("CERBERUS_ROOT", root)
 
-	// rosters.yaml default roster: claude + two codex instances on distinct models.
+	// config.yaml smart mode: claude + two codex instances on distinct models.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -358,19 +371,22 @@ func TestGenerateSubcommandTwoCodexInstancesFromRoster(t *testing.T) {
 	// The gpt-5.4 slot carries a review-only strategy whose prompt file is not
 	// reachable from the generator cwd; generation must still succeed because
 	// generators skip strategy/persona validation.
-	rosters := "version: 1\n" +
-		"rosters:\n" +
-		"  default:\n" +
-		"    reviewers:\n" +
+	configData := "version: 1\n" +
+		"roster:\n" +
+		"  smart:\n" +
+		"    models:\n" +
 		"      - provider: claude\n" +
 		"        model: \"opus[1m]\"\n" +
+		"        effort: medium\n" +
 		"      - provider: codex\n" +
 		"        model: gpt-5.5\n" +
+		"        effort: medium\n" +
 		"      - provider: codex\n" +
 		"        model: gpt-5.4\n" +
+		"        effort: high\n" +
 		"        strategy: verification-first\n"
-	if err := os.WriteFile(filepath.Join(home, ".cerberus", "rosters.yaml"), []byte(rosters), 0o644); err != nil {
-		t.Fatalf("WriteFile(rosters) error = %v", err)
+	if err := os.WriteFile(filepath.Join(home, ".cerberus", "config.yaml"), []byte(configData), 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 
 	binDir := t.TempDir()

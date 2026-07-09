@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
+func TestReadmeDocumentsImplementedCLIAndConfigSchema(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	data, err := os.ReadFile(filepath.Join(repoRoot, "README.md"))
 	if err != nil {
@@ -22,6 +22,10 @@ func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
 		"`persona_path`",
 		"  consensus:",
 		"    defaults:",
+		"--roster",
+		"--agents",
+		"--reviewer",
+		"--replace-slot",
 	} {
 		if strings.Contains(readme, forbidden) {
 			t.Fatalf("README.md contains unimplemented CLI or roster schema %q", forbidden)
@@ -36,9 +40,12 @@ func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
 		"Ask-only flag",
 		"export CERBERUS_HOST=generic",
 		"  max_rounds: 3",
+		"roster:",
+		"    models:",
+		"        effort: medium",
 		"        persona: personas/security.md",
-		"`consensus` is a CLI flag, not a roster YAML key",
-		"Fix `persona` in the roster",
+		"`consensus` remains a CLI flag",
+		"Fix `persona` in `config.yaml`",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README.md missing implemented CLI or roster schema %q", required)
@@ -59,7 +66,7 @@ func TestReadmeDocumentsImplementedCLIAndRosterSchema(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"README.md#reviewer-rosters",
+		"README.md#configuration",
 		"README.md#code-review",
 		"$CERBERUS_ROOT/config/gemini-readonly-policy.toml",
 	} {

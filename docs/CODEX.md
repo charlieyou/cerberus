@@ -11,7 +11,7 @@ are documented in the main [README](../README.md):
 
 - Install prerequisites and build behavior: [README install](../README.md#install)
 - Host-neutral environment variables: [README env contract](../README.md#environment-contract)
-- Roster file locations and schema: [README reviewer rosters](../README.md#reviewer-rosters)
+- Config file locations and schema: [README configuration](../README.md#configuration)
 - Code-review invocation flags: [README code review](../README.md#code-review)
 
 ## Install And Enable
@@ -125,65 +125,70 @@ boundary, `cerberus hook codex-stop` polls the gate:
 - `pending`: keep waiting until reviewers finish or the internal wait budget is
   exhausted.
 - `resolved`: allow the stop.
-- failed reviewer process, invalid roster, or invalid reviewer output:
+- failed reviewer process, invalid config, or invalid reviewer output:
   return a non-zero Cerberus error instead of silently passing the gate.
 
 Use `/cerberus:status` to inspect the active gate and `/cerberus:clear-gate` to
 manually resolve a gate that you intentionally want to clear.
 
-## Multi-Instance Codex Rosters
+## Multi-Instance Codex Modes
 
-Roster files are shared across hosts. The schema, search order, and merge rules
-are shared Cerberus behavior; see
-[README reviewer rosters](../README.md#reviewer-rosters) for the
-canonical roster contract.
+Config files are shared across hosts. See
+[README configuration](../README.md#configuration) for the canonical schema
+and search order.
 
-This Codex-only roster runs three independent Codex reviewers with distinct
+This Codex-only mode runs three independent Codex reviewers with distinct
 models and strategies:
 
 ```yaml
 version: 1
-rosters:
+roster:
   codex-panel:
-    reviewers:
+    models:
       - provider: codex
-        model: gpt-5.5
+        model: gpt-5.6-sol
+        effort: high
         strategy: verification-first
       - provider: codex
         model: gpt-5.4
+        effort: high
         strategy: falsification-first
       - provider: codex
         model: gpt-5.3-codex
+        effort: medium
         strategy: decompose
 ```
 
-Save it as `./.cerberus/rosters.yaml` for a project-specific roster, or as
-`~/.cerberus/rosters.yaml` for a user-level roster. Then run:
+Save it as `./.cerberus/config.yaml` for a project-specific config, or as
+`~/.cerberus/config.yaml` for a user-level config. Then run:
 
 ```text
-/cerberus:review-code --roster codex-panel --uncommitted
+/cerberus:review-code --mode codex-panel --uncommitted
 ```
 
-Cerberus assigns instance IDs by provider occurrence after roster resolution:
+Cerberus assigns instance IDs by provider occurrence after mode resolution:
 `codex#1`, `codex#2`, and `codex#3`. Duplicate provider/model pairs are valid;
-use different `strategy`, `persona`, or `mode` values when you want reviewers to
+use different `strategy`, `persona`, or `effort` values when you want reviewers to
 approach the same artifact differently.
 
 You can also mix Codex with other providers:
 
 ```yaml
 version: 1
-rosters:
+roster:
   codex-gemini:
-    reviewers:
+    models:
       - provider: codex
-        model: gpt-5.5
+        model: gpt-5.6-sol
+        effort: high
         strategy: verification-first
       - provider: codex
         model: gpt-5.4
+        effort: medium
         strategy: falsification-first
       - provider: gemini
         model: gemini-3.1-pro-preview
+        effort: high
         strategy: decompose
 ```
 
@@ -191,32 +196,34 @@ Gemini reviewers run under the same read-only policy on Codex as they do on
 Claude Code. Cerberus derives that policy path from the plugin root:
 `$CERBERUS_ROOT/config/gemini-readonly-policy.toml`. If the file is missing,
 Gemini preflight fails instead of running without the read-only policy.
+Cerberus passes each Gemini model entry's configured effort as its thinking
+level through a temporary `GEMINI_CLI_SYSTEM_SETTINGS_PATH` file and
+runs Gemini with the `cerberus-reviewer` model alias.
 
-## Default Roster Degradation
+## Default Mode Degradation
 
-The built-in default roster is `[claude, codex, gemini]`. On a Codex-only host,
-that default roster degrades at preflight according to D13 and D39:
+The built-in default mode is `[claude, codex, gemini]`. On a Codex-only host,
+that default mode degrades at preflight according to D13 and D39:
 
 - Missing default reviewer CLIs are dropped.
 - Cerberus emits one stderr warning per dropped default reviewer.
 - The reduced default panel proceeds when at least one reviewer remains.
 - A zero-reviewer panel refuses before creating a gate.
 
-Custom rosters are stricter. If you select a file roster with `--roster` or add
-reviewers with `--reviewer`, Cerberus does not silently drop missing providers.
-Preflight rejects the invocation and reports the unavailable reviewer slot so
-you can install the CLI or edit the roster.
+Configured modes are stricter. Cerberus does not silently drop missing providers
+from `config.yaml`. Preflight rejects the invocation and reports the unavailable
+model so you can install the CLI or edit the mode.
 
 Debate has one additional rule from D7: `--debate` requires at least two active
-reviewers after default-roster degradation and custom-roster preflight. If a
-Codex-only machine degrades the default roster to one Codex reviewer, this is
+reviewers after built-in degradation and configured-mode preflight. If a
+Codex-only machine degrades the default mode to one Codex reviewer, this is
 valid for a normal review but rejected for:
 
 ```text
 /cerberus:review-code --debate
 ```
 
-Install another reviewer CLI or choose a custom multi-instance Codex roster
+Install another reviewer CLI or choose a multi-instance Codex mode
 before using `--debate`.
 
 ## Gemini Policy Under Codex
@@ -226,8 +233,8 @@ Gemini reviewer subprocesses use the configured Gemini Policy Engine file,
 including in multi-instance and debate panels. Keep the default policy enabled
 unless you intentionally want Gemini to have broader local tool access.
 
-If Gemini is unavailable and you use the built-in default roster, it is dropped
-with a warning. If Gemini is named in a custom roster, preflight rejects the run
+If Gemini is unavailable and you use the built-in default mode, it is dropped
+with a warning. If Gemini is named in a custom mode, preflight rejects the run
 until the `gemini` CLI and policy configuration are usable.
 
 ## Hook Timeout And Lazy Build Budget
@@ -286,17 +293,17 @@ Check `/cerberus:status`. If there is no active gate, verify that
 that the Cerberus hooks are trusted in `/hooks`, and that state exists under
 `~/.codex/projects/<key>/cerberus/`.
 
-Custom roster fails but the default roster works
+Configured mode fails but the built-in mode works
 
-This is expected when a custom roster names an unavailable provider or invalid
-strategy/persona. The built-in default roster can degrade with warnings; custom
-rosters reject missing reviewer CLIs so a typo does not silently change the
-review panel.
+This is expected when a custom mode names an unavailable provider or invalid
+strategy/persona. The built-in default mode can degrade with warnings; custom
+configured modes reject missing reviewer CLIs so a typo does not silently
+change the review panel.
 
 `--debate` refuses on a Codex-only host
 
-After default-roster degradation, only one reviewer remains. Debate requires at
-least two active reviewers. Use a multi-instance Codex roster or install another
+After built-in degradation, only one reviewer remains. Debate requires at
+least two active reviewers. Use a multi-instance Codex mode or install another
 provider CLI.
 
 Gemini appears to have write access

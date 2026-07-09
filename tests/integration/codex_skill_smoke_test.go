@@ -82,17 +82,17 @@ func TestCodexSurvivingSkillRunBlocksSmoke(t *testing.T) {
 		promptOnly  bool
 		setupScript string
 	}{
-		"ask":          {block: 2, wantOutput: "ASK_RESULT=", setupScript: `ARGUMENTS="--agents codex codex smoke"`},
+		"ask":          {block: 2, wantOutput: "ASK_RESULT=", setupScript: `ARGUMENTS="codex smoke"`},
 		"clear-gate":   {block: 2, wantExit: 1, wantOutput: "gate-state.json"},
 		"create-plan":  {block: 4, setupScript: `printf 'codex smoke plan\n' > "$PROMPT_TMP"`},
 		"create-spec":  {block: 4, setupScript: `printf 'codex smoke spec\n' > "$PROMPT_TMP"`},
 		"create-tasks": {promptOnly: true},
-		"review-code":  {block: 2, setupScript: `ARGUMENTS="--agents codex codex smoke"`},
-		"review-plan":  {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-plan.md"`},
-		"review-spec":  {block: 2, setupScript: `ARGUMENTS="--agents codex docs/codex-smoke-spec.md"`},
+		"review-code":  {block: 2, setupScript: `ARGUMENTS="codex smoke"`},
+		"review-plan":  {block: 2, setupScript: `ARGUMENTS="docs/codex-smoke-plan.md"`},
+		"review-spec":  {block: 2, setupScript: `ARGUMENTS="docs/codex-smoke-spec.md"`},
 		"review-tasks": {promptOnly: true},
 		"status":       {block: 2, wantOutput: `"status":"no_active_gate"`},
-		"verify-epic":  {block: 2, setupScript: `EPIC_FILE="$SMOKE_EPIC_FILE"; ARGUMENTS="--agents codex"`},
+		"verify-epic":  {block: 2, setupScript: `EPIC_FILE="$SMOKE_EPIC_FILE"; ARGUMENTS=""`},
 	}
 
 	for _, skill := range survivingCodexSkills {

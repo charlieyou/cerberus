@@ -336,7 +336,7 @@ func TestResolveDoesNotReadReviewGateRootAlias(t *testing.T) {
 func TestDefaultModelForProvider(t *testing.T) {
 	tests := map[string]string{
 		"claude": "opus[1m]",
-		"codex":  "gpt-5.5",
+		"codex":  "gpt-5.6-sol",
 		"gemini": "gemini-3.1-pro-preview",
 	}
 	for provider, want := range tests {

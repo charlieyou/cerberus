@@ -7,24 +7,36 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charlieyou/cerberus/internal/config"
+	appconfig "github.com/charlieyou/cerberus/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
-const defaultRosterName = "default"
+const defaultMode = "smart"
 
-var builtInDefaultSlots = []RosterSlot{
-	{Provider: "claude", Model: config.DefaultClaudeModel},
-	{Provider: "codex", Model: config.DefaultCodexModel},
-	{Provider: "gemini", Model: config.DefaultGeminiModel},
+var builtInRoster = map[string]ModeRoster{
+	"fast": {Models: []RosterSlot{
+		{Provider: "claude", Model: appconfig.DefaultClaudeModel, Effort: "low"},
+		{Provider: "codex", Model: appconfig.DefaultCodexModel, Effort: "low"},
+		{Provider: "gemini", Model: appconfig.DefaultGeminiModel, Effort: "low"},
+	}},
+	"smart": {Models: []RosterSlot{
+		{Provider: "claude", Model: appconfig.DefaultClaudeModel, Effort: "medium"},
+		{Provider: "codex", Model: appconfig.DefaultCodexModel, Effort: "medium"},
+		{Provider: "gemini", Model: appconfig.DefaultGeminiModel, Effort: "medium"},
+	}},
+	"max": {Models: []RosterSlot{
+		{Provider: "claude", Model: appconfig.ClaudeMaxModeModel, Effort: "high"},
+		{Provider: "codex", Model: appconfig.DefaultCodexModel, Effort: "high"},
+		{Provider: "gemini", Model: appconfig.DefaultGeminiModel, Effort: "high"},
+	}},
 }
 
-// LoadRosters loads the first applicable rosters.yaml. If path is empty, the
+// LoadConfig loads the first applicable config.yaml. If path is empty, the
 // project file wins over XDG_CONFIG_HOME and ~/.cerberus files.
-func LoadRosters(path string) (*RostersFile, error) {
+func LoadConfig(path string) (*Config, error) {
 	resolvedPath := path
 	if resolvedPath == "" {
-		found, ok, err := FindRostersFile(".")
+		found, ok, err := FindConfigFile(".")
 		if err != nil {
 			return nil, err
 		}
@@ -36,28 +48,28 @@ func LoadRosters(path string) (*RostersFile, error) {
 
 	file, err := os.Open(resolvedPath)
 	if err != nil {
-		return nil, fmt.Errorf("load rosters file %s: %w", resolvedPath, err)
+		return nil, fmt.Errorf("load config file %s: %w", resolvedPath, err)
 	}
 	defer file.Close()
 
-	return decodeRosters(file, resolvedPath)
+	return decodeConfig(file, resolvedPath)
 }
 
-// FindRostersFile returns the first rosters.yaml according to project/user precedence.
-func FindRostersFile(projectDir string) (string, bool, error) {
-	projectPath := filepath.Join(projectDir, ".cerberus", "rosters.yaml")
+// FindConfigFile returns the first config.yaml according to project/user precedence.
+func FindConfigFile(projectDir string) (string, bool, error) {
+	projectPath := filepath.Join(projectDir, ".cerberus", "config.yaml")
 	if _, err := os.Stat(projectPath); err == nil {
 		return projectPath, true, nil
 	} else if err != nil && !os.IsNotExist(err) {
-		return "", false, fmt.Errorf("inspect project rosters file %s: %w", projectPath, err)
+		return "", false, fmt.Errorf("inspect project config file %s: %w", projectPath, err)
 	}
 
 	if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
-		configPath := filepath.Join(configHome, "cerberus", "rosters.yaml")
+		configPath := filepath.Join(configHome, "cerberus", "config.yaml")
 		if _, err := os.Stat(configPath); err == nil {
 			return configPath, true, nil
 		} else if err != nil && !os.IsNotExist(err) {
-			return "", false, fmt.Errorf("inspect user rosters file %s: %w", configPath, err)
+			return "", false, fmt.Errorf("inspect user config file %s: %w", configPath, err)
 		}
 	}
 
@@ -65,112 +77,80 @@ func FindRostersFile(projectDir string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("resolve home directory: %w", err)
 	}
-	userPath := filepath.Join(home, ".cerberus", "rosters.yaml")
+	userPath := filepath.Join(home, ".cerberus", "config.yaml")
 	if _, err := os.Stat(userPath); err == nil {
 		return userPath, true, nil
 	} else if err != nil && !os.IsNotExist(err) {
-		return "", false, fmt.Errorf("inspect user rosters file %s: %w", userPath, err)
+		return "", false, fmt.Errorf("inspect user config file %s: %w", userPath, err)
 	}
 
 	return "", false, nil
 }
 
-func decodeRosters(r io.Reader, path string) (*RostersFile, error) {
+func decodeConfig(r io.Reader, path string) (*Config, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return nil, fmt.Errorf("read rosters file %s: %w", path, err)
+		return nil, fmt.Errorf("read config file %s: %w", path, err)
 	}
 	if err := rejectUnknownFields(data, path); err != nil {
 		return nil, err
 	}
 
-	var file RostersFile
+	var file Config
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&file); err != nil {
-		return nil, fmt.Errorf("roster preflight %s roster %q slot %d: schema parse error: %w", path, defaultRosterName, 0, err)
+		return nil, fmt.Errorf("config preflight %s mode %q model %d: schema parse error: %w", path, defaultMode, 0, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("config preflight %s mode %q model %d: schema parse error: multiple YAML documents are not allowed", path, defaultMode, 0)
+		}
+		return nil, fmt.Errorf("config preflight %s mode %q model %d: schema parse error: %w", path, defaultMode, 0, err)
 	}
 	file.FilePath = path
+	if err := validateFile(&file); err != nil {
+		return nil, err
+	}
 	return &file, nil
 }
 
-// Resolve applies file/built-in selection, CLI append/replace, and instance IDs.
-func Resolve(file *RostersFile, name string, cliReviewers []string, replaceSlot string) ([]RosterSlot, error) {
-	return ResolveWithOptions(file, ResolveOptions{
-		RosterName:   name,
-		CLIReviewers: cliReviewers,
-		ReplaceSlot:  replaceSlot,
-	})
+// Resolve selects the model panel for one runtime mode and assigns instance IDs.
+func Resolve(file *Config, mode string) ([]RosterSlot, error) {
+	return ResolveWithOptions(file, ResolveOptions{Mode: mode})
 }
 
-// ResolveWithOptions is Resolve plus preflight-only checks for debate and legacy agents.
-func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, error) {
-	rosterName := opts.RosterName
-	if rosterName == "" {
-		rosterName = defaultRosterName
+func ResolveWithOptions(file *Config, opts ResolveOptions) ([]RosterSlot, error) {
+	mode := opts.Mode
+	if mode == "" && file != nil {
+		mode = file.Defaults.Mode
 	}
-	if opts.Agents != "" && (opts.RosterName != "" || len(opts.CLIReviewers) > 0) {
-		return nil, preflightError(filePath(file), rosterName, 0, "--agents is mutually exclusive with --roster and --reviewer")
+	if mode == "" {
+		mode = defaultMode
 	}
 
 	var slots []RosterSlot
-	builtIn := file == nil
-	if builtIn {
-		if opts.RosterName != "" {
-			return nil, preflightError(filePath(file), rosterName, 0, "--roster %q requires a rosters.yaml file", opts.RosterName)
+	if file == nil {
+		selected, ok := builtInRoster[mode]
+		if !ok {
+			return nil, preflightError(filePath(file), mode, 0, "mode is not defined under roster")
 		}
-		slots = cloneSlots(builtInDefaultSlots)
+		slots = cloneSlots(selected.Models)
 		slots = degradeBuiltInDefault(slots)
 	} else {
 		if err := validateFile(file); err != nil {
 			return nil, err
 		}
-		selected, ok := file.Rosters[rosterName]
+		selected, ok := file.Roster[mode]
 		if !ok {
-			if opts.RosterName == "" {
-				return nil, fmt.Errorf("roster preflight %s roster %q slot %d: no roster named %q in %s; pass --roster <name> to select an existing roster, or remove rosters.yaml to use the built-in default", filePath(file), rosterName, 0, rosterName, filePath(file))
-			}
-			return nil, preflightError(filePath(file), rosterName, 0, "no roster named %q", rosterName)
+			return nil, preflightError(filePath(file), mode, 0, "mode is not defined under roster")
 		}
-		slots = cloneSlots(selected.Reviewers)
+		slots = cloneSlots(selected.Models)
 		normalizePersonaPaths(file, slots)
 	}
 
-	if err := validateSlots(file, rosterName, slots, opts.SkipStrategyPersona); err != nil {
-		return nil, err
-	}
-	assignInstanceIDs(slots)
-
-	if opts.ReplaceSlot != "" {
-		if len(opts.CLIReviewers) != 1 {
-			return nil, preflightError(filePath(file), rosterName, 0, "--replace-slot requires exactly one --reviewer")
-		}
-		replacement, err := parseCLIReviewer(opts.CLIReviewers[0], filePath(file), rosterName)
-		if err != nil {
-			return nil, err
-		}
-		index := -1
-		for i := range slots {
-			if slots[i].InstanceID == opts.ReplaceSlot {
-				index = i
-				break
-			}
-		}
-		if index == -1 {
-			return nil, preflightError(filePath(file), rosterName, 0, "--replace-slot %q references a non-existent slot", opts.ReplaceSlot)
-		}
-		slots[index] = replacement
-	} else {
-		for _, reviewer := range opts.CLIReviewers {
-			slot, err := parseCLIReviewer(reviewer, filePath(file), rosterName)
-			if err != nil {
-				return nil, err
-			}
-			slots = append(slots, slot)
-		}
-	}
-
-	if err := validateSlots(file, rosterName, slots, opts.SkipStrategyPersona); err != nil {
+	if err := validateSlots(file, mode, slots, opts.SkipStrategyPersona); err != nil {
 		return nil, err
 	}
 	assignInstanceIDs(slots)
@@ -179,26 +159,9 @@ func ResolveWithOptions(file *RostersFile, opts ResolveOptions) ([]RosterSlot, e
 		return nil, err
 	}
 	if len(slots) == 0 {
-		return nil, preflightError(filePath(file), rosterName, 0, "empty roster after degradation")
+		return nil, preflightError(filePath(file), mode, 0, "empty roster after degradation")
 	}
 	return slots, nil
-}
-
-func parseCLIReviewer(value, path, rosterName string) (RosterSlot, error) {
-	parts := strings.Split(value, ":")
-	if len(parts) < 2 || len(parts) > 3 {
-		return RosterSlot{}, preflightError(path, rosterName, 0, "--reviewer must use provider:model[:strategy]")
-	}
-	for _, part := range parts {
-		if part == "" {
-			return RosterSlot{}, preflightError(path, rosterName, 0, "--reviewer must use provider:model[:strategy]")
-		}
-	}
-	slot := RosterSlot{Provider: parts[0], Model: parts[1]}
-	if len(parts) == 3 {
-		slot.Strategy = parts[2]
-	}
-	return slot, nil
 }
 
 func assignInstanceIDs(slots []RosterSlot) {
@@ -220,15 +183,15 @@ func cloneSlots(slots []RosterSlot) []RosterSlot {
 	return cloned
 }
 
-func normalizePersonaPaths(file *RostersFile, slots []RosterSlot) {
+func normalizePersonaPaths(file *Config, slots []RosterSlot) {
 	for i := range slots {
 		if slots[i].PersonaPath != "" {
-			slots[i].PersonaPath = resolveRosterRelativePath(file, slots[i].PersonaPath)
+			slots[i].PersonaPath = resolveConfigRelativePath(file, slots[i].PersonaPath)
 		}
 	}
 }
 
-func filePath(file *RostersFile) string {
+func filePath(file *Config) string {
 	if file == nil || file.FilePath == "" {
 		return "<built-in>"
 	}

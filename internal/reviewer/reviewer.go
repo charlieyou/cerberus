@@ -7,6 +7,7 @@ type Request struct {
 	ID        string
 	Provider  string
 	Model     string
+	Effort    string
 	Mode      string
 	System    []byte
 	User      []byte
@@ -23,6 +24,7 @@ type ProviderInvocation struct {
 	InstanceID         string
 	Provider           string
 	Model              string
+	Effort             string
 	Mode               string
 	System             []byte
 	User               []byte

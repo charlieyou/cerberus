@@ -36,7 +36,13 @@ func runSpawnCodeReview(args []string, stdout, stderr io.Writer) int {
 }
 
 func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string) int {
-	opts, err := parseSpawnCodeReviewFlags(normalizeReviewArgs(args, artifactType), stderr)
+	normalizedArgs, err := normalizeReviewArgs(args, artifactType)
+	if err != nil {
+		recordSpawnPreflightFailure("flags", err)
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	opts, err := parseSpawnCodeReviewFlags(normalizedArgs, stderr)
 	if err != nil {
 		recordSpawnPreflightFailure("flags", err)
 		fmt.Fprintln(stderr, err)
@@ -46,7 +52,7 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 
 	resolved, err := resolveReviewers(opts)
 	if err != nil {
-		recordSpawnPreflightFailure("roster", err)
+		recordSpawnPreflightFailure("config", err)
 		fmt.Fprintln(stderr, err)
 		return exitCodeForError(err, 2)
 	}
@@ -64,13 +70,12 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 			ContextContent:     opts.contextContent,
 			Reviewers:          resolved.reviewers,
 			PostReviewer:       opts.postReviewSlot(),
-			RosterDefaults:     resolved.defaults,
-			Mode:               opts.mode,
+			ConfigDefaults:     resolved.defaults,
+			Mode:               resolved.mode,
 			MaxRounds:          opts.explicitMaxRounds(),
 			Consensus:          orchestrator.ConsensusMode(opts.consensus),
 			FailurePriority:    opts.failurePriority,
 			FailurePrioritySet: true,
-			RosterID:           resolved.rosterID,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -96,13 +101,12 @@ func runSpawnReview(args []string, stdout, stderr io.Writer, artifactType string
 		ContextContent:     opts.contextContent,
 		Reviewers:          resolved.reviewers,
 		PostReviewer:       opts.postReviewSlot(),
-		RosterDefaults:     resolved.defaults,
-		Mode:               opts.mode,
+		ConfigDefaults:     resolved.defaults,
+		Mode:               resolved.mode,
 		MaxRounds:          opts.explicitMaxRounds(),
 		Consensus:          orchestrator.ConsensusMode(opts.consensus),
 		FailurePriority:    opts.failurePriority,
 		FailurePrioritySet: true,
-		RosterID:           resolved.rosterID,
 	}
 	started, err := orchestrator.StartSinglePass(config.Resolve(), params)
 	if err != nil {
@@ -129,48 +133,97 @@ func warnIfGenericHostNeedsManualWait(started *orchestrator.StartedRun, stderr i
 	fmt.Fprintf(stderr, "warning: CERBERUS_HOST=generic has no automatic Stop hook; run the same cerberus binary with `wait --json --session-key %q` and the same CERBERUS_STATE_ROOT and CERBERUS_PROJECT_KEY to wait for this gate\n", started.Env.RunKey)
 }
 
-func normalizeReviewArgs(args []string, artifactType string) []string {
-	if artifactType != "epic-verify" {
-		return args
+func normalizeReviewArgs(args []string, artifactType string) ([]string, error) {
+	if err := rejectUnknownReviewFlags(args); err != nil {
+		return nil, err
 	}
-	knownValueFlags := map[string]bool{
-		"-mode": true, "--mode": true, "-max-rounds": true, "--max-rounds": true,
-		"-consensus": true, "--consensus": true, "-fail-priority": true, "--fail-priority": true,
-		"-agents": true, "--agents": true,
-		"-post-reviewer": true, "--post-reviewer": true,
-		"-roster": true, "--roster": true, "-reviewer": true, "--reviewer": true,
-		"-replace-slot": true, "--replace-slot": true, "-exclude": true, "--exclude": true,
-		"-base": true, "--base": true, "-commit": true, "--commit": true,
-		"-prompt-file": true, "--prompt-file": true, "-context-file": true, "--context-file": true,
+	if artifactType != "plan" && artifactType != "spec" && artifactType != "epic-verify" {
+		return args, nil
 	}
-	knownBoolFlags := map[string]bool{"-uncommitted": true, "--uncommitted": true, "-debate": true, "--debate": true}
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			return args
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			return args
+			positionals = append(positionals, args[i+1:]...)
+			break
 		}
 		name := arg
 		if eq := strings.IndexByte(arg, '='); eq >= 0 {
 			name = arg[:eq]
 		}
-		if knownValueFlags[name] {
+		if reviewValueFlags[name] {
+			flags = append(flags, arg)
 			if !strings.Contains(arg, "=") {
+				if i+1 >= len(args) {
+					return nil, fmt.Errorf("flag needs an argument: %s", name)
+				}
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		if reviewBoolFlags[name] {
+			flags = append(flags, arg)
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	if len(positionals) == 0 {
+		return flags, nil
+	}
+	return append(append(flags, "--"), positionals...), nil
+}
+
+var reviewValueFlags = map[string]bool{
+	"-mode": true, "--mode": true, "-max-rounds": true, "--max-rounds": true,
+	"-consensus": true, "--consensus": true, "-fail-priority": true, "--fail-priority": true,
+	"-post-reviewer": true, "--post-reviewer": true,
+	"-exclude": true, "--exclude": true,
+	"-base": true, "--base": true, "-commit": true, "--commit": true,
+	"-prompt-file": true, "--prompt-file": true, "-context-file": true, "--context-file": true,
+}
+
+var reviewBoolFlags = map[string]bool{
+	"-uncommitted": true, "--uncommitted": true,
+	"-debate": true, "--debate": true,
+	"-h": true, "-help": true, "--help": true,
+}
+
+func rejectUnknownReviewFlags(args []string) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return nil
+		}
+		name := arg
+		if eq := strings.IndexByte(arg, '='); eq >= 0 {
+			name = arg[:eq]
+		}
+		if reviewValueFlags[name] {
+			if !strings.Contains(arg, "=") {
+				if i+1 >= len(args) || looksLikeReviewFlag(args[i+1]) {
+					return fmt.Errorf("flag needs an argument: %s", name)
+				}
 				i++
 			}
 			continue
 		}
-		if knownBoolFlags[name] {
+		if reviewBoolFlags[name] {
 			continue
 		}
-		normalized := append([]string{}, args[:i]...)
-		normalized = append(normalized, "--")
-		normalized = append(normalized, args[i:]...)
-		return normalized
+		if looksLikeReviewFlag(arg) {
+			return fmt.Errorf("flag provided but not defined: -%s", strings.TrimLeft(name, "-"))
+		}
 	}
-	return args
+	return nil
+}
+
+func looksLikeReviewFlag(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		return len(arg) > 2
+	}
+	return len(arg) > 1 && arg[0] == '-' && arg[1] != ' '
 }
 
 func recordSpawnPreflightFailure(stage string, err error) {
@@ -389,11 +442,7 @@ type spawnCodeReviewOptions struct {
 	consensus          string
 	failurePriority    int
 	failurePriorityRaw string
-	agents             string
-	roster             string
-	reviewers          []string
 	postReviewer       string
-	replaceSlot        string
 	excludes           []string
 	uncommitted        bool
 	base               string
@@ -413,29 +462,27 @@ func (opts spawnCodeReviewOptions) postReviewSlot() orchestrator.ReviewerSlot {
 }
 
 func (opts spawnCodeReviewOptions) explicitMaxRounds() int {
-	if opts.maxRoundsSet {
-		return opts.maxRounds
+	if !opts.maxRoundsSet {
+		return 0
 	}
-	return 0
+	if opts.maxRounds == 0 {
+		return 1
+	}
+	return opts.maxRounds
 }
 
 func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReviewOptions, error) {
 	var opts spawnCodeReviewOptions
-	var reviewers repeatString
 	var excludes repeatString
 	var commits repeatString
 
 	fs := flag.NewFlagSet("spawn-code-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&opts.mode, "mode", "smart", "review mode")
+	fs.StringVar(&opts.mode, "mode", "", "review mode defined in config.yaml")
 	fs.IntVar(&opts.maxRounds, "max-rounds", 3, "maximum review rounds")
 	fs.StringVar(&opts.consensus, "consensus", "majority", "consensus mode")
 	fs.StringVar(&opts.failurePriorityRaw, "fail-priority", "p1", "minimum finding priority that fails the gate (p0, p1, p2, or p3)")
-	fs.StringVar(&opts.agents, "agents", "", "legacy comma-separated reviewer providers")
-	fs.StringVar(&opts.roster, "roster", "", "roster name")
-	fs.Var(&reviewers, "reviewer", "reviewer provider:model[:strategy]")
 	fs.StringVar(&opts.postReviewer, "post-reviewer", "codex:"+config.DefaultCodexModel+":low", "post-review dedup agent provider:model[:effort]")
-	fs.StringVar(&opts.replaceSlot, "replace-slot", "", "slot id to replace")
 	fs.Var(&excludes, "exclude", "pathspec to exclude")
 	fs.BoolVar(&opts.uncommitted, "uncommitted", false, "review uncommitted changes")
 	fs.StringVar(&opts.base, "base", "", "base ref")
@@ -447,7 +494,6 @@ func parseSpawnCodeReviewFlags(args []string, stderr io.Writer) (spawnCodeReview
 		return opts, err
 	}
 
-	opts.reviewers = reviewers
 	opts.excludes = excludes
 	opts.commits = commits
 	fs.Visit(func(flag *flag.Flag) {
@@ -516,34 +562,16 @@ func isCommitRevision(arg string) bool {
 }
 
 func validateSpawnCodeReviewOptions(opts spawnCodeReviewOptions) error {
-	if opts.modeSet {
-		switch opts.mode {
-		case "fast", "smart", "max":
-		default:
-			return fmt.Errorf("--mode must be fast, smart, or max")
-		}
+	if opts.modeSet && strings.TrimSpace(opts.mode) == "" {
+		return fmt.Errorf("--mode must not be empty")
 	}
-	if opts.maxRoundsSet && opts.maxRounds <= 0 {
-		return fmt.Errorf("--max-rounds must be positive")
+	if opts.maxRoundsSet && opts.maxRounds < 0 {
+		return fmt.Errorf("--max-rounds must be non-negative")
 	}
 	switch opts.consensus {
 	case "majority", "all", "any":
 	default:
 		return fmt.Errorf("--consensus must be majority, all, or any")
-	}
-	if opts.agents != "" && (opts.roster != "" || len(opts.reviewers) > 0) {
-		return fmt.Errorf("--agents is mutually exclusive with --roster and --reviewer")
-	}
-	for _, reviewer := range opts.reviewers {
-		parts := strings.Split(reviewer, ":")
-		if len(parts) < 2 || len(parts) > 3 {
-			return fmt.Errorf("--reviewer must use provider:model[:strategy]")
-		}
-		for _, part := range parts {
-			if part == "" {
-				return fmt.Errorf("--reviewer must use provider:model[:strategy]")
-			}
-		}
 	}
 	if _, err := parsePostReviewer(opts.postReviewer); err != nil {
 		return err
@@ -576,19 +604,19 @@ func parsePostReviewer(value string) (orchestrator.ReviewerSlot, error) {
 	default:
 		return orchestrator.ReviewerSlot{}, fmt.Errorf("--post-reviewer provider must be claude, codex, or gemini")
 	}
-	mode := "fast"
+	effort := "low"
 	if len(parts) == 3 {
 		parsed, err := parsePostReviewEffort(parts[2])
 		if err != nil {
 			return orchestrator.ReviewerSlot{}, err
 		}
-		mode = parsed
+		effort = parsed
 	}
 	return orchestrator.ReviewerSlot{
 		ID:            "cerberus-dedup#1",
 		Provider:      provider,
 		Model:         parts[1],
-		Mode:          mode,
+		Effort:        effort,
 		Strategy:      "independent-verifier",
 		InstanceIndex: 1,
 	}, nil
@@ -596,73 +624,43 @@ func parsePostReviewer(value string) (orchestrator.ReviewerSlot, error) {
 
 func parsePostReviewEffort(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "fast":
-		return "fast", nil
-	case "medium", "smart":
-		return "smart", nil
-	case "high", "max":
-		return "max", nil
+	case "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "", fmt.Errorf("--post-reviewer effort must be low, medium, high, fast, smart, or max")
+		return "", fmt.Errorf("--post-reviewer effort must be low, medium, or high")
 	}
 }
 
 type resolvedReviewerConfig struct {
 	reviewers []orchestrator.ReviewerSlot
-	rosterID  string
-	defaults  orchestrator.RosterDefaults
+	mode      string
+	defaults  orchestrator.ConfigDefaults
 }
 
 func resolveReviewers(opts spawnCodeReviewOptions) (resolvedReviewerConfig, error) {
-	if opts.agents != "" {
-		reviewers, rosterID, err := reviewersFromAgents(opts.agents)
-		if err != nil {
-			return resolvedReviewerConfig{}, err
-		}
-		if err := enforceDebateMinimumForReviewers(reviewers, opts.debate); err != nil {
-			return resolvedReviewerConfig{}, err
-		}
-		return resolvedReviewerConfig{reviewers: reviewers, rosterID: rosterID}, err
-	}
-
-	file, err := roster.LoadRosters("")
+	file, err := roster.LoadConfig("")
 	if err != nil {
 		return resolvedReviewerConfig{}, err
 	}
 	slots, err := roster.ResolveWithOptions(file, roster.ResolveOptions{
-		RosterName:   opts.roster,
-		CLIReviewers: opts.reviewers,
-		ReplaceSlot:  opts.replaceSlot,
-		Debate:       opts.debate,
+		Mode:   opts.mode,
+		Debate: opts.debate,
 	})
 	if err != nil {
 		return resolvedReviewerConfig{}, err
 	}
-	rosterID := opts.roster
-	if rosterID == "" {
-		rosterID = "default"
+	mode := opts.mode
+	if mode == "" && file != nil {
+		mode = file.Defaults.Mode
+	}
+	if mode == "" {
+		mode = "smart"
 	}
 	return resolvedReviewerConfig{
 		reviewers: reviewersFromRosterSlots(slots),
-		rosterID:  rosterID,
-		defaults:  defaultsFromRosterFile(file),
+		mode:      mode,
+		defaults:  defaultsFromConfig(file),
 	}, nil
-}
-
-func enforceDebateMinimumForReviewers(reviewers []orchestrator.ReviewerSlot, debate bool) error {
-	slots := make([]roster.RosterSlot, len(reviewers))
-	for i, reviewer := range reviewers {
-		slots[i] = roster.RosterSlot{
-			Provider:      reviewer.Provider,
-			Model:         reviewer.Model,
-			Strategy:      reviewer.Strategy,
-			PersonaPath:   reviewer.PersonaPath,
-			Mode:          reviewer.Mode,
-			InstanceID:    reviewer.ID,
-			InstanceIndex: reviewer.InstanceIndex,
-		}
-	}
-	return roster.EnforceDebateMinimum(slots, debate)
 }
 
 func reviewersFromRosterSlots(slots []roster.RosterSlot) []orchestrator.ReviewerSlot {
@@ -672,53 +670,24 @@ func reviewersFromRosterSlots(slots []roster.RosterSlot) []orchestrator.Reviewer
 			ID:            slot.InstanceID,
 			Provider:      slot.Provider,
 			Model:         slot.Model,
+			Effort:        slot.Effort,
 			Strategy:      slot.Strategy,
 			PersonaPath:   slot.PersonaPath,
-			Mode:          slot.Mode,
 			InstanceIndex: slot.InstanceIndex,
 		}
 	}
 	return reviewers
 }
 
-func defaultsFromRosterFile(file *roster.RostersFile) orchestrator.RosterDefaults {
+func defaultsFromConfig(file *roster.Config) orchestrator.ConfigDefaults {
 	if file == nil {
-		return orchestrator.RosterDefaults{}
+		return orchestrator.ConfigDefaults{}
 	}
-	defaults := orchestrator.RosterDefaults{Mode: file.Defaults.Mode}
+	defaults := orchestrator.ConfigDefaults{Mode: file.Defaults.Mode}
 	if file.Defaults.MaxRounds != nil {
 		defaults.MaxRounds = *file.Defaults.MaxRounds
 	}
 	return defaults
-}
-
-func reviewersFromAgents(agents string) ([]orchestrator.ReviewerSlot, string, error) {
-	parts := strings.Split(agents, ",")
-	counts := make(map[string]int)
-	reviewers := make([]orchestrator.ReviewerSlot, 0, len(parts))
-	for _, part := range parts {
-		provider := strings.TrimSpace(part)
-		if provider == "" {
-			return nil, "", fmt.Errorf("--agents contains an empty provider")
-		}
-		switch provider {
-		case "claude", "codex", "gemini":
-		default:
-			return nil, "", fmt.Errorf("--agents contains unsupported provider %q", provider)
-		}
-		counts[provider]++
-		model, _ := config.DefaultModelForProvider(provider)
-		reviewers = append(reviewers, orchestrator.ReviewerSlot{
-			ID:            fmt.Sprintf("%s#%d", provider, counts[provider]),
-			Provider:      provider,
-			Model:         model,
-			InstanceIndex: counts[provider],
-		})
-	}
-	if len(reviewers) == 0 {
-		return nil, "", fmt.Errorf("--agents must name at least one provider")
-	}
-	return reviewers, "agents", nil
 }
 
 func buildCodeReviewPrompt(opts spawnCodeReviewOptions) ([]byte, error) {

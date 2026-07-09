@@ -136,7 +136,6 @@ func TestStartDebateRejectsWhenExistingGateIsPending(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        3,
-		RosterID:         "default",
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)
 	}
@@ -342,8 +341,9 @@ func TestRunDebateUsesConfiguredPostReviewerFromOrchestrator(t *testing.T) {
 		PostReviewer: ReviewerSlot{
 			Provider: "gemini",
 			Model:    "gemini-test",
-			Mode:     "fast",
+			Effort:   "low",
 		},
+		Mode: "fast",
 	}).RunDebate(context.Background(), []ReviewerSlot{
 		{ID: "gemini#1", Provider: "gemini", Model: "stub", InstanceIndex: 1},
 		{ID: "gemini#2", Provider: "gemini", Model: "stub", InstanceIndex: 2},
@@ -437,8 +437,8 @@ func TestStartDebateTelemetryFailureResolvesGate(t *testing.T) {
 	if gate.Verdict == nil || *gate.Verdict != state.VerdictRequiresDecision {
 		t.Fatalf("gate verdict = %v, want %q", gate.Verdict, state.VerdictRequiresDecision)
 	}
-	if !strings.Contains(gate.ResolutionReason, "roster selected telemetry failed") {
-		t.Fatalf("resolution reason = %q, want roster telemetry failure", gate.ResolutionReason)
+	if !strings.Contains(gate.ResolutionReason, "mode selected telemetry failed") {
+		t.Fatalf("resolution reason = %q, want mode telemetry failure", gate.ResolutionReason)
 	}
 }
 

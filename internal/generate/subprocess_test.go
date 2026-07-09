@@ -26,7 +26,7 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 
 	for _, provider := range []string{"claude", "codex", "gemini"} {
 		t.Run(provider, func(t *testing.T) {
-			stdout, stderr, err := runProvider(context.Background(), root, provider, "model-name", provider, "system prompt", userPrompt)
+			stdout, stderr, err := runProvider(context.Background(), root, provider, "model-name", "medium", "smart", provider, "system prompt", userPrompt)
 			if err != nil {
 				t.Fatalf("runProvider() error = %v; stderr=%q", err, stderr)
 			}
@@ -51,17 +51,29 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 				if !strings.Contains(args, "--model\nmodel-name\n") {
 					t.Fatalf("claude args = %q, want model flag honoring configured model", args)
 				}
+				if !strings.Contains(args, "--effort\nmedium\n") {
+					t.Fatalf("claude args = %q, want smart-mode effort flag", args)
+				}
 			}
-			if provider == "codex" && !strings.Contains(args, "exec\n--json\n--model\nmodel-name\n") {
-				t.Fatalf("codex args = %q, want exec json and model flags", args)
+			if provider == "codex" {
+				if !strings.Contains(args, "exec\n--json\n--model\nmodel-name\n") {
+					t.Fatalf("codex args = %q, want exec json and model flags", args)
+				}
+				if !strings.Contains(args, "-c\nmodel_reasoning_effort=\"medium\"\n") {
+					t.Fatalf("codex args = %q, want smart-mode reasoning effort config", args)
+				}
 			}
 			if provider == "gemini" {
 				wantPolicy := filepath.Join(root, "config", "gemini-readonly-policy.toml")
-				if !strings.Contains(args, "--output-format\njson\n--model\nmodel-name\n") {
-					t.Fatalf("gemini args = %q, want JSON output-format and model flags", args)
+				if !strings.Contains(args, "--output-format\njson\n--model\ncerberus-reviewer\n") {
+					t.Fatalf("gemini args = %q, want JSON output-format and effort model alias", args)
 				}
 				if !strings.Contains(args, "--prompt\nsystem prompt\n") {
 					t.Fatalf("gemini args = %q, want prompt flag", args)
+				}
+				settings := readGeneratorRecord(t, recordDir, provider+".settings.json")
+				if !strings.Contains(settings, `"model": "model-name"`) || !strings.Contains(settings, `"thinkingLevel": "MEDIUM"`) {
+					t.Fatalf("gemini settings = %q, want configured model and medium thinking level", settings)
 				}
 				if !strings.Contains(args, "use only the exact function names `glob`, `grep_search`, or `read_file`") {
 					t.Fatalf("gemini args = %q, want tool-name directive", args)
@@ -94,7 +106,7 @@ func TestRunProviderReturnsStdoutStderrAndError(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CERBERUS_MOCK_RECORD_DIR", recordDir)
 
-	stdout, stderr, err := runProvider(context.Background(), root, "codex", "model-name", "codex", "system", "user")
+	stdout, stderr, err := runProvider(context.Background(), root, "codex", "model-name", "medium", "smart", "codex", "system", "user")
 	if err == nil {
 		t.Fatal("runProvider() error = nil, want failure")
 	}
@@ -112,7 +124,7 @@ func TestRunProviderReturnsStdoutStderrAndError(t *testing.T) {
 func writeRecordingProvider(t *testing.T, dir, provider string) {
 	t.Helper()
 	path := filepath.Join(dir, provider)
-	body := "#!/bin/sh\nset -eu\ncat > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".stdin\"\nprintf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nprintf 'draft from " + provider + "\\n'\n"
+	body := "#!/bin/sh\nset -eu\ncat > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".stdin\"\nprintf '%s\\n' \"$@\" > \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".args\"\nif [ \"" + provider + "\" = gemini ] && [ -n \"${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-}\" ]; then cp \"$GEMINI_CLI_SYSTEM_SETTINGS_PATH\" \"$CERBERUS_MOCK_RECORD_DIR/" + provider + ".settings.json\"; fi\nprintf 'draft from " + provider + "\\n'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
@@ -148,7 +160,7 @@ func readGeneratorRecord(t *testing.T, dir, name string) string {
 }
 
 func TestRunProviderRejectsUnsupportedProvider(t *testing.T) {
-	_, _, err := runProvider(context.Background(), t.TempDir(), "unknown", "model", "unknown", "system", "user")
+	_, _, err := runProvider(context.Background(), t.TempDir(), "unknown", "model", "medium", "smart", "unknown", "system", "user")
 	if err == nil {
 		t.Fatal("runProvider() error = nil, want unsupported provider")
 	}

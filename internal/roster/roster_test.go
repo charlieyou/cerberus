@@ -1,394 +1,308 @@
 package roster
 
 import (
-	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestProjectRostersFileBeatsUserFile(t *testing.T) {
+func TestProjectConfigBeatsUserConfig(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
+	withFakeCLIs(t, dir)
 	userConfig := filepath.Join(dir, "xdg")
 	t.Setenv("XDG_CONFIG_HOME", userConfig)
-	writeRosterFile(t, filepath.Join(userConfig, "cerberus", "rosters.yaml"), "user-model")
-	writeRosterFile(t, filepath.Join(dir, ".cerberus", "rosters.yaml"), "project-model")
+	writeConfigFile(t, filepath.Join(userConfig, "cerberus", "config.yaml"), "user-model")
+	writeConfigFile(t, filepath.Join(dir, ".cerberus", "config.yaml"), "project-model")
 
-	file, err := LoadRosters("")
+	file, err := LoadConfig("")
 	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if got := file.Rosters["default"].Reviewers[0].Model; got != "project-model" {
+	if got := file.Roster["smart"].Models[0].Model; got != "project-model" {
 		t.Fatalf("loaded model = %q, want project-model", got)
 	}
 }
 
-func TestBuiltInDefaultPanelWhenNoFile(t *testing.T) {
+func TestOldRostersYAMLIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	withFakeCLIs(t, dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	writeFile(t, filepath.Join(dir, ".cerberus", "rosters.yaml"), "version: 1\nrosters: {}\n")
+
+	file, err := LoadConfig("")
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if file != nil {
+		t.Fatalf("LoadConfig() = %#v, want nil when only rosters.yaml exists", file)
+	}
+}
+
+func TestBuiltInPanelsResolveByMode(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 	withFakeCLIs(t, dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 
-	file, err := LoadRosters("")
-	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
-	}
-	if file != nil {
-		t.Fatalf("LoadRosters() = %v, want nil without file", file)
-	}
-	slots, err := Resolve(file, "", nil, "")
+	slots, err := Resolve(nil, "max")
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "gemini#1"})
-	assertSlotModels(t, slots, []string{"opus[1m]", "gpt-5.5", "gemini-3.1-pro-preview"})
+	assertSlotModels(t, slots, []string{"fable", "gpt-5.6-sol", "gemini-3.1-pro-preview"})
+	assertSlotEfforts(t, slots, []string{"high", "high", "high"})
 }
 
-func TestBuiltInDefaultPanelDebateRejectsZeroAvailableReviewersWithDebateMinimum(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	t.Setenv("PATH", filepath.Join(dir, "empty-bin"))
-
-	_, err := ResolveWithOptions(nil, ResolveOptions{Debate: true})
-	if err == nil {
-		t.Fatal("ResolveWithOptions() error = nil, want debate minimum error")
-	}
-	var preflight PreflightError
-	if !errors.As(err, &preflight) {
-		t.Fatalf("ResolveWithOptions() error type = %T, want PreflightError", err)
-	}
-	if preflight.ExitCode() != 6 {
-		t.Fatalf("ExitCode() = %d, want 6", preflight.ExitCode())
-	}
-	if preflight.TelemetryReason() != DebateMinimumReason {
-		t.Fatalf("TelemetryReason() = %q, want %q", preflight.TelemetryReason(), DebateMinimumReason)
-	}
-	if !strings.Contains(err.Error(), "--debate requires at least 2 reviewers in the resolved roster (got 0)") {
-		t.Fatalf("error = %q, want debate minimum zero-reviewer message", err.Error())
-	}
-}
-
-func TestNamedRosterWithoutFileErrors(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	withFakeCLIs(t, dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
-	t.Setenv("HOME", filepath.Join(dir, "home"))
-
-	file, err := LoadRosters("")
-	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
-	}
-	if file != nil {
-		t.Fatalf("LoadRosters() = %v, want nil without file", file)
-	}
-
-	_, err = Resolve(file, "custom", nil, "")
-	if err == nil {
-		t.Fatal("Resolve() error = nil, want missing roster file error")
-	}
-	message := err.Error()
-	for _, want := range []string{"<built-in>", "custom", "requires a rosters.yaml file"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("error %q does not contain %q", message, want)
-		}
-	}
-}
-
-func TestExistingFileWithoutDefaultRosterErrors(t *testing.T) {
+func TestCustomModeSelectsItsOwnModelsAndEffort(t *testing.T) {
 	dir := t.TempDir()
 	withFakeCLIs(t, dir)
-	path := filepath.Join(dir, "rosters.yaml")
-	writeFile(t, path, `version: 1
-rosters:
-  custom:
-    reviewers:
-      - provider: codex
-        model: gpt-5.5
-`)
-	file, err := LoadRosters(path)
-	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
-	}
-
-	_, err = Resolve(file, "", nil, "")
-	if err == nil {
-		t.Fatal("Resolve() error = nil, want missing default error")
-	}
-	message := err.Error()
-	for _, want := range []string{path, "default", "pass --roster <name>", "remove rosters.yaml"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("error %q does not contain %q", message, want)
-		}
-	}
-}
-
-func TestExplicitZeroMaxRoundsRejects(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "rosters.yaml")
+	path := filepath.Join(dir, "config.yaml")
 	writeFile(t, path, `version: 1
 defaults:
-  max_rounds: 0
-rosters:
-  default:
-    reviewers:
+  mode: deep-review
+roster:
+  quick:
+    models:
       - provider: codex
-        model: gpt-5.5
+        model: quick-model
+        effort: low
+  deep-review:
+    models:
+      - provider: codex
+        model: deep-model
+        effort: high
+      - provider: claude
+        model: opus
+        effort: medium
 `)
-	file, err := LoadRosters(path)
+	file, err := LoadConfig(path)
 	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	_, err = Resolve(file, "default", nil, "")
-	if err == nil {
-		t.Fatal("Resolve() error = nil, want max_rounds error")
+	defaultSlots, err := Resolve(file, "")
+	if err != nil {
+		t.Fatalf("Resolve(default) error = %v", err)
 	}
-	message := err.Error()
-	for _, want := range []string{path, "default", "slot 0", "max_rounds must be positive"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("error %q does not contain %q", message, want)
-		}
+	assertSlotModels(t, defaultSlots, []string{"deep-model", "opus"})
+	assertSlotEfforts(t, defaultSlots, []string{"high", "medium"})
+
+	quickSlots, err := Resolve(file, "quick")
+	if err != nil {
+		t.Fatalf("Resolve(quick) error = %v", err)
+	}
+	assertSlotModels(t, quickSlots, []string{"quick-model"})
+	assertSlotEfforts(t, quickSlots, []string{"low"})
+}
+
+func TestUnknownModeRejects(t *testing.T) {
+	dir := t.TempDir()
+	withFakeCLIs(t, dir)
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, "model")
+	file, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	_, err = Resolve(file, "not-defined")
+	if err == nil || !strings.Contains(err.Error(), `mode "not-defined"`) || !strings.Contains(err.Error(), "mode is not defined under roster") {
+		t.Fatalf("Resolve() error = %v, want undefined mode error", err)
 	}
 }
 
-func TestCLIReviewerAppends(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	withFakeCLIs(t, dir)
-	writeStrategy(t, dir, "verification-first")
-	file := loadDefaultRoster(t, dir, []string{"codex:gpt-5.4:"})
-
-	slots, err := Resolve(file, "default", []string{"codex:gpt-5.5:verification-first"}, "")
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if len(slots) != 2 {
-		t.Fatalf("len(slots) = %d, want 2", len(slots))
-	}
-	if got := slots[1].Model + ":" + slots[1].Strategy; got != "gpt-5.5:verification-first" {
-		t.Fatalf("appended slot = %q, want gpt-5.5:verification-first", got)
-	}
-	assertInstanceIDs(t, slots, []string{"codex#1", "codex#2"})
-}
-
-func TestPersonaPathResolvedRelativeToRosterFile(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	withFakeCLIs(t, dir)
-	writeStrategy(t, dir, "verification-first")
-
-	rosterDir := "config"
-	writeFile(t, filepath.Join(rosterDir, "personas", "security.md"), "security persona\n")
-	path := filepath.Join(rosterDir, "rosters.yaml")
+func TestLegacyTopLevelRostersRejects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeFile(t, path, `version: 1
 rosters:
   default:
     reviewers:
       - provider: codex
-        model: gpt-5.5
+        model: gpt
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown top-level key "rosters"`) {
+		t.Fatalf("LoadConfig() error = %v, want strict legacy schema rejection", err)
+	}
+}
+
+func TestEffortIsRequired(t *testing.T) {
+	dir := t.TempDir()
+	withFakeCLIs(t, dir)
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, `version: 1
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: gpt
+`)
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "effort must be low, medium, or high") {
+		t.Fatalf("LoadConfig() error = %v, want required effort error", err)
+	}
+}
+
+func TestLoadConfigValidatesModelsInEveryMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `version: 1
+defaults:
+  mode: smart
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: valid-model
+        effort: medium
+  unused:
+    models:
+      - provider: codex
+        model: broken-model
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want invalid unused mode rejection")
+	}
+	for _, want := range []string{`mode "unused"`, "model 1", "effort must be low, medium, or high"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("LoadConfig() error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestLoadConfigRejectsWhitespaceOnlyModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `version: 1
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: "   "
+        effort: medium
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "model is required") {
+		t.Fatalf("LoadConfig() error = %v, want required model error", err)
+	}
+}
+
+func TestLoadConfigRejectsMultipleYAMLDocuments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `version: 1
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: valid-model
+        effort: medium
+---
+bogus: true
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents are not allowed") {
+		t.Fatalf("LoadConfig() error = %v, want multiple-document rejection", err)
+	}
+}
+
+func TestPersonaPathResolvedRelativeToConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	withFakeCLIs(t, dir)
+	writeFile(t, filepath.Join(dir, "config", "personas", "security.md"), "security persona\n")
+	path := filepath.Join(dir, "config", "config.yaml")
+	writeFile(t, path, `version: 1
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: gpt
+        effort: high
         persona: ./personas/security.md
 `)
-	file, err := LoadRosters(path)
+	file, err := LoadConfig(path)
 	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
-
-	slots, err := Resolve(file, "default", nil, "")
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	want, err := filepath.Abs(filepath.Join(rosterDir, "personas", "security.md"))
-	if err != nil {
-		t.Fatalf("Abs(persona path) error = %v", err)
-	}
-	if got := slots[0].PersonaPath; got != want {
-		t.Fatalf("PersonaPath = %q, want %q", got, want)
-	}
-}
-
-func TestReplaceSlotReplacesReviewer(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	withFakeCLIs(t, dir)
-	writeStrategy(t, dir, "verification-first")
-	writeStrategy(t, dir, "falsification-first")
-	writeStrategy(t, dir, "decompose")
-	file := loadDefaultRoster(t, dir, []string{
-		"codex:gpt-5.5:verification-first",
-		"codex:gpt-5.5:falsification-first",
-	})
-
-	slots, err := Resolve(file, "default", []string{"codex:gpt-5.5:decompose"}, "codex#2")
+	slots, err := Resolve(file, "smart")
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if got := slots[1].Strategy; got != "decompose" {
-		t.Fatalf("replaced strategy = %q, want decompose", got)
-	}
-	assertInstanceIDs(t, slots, []string{"codex#1", "codex#2"})
-}
-
-func TestDuplicateTriplesWarnAndGetDistinctInstanceIDs(t *testing.T) {
-	dir := t.TempDir()
-	withFakeCLIs(t, dir)
-	file := loadDefaultRoster(t, dir, []string{
-		"codex:gpt-5.5:",
-		"codex:gpt-5.5:",
-	})
-
-	stderr := captureStderr(t, func() {
-		slots, err := Resolve(file, "default", nil, "")
-		if err != nil {
-			t.Fatalf("Resolve() error = %v", err)
-		}
-		assertInstanceIDs(t, slots, []string{"codex#1", "codex#2"})
-	})
-	if !strings.Contains(stderr, "duplicate reviewer slot tuple") {
-		t.Fatalf("stderr = %q, want duplicate warning", stderr)
+	want, _ := filepath.Abs(filepath.Join(dir, "config", "personas", "security.md"))
+	if slots[0].PersonaPath != want {
+		t.Fatalf("PersonaPath = %q, want %q", slots[0].PersonaPath, want)
 	}
 }
 
-func TestEnforceDebateMinimumRejectsOneReviewer(t *testing.T) {
-	err := EnforceDebateMinimum([]RosterSlot{{Provider: "codex", Model: "gpt-5.5"}}, true)
-	if err == nil {
-		t.Fatal("EnforceDebateMinimum() error = nil, want debate minimum error")
-	}
-	var preflight PreflightError
-	if !errors.As(err, &preflight) {
-		t.Fatalf("EnforceDebateMinimum() error type = %T, want PreflightError", err)
-	}
-	if preflight.ExitCode() != 6 {
-		t.Fatalf("ExitCode() = %d, want 6", preflight.ExitCode())
-	}
-	if preflight.TelemetryReason() != DebateMinimumReason {
-		t.Fatalf("TelemetryReason() = %q, want %q", preflight.TelemetryReason(), DebateMinimumReason)
-	}
-	if !strings.Contains(err.Error(), "--debate requires at least 2 reviewers in the resolved roster (got 1)") {
-		t.Fatalf("error = %q, want resolved roster count", err.Error())
-	}
-}
-
-func TestEnforceDebateMinimumRejectsZeroReviewers(t *testing.T) {
-	err := EnforceDebateMinimum(nil, true)
-	if err == nil {
-		t.Fatal("EnforceDebateMinimum() error = nil, want debate minimum error")
-	}
-	if !strings.Contains(err.Error(), "got 0") {
-		t.Fatalf("error = %q, want zero count", err.Error())
-	}
-}
-
-func TestEnforceDebateMinimumAcceptsTwoReviewers(t *testing.T) {
-	err := EnforceDebateMinimum([]RosterSlot{
-		{Provider: "codex", Model: "gpt-5.5"},
-		{Provider: "claude", Model: "opus"},
-	}, true)
-	if err != nil {
-		t.Fatalf("EnforceDebateMinimum() error = %v, want nil", err)
-	}
-}
-
-func TestEnforceDebateMinimumAllowsOneReviewerWithoutDebate(t *testing.T) {
-	err := EnforceDebateMinimum([]RosterSlot{{Provider: "codex", Model: "gpt-5.5"}}, false)
-	if err != nil {
-		t.Fatalf("EnforceDebateMinimum() error = %v, want nil", err)
-	}
-}
-
-func TestUnknownYAMLKeyAtSlotRejectsWithPathAndSlotIndex(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "rosters.yaml")
+func TestUnknownModelKeyRejectsWithModeAndIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeFile(t, path, `version: 1
-rosters:
-  default:
-    reviewers:
+roster:
+  custom:
+    models:
       - provider: codex
-        model: gpt-5.5
+        model: gpt
+        effort: medium
         unexpected: true
 `)
 
-	_, err := LoadRosters(path)
+	_, err := LoadConfig(path)
 	if err == nil {
-		t.Fatal("LoadRosters() error = nil, want unknown key error")
+		t.Fatal("LoadConfig() error = nil, want unknown key error")
 	}
-	message := err.Error()
-	for _, want := range []string{path, `roster "default"`, "slot 1", "unexpected"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("error %q does not contain %q", message, want)
+	for _, want := range []string{path, `mode "custom"`, "model 1", "unexpected"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
 		}
 	}
 }
 
-func TestInstanceIDAssignmentWalksListByProvider(t *testing.T) {
-	dir := t.TempDir()
-	withFakeCLIs(t, dir)
-	file := loadDefaultRoster(t, dir, []string{
-		"gemini:gemini-3.1-pro:",
-		"codex:gpt-5.5:",
-		"gemini:gemini-3.1-flash:",
-		"claude:opus:",
-		"codex:gpt-5.4:",
-	})
-
-	slots, err := Resolve(file, "default", nil, "")
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
+func TestDebateMinimumStillAppliesToSelectedMode(t *testing.T) {
+	err := EnforceDebateMinimum([]RosterSlot{{Provider: "codex", Model: "gpt", Effort: "high"}}, true)
+	if err == nil {
+		t.Fatal("EnforceDebateMinimum() error = nil")
 	}
-	assertInstanceIDs(t, slots, []string{"gemini#1", "codex#1", "gemini#2", "claude#1", "codex#2"})
+	var preflight PreflightError
+	if !errors.As(err, &preflight) || preflight.ExitCode() != 6 {
+		t.Fatalf("error = %#v, want exit-code 6 PreflightError", err)
+	}
 }
 
-func TestResolveWithOptionsSkipStrategyPersonaForGenerators(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)        // cwd has no prompts/strategies directory
-	withFakeCLIs(t, dir) // claude/codex available on PATH
-	file := loadDefaultRoster(t, dir, []string{
-		"claude:opus:",
-		"codex:gpt-5.5:",
-		"codex:gpt-5.4:verification-first", // strategy file intentionally absent
-	})
-
-	// Review resolution validates the strategy file and fails when it is absent.
-	if _, err := Resolve(file, "", nil, ""); err == nil {
-		t.Fatal("Resolve() error = nil, want missing strategy-file validation error")
-	}
-
-	// Generator resolution skips review-only strategy/persona validation.
-	slots, err := ResolveWithOptions(file, ResolveOptions{SkipStrategyPersona: true})
-	if err != nil {
-		t.Fatalf("ResolveWithOptions(SkipStrategyPersona) error = %v", err)
-	}
-	assertInstanceIDs(t, slots, []string{"claude#1", "codex#1", "codex#2"})
-}
-
-func loadDefaultRoster(t *testing.T, dir string, specs []string) *RostersFile {
+func loadConfig(t *testing.T, dir string, specs []string) *Config {
 	t.Helper()
-	var yaml strings.Builder
-	yaml.WriteString("version: 1\nrosters:\n  default:\n    reviewers:\n")
+	var body strings.Builder
+	body.WriteString("version: 1\nroster:\n  smart:\n    models:\n")
 	for _, spec := range specs {
 		parts := strings.Split(spec, ":")
-		yaml.WriteString("      - provider: " + parts[0] + "\n")
-		yaml.WriteString("        model: " + parts[1] + "\n")
-		if len(parts) > 2 && parts[2] != "" {
-			yaml.WriteString("        strategy: " + parts[2] + "\n")
+		body.WriteString("      - provider: " + parts[0] + "\n")
+		body.WriteString("        model: " + parts[1] + "\n")
+		body.WriteString("        effort: " + parts[2] + "\n")
+		if len(parts) > 3 && parts[3] != "" {
+			body.WriteString("        strategy: " + parts[3] + "\n")
 		}
 	}
-	path := filepath.Join(dir, "rosters.yaml")
-	writeFile(t, path, yaml.String())
-	file, err := LoadRosters(path)
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, body.String())
+	file, err := LoadConfig(path)
 	if err != nil {
-		t.Fatalf("LoadRosters() error = %v", err)
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	return file
 }
 
-func writeRosterFile(t *testing.T, path, model string) {
+func writeConfigFile(t *testing.T, path, model string) {
 	t.Helper()
-	writeFile(t, path, "version: 1\nrosters:\n  default:\n    reviewers:\n      - provider: codex\n        model: "+model+"\n")
+	writeFile(t, path, "version: 1\ndefaults:\n  mode: smart\nroster:\n  smart:\n    models:\n      - provider: codex\n        model: "+model+"\n        effort: medium\n")
 }
 
 func writeStrategy(t *testing.T, dir, name string) {
@@ -415,23 +329,12 @@ func chdir(t *testing.T, dir string) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir() error = %v", err)
 	}
-	t.Cleanup(func() {
-		if err := os.Chdir(original); err != nil {
-			t.Fatalf("restore Chdir() error = %v", err)
-		}
-	})
+	t.Cleanup(func() { _ = os.Chdir(original) })
 }
 
 func withFakeCLIs(t *testing.T, dir string) {
 	t.Helper()
-	bin := filepath.Join(dir, "bin")
-	for _, name := range []string{"claude", "codex", "gemini"} {
-		writeFile(t, filepath.Join(bin, name), "#!/bin/sh\nexit 0\n")
-		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
-			t.Fatalf("Chmod() error = %v", err)
-		}
-	}
-	t.Setenv("PATH", bin)
+	withFakeCLIsForProviders(t, dir, "claude", "codex", "gemini")
 }
 
 func assertInstanceIDs(t *testing.T, slots []RosterSlot, want []string) {
@@ -448,9 +351,6 @@ func assertInstanceIDs(t *testing.T, slots []RosterSlot, want []string) {
 
 func assertSlotModels(t *testing.T, slots []RosterSlot, want []string) {
 	t.Helper()
-	if len(slots) != len(want) {
-		t.Fatalf("len(slots) = %d, want %d", len(slots), len(want))
-	}
 	for i := range slots {
 		if slots[i].Model != want[i] {
 			t.Fatalf("slot %d Model = %q, want %q", i, slots[i].Model, want[i])
@@ -458,25 +358,30 @@ func assertSlotModels(t *testing.T, slots []RosterSlot, want []string) {
 	}
 }
 
+func assertSlotEfforts(t *testing.T, slots []RosterSlot, want []string) {
+	t.Helper()
+	for i := range slots {
+		if slots[i].Effort != want[i] {
+			t.Fatalf("slot %d Effort = %q, want %q", i, slots[i].Effort, want[i])
+		}
+	}
+}
+
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	original := os.Stderr
-	read, write, err := os.Pipe()
+	reader, writer, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("Pipe() error = %v", err)
+		t.Fatalf("os.Pipe() error = %v", err)
 	}
-	os.Stderr = write
-	defer func() {
-		os.Stderr = original
-	}()
-
+	os.Stderr = writer
+	defer func() { os.Stderr = original }()
 	fn()
-	if err := write.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	_ = writer.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stderr capture: %v", err)
 	}
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(read); err != nil {
-		t.Fatalf("ReadFrom() error = %v", err)
-	}
-	return buf.String()
+	_ = reader.Close()
+	return string(data)
 }

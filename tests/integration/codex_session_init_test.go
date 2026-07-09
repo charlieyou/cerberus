@@ -66,7 +66,7 @@ func TestCodexSessionInitSeedsStatusResolutionFromCache(t *testing.T) {
 		Status:           state.StatusPending,
 		CurrentIteration: 1,
 		MaxRounds:        3,
-		RosterID:         "default",
+		Mode:             "smart",
 		StartedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed gate state: %v", err)

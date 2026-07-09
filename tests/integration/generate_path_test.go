@@ -34,7 +34,7 @@ func TestGeneratePath(t *testing.T) {
 		"CERBERUS_ROOT="+repoRoot,
 		"CERBERUS_FIXTURE_DIR="+fixtureDir,
 		"CERBERUS_MOCK_RECORD_DIR="+recordDir,
-		// Isolate roster discovery from any real user roster.
+		// Isolate config discovery from any real user config.
 		"HOME="+t.TempDir(),
 		"XDG_CONFIG_HOME="+t.TempDir(),
 		"PATH="+integrationMockPath(t, repoRoot)+string(os.PathListSeparator)+os.Getenv("PATH"),

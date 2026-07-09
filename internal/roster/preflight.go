@@ -8,11 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-var rosterNamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
+var modeNamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 const DebateMinimumReason = "debate_min_reviewers"
 
@@ -50,45 +51,45 @@ func EnforceDebateMinimum(slots []RosterSlot, debate bool) error {
 func rejectUnknownFields(data []byte, path string) error {
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
-		return fmt.Errorf("roster preflight %s roster %q slot %d: schema parse error: %w", path, defaultRosterName, 0, err)
+		return fmt.Errorf("config preflight %s mode %q model %d: schema parse error: %w", path, defaultMode, 0, err)
 	}
 	if len(node.Content) == 0 {
 		return nil
 	}
 	root := node.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return fmt.Errorf("roster preflight %s roster %q slot %d: schema parse error: top-level document must be a mapping", path, defaultRosterName, 0)
+		return fmt.Errorf("config preflight %s mode %q model %d: schema parse error: top-level document must be a mapping", path, defaultMode, 0)
 	}
 
-	top := map[string]bool{"version": true, "defaults": true, "rosters": true}
+	top := map[string]bool{"version": true, "defaults": true, "roster": true}
 	defaults := map[string]bool{"mode": true, "max_rounds": true}
-	rosterFields := map[string]bool{"reviewers": true}
-	slotFields := map[string]bool{"provider": true, "model": true, "strategy": true, "persona": true, "mode": true}
+	modeFields := map[string]bool{"models": true}
+	modelFields := map[string]bool{"provider": true, "model": true, "effort": true, "strategy": true, "persona": true}
 
 	for i := 0; i < len(root.Content); i += 2 {
 		key := root.Content[i].Value
 		value := root.Content[i+1]
 		if !top[key] {
-			return fmt.Errorf("roster preflight %s roster %q slot %d: unknown top-level key %q", path, defaultRosterName, 0, key)
+			return fmt.Errorf("config preflight %s mode %q model %d: unknown top-level key %q", path, defaultMode, 0, key)
 		}
 		if key == "defaults" {
-			if err := rejectUnknownMappingFields(value, defaults, path, defaultRosterName, 0, "defaults"); err != nil {
+			if err := rejectUnknownMappingFields(value, defaults, path, defaultMode, 0, "defaults"); err != nil {
 				return err
 			}
 		}
-		if key == "rosters" && value.Kind == yaml.MappingNode {
+		if key == "roster" && value.Kind == yaml.MappingNode {
 			for j := 0; j < len(value.Content); j += 2 {
-				rosterName := value.Content[j].Value
-				rosterNode := value.Content[j+1]
-				if err := rejectUnknownMappingFields(rosterNode, rosterFields, path, rosterName, 0, "roster"); err != nil {
+				mode := value.Content[j].Value
+				modeNode := value.Content[j+1]
+				if err := rejectUnknownMappingFields(modeNode, modeFields, path, mode, 0, "mode"); err != nil {
 					return err
 				}
-				reviewers := mappingValue(rosterNode, "reviewers")
-				if reviewers == nil || reviewers.Kind != yaml.SequenceNode {
+				models := mappingValue(modeNode, "models")
+				if models == nil || models.Kind != yaml.SequenceNode {
 					continue
 				}
-				for slotIndex, slotNode := range reviewers.Content {
-					if err := rejectUnknownMappingFields(slotNode, slotFields, path, rosterName, slotIndex+1, "slot"); err != nil {
+				for modelIndex, modelNode := range models.Content {
+					if err := rejectUnknownMappingFields(modelNode, modelFields, path, mode, modelIndex+1, "model"); err != nil {
 						return err
 					}
 				}
@@ -98,14 +99,14 @@ func rejectUnknownFields(data []byte, path string) error {
 	return nil
 }
 
-func rejectUnknownMappingFields(node *yaml.Node, allowed map[string]bool, path, rosterName string, slotIndex int, scope string) error {
+func rejectUnknownMappingFields(node *yaml.Node, allowed map[string]bool, path, mode string, modelIndex int, scope string) error {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i < len(node.Content); i += 2 {
 		key := node.Content[i].Value
 		if !allowed[key] {
-			return fmt.Errorf("roster preflight %s roster %q slot %d: unknown %s key %q", path, rosterName, slotIndex, scope, key)
+			return fmt.Errorf("config preflight %s mode %q model %d: unknown %s key %q", path, mode, modelIndex, scope, key)
 		}
 	}
 	return nil
@@ -123,64 +124,78 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-func validateFile(file *RostersFile) error {
+func validateFile(file *Config) error {
 	path := filePath(file)
 	if file.Version != 1 {
-		return preflightError(path, defaultRosterName, 0, "version must be 1")
+		return preflightError(path, defaultMode, 0, "version must be 1")
 	}
-	if file.Defaults.Mode != "" && !validMode(file.Defaults.Mode) {
-		return preflightError(path, defaultRosterName, 0, "unknown mode %q", file.Defaults.Mode)
+	if len(file.Roster) == 0 {
+		return preflightError(path, defaultMode, 0, "roster must define at least one mode")
+	}
+	for mode, roster := range file.Roster {
+		if !modeNamePattern.MatchString(mode) {
+			return preflightError(path, mode, 0, "mode name must match [a-z0-9_-]+")
+		}
+		if len(roster.Models) == 0 {
+			return preflightError(path, mode, 0, "models must be non-empty")
+		}
+		if err := validateModelDefinitions(file, mode, roster.Models); err != nil {
+			return err
+		}
+	}
+	if file.Defaults.Mode != "" {
+		if _, ok := file.Roster[file.Defaults.Mode]; !ok {
+			return preflightError(path, file.Defaults.Mode, 0, "default mode is not defined under roster")
+		}
 	}
 	if file.Defaults.MaxRounds != nil && *file.Defaults.MaxRounds <= 0 {
-		return preflightError(path, defaultRosterName, 0, "max_rounds must be positive")
+		return preflightError(path, defaultMode, 0, "max_rounds must be positive")
 	}
-	if len(file.Rosters) == 0 {
-		return preflightError(path, defaultRosterName, 0, "rosters must contain at least one roster")
+	return nil
+}
+
+func validateSlots(file *Config, mode string, slots []RosterSlot, skipStrategyPersona bool) error {
+	if err := validateModelDefinitions(file, mode, slots); err != nil {
+		return err
 	}
-	for name, roster := range file.Rosters {
-		if !rosterNamePattern.MatchString(name) {
-			return preflightError(path, name, 0, "roster name must match [a-z0-9_-]+")
+	path := filePath(file)
+	for i, slot := range slots {
+		modelIndex := i + 1
+		if !skipStrategyPersona {
+			if slot.Strategy != "" && slot.Strategy != "none" {
+				if err := validateStrategy(file, mode, modelIndex, slot.Strategy); err != nil {
+					return err
+				}
+			}
+			if slot.PersonaPath != "" {
+				personaPath := resolveConfigRelativePath(file, slot.PersonaPath)
+				if _, err := os.Stat(personaPath); err != nil {
+					if os.IsNotExist(err) {
+						return preflightError(path, mode, modelIndex, "persona file %q does not exist", personaPath)
+					}
+					return preflightError(path, mode, modelIndex, "inspect persona file %q: %v", personaPath, err)
+				}
+			}
 		}
-		if len(roster.Reviewers) == 0 {
-			return preflightError(path, name, 0, "reviewers must be non-empty")
+		if _, err := exec.LookPath(slot.Provider); err != nil {
+			return preflightError(path, mode, modelIndex, "provider CLI %q is not available on PATH", slot.Provider)
 		}
 	}
 	return nil
 }
 
-func validateSlots(file *RostersFile, rosterName string, slots []RosterSlot, skipStrategyPersona bool) error {
+func validateModelDefinitions(file *Config, mode string, slots []RosterSlot) error {
 	path := filePath(file)
 	for i, slot := range slots {
-		slotIndex := i + 1
+		modelIndex := i + 1
 		if !validProvider(slot.Provider) {
-			return preflightError(path, rosterName, slotIndex, "unknown provider %q", slot.Provider)
+			return preflightError(path, mode, modelIndex, "unknown provider %q", slot.Provider)
 		}
-		if slot.Model == "" {
-			return preflightError(path, rosterName, slotIndex, "model is required")
+		if strings.TrimSpace(slot.Model) == "" {
+			return preflightError(path, mode, modelIndex, "model is required")
 		}
-		if slot.Mode != "" && !validMode(slot.Mode) {
-			return preflightError(path, rosterName, slotIndex, "unknown mode %q", slot.Mode)
-		}
-		// Strategy and persona are review-only; generator panels never use them,
-		// so skip requiring their files when resolving a generator panel.
-		if !skipStrategyPersona {
-			if slot.Strategy != "" && slot.Strategy != "none" {
-				if err := validateStrategy(file, rosterName, slotIndex, slot.Strategy); err != nil {
-					return err
-				}
-			}
-			if slot.PersonaPath != "" {
-				personaPath := resolveRosterRelativePath(file, slot.PersonaPath)
-				if _, err := os.Stat(personaPath); err != nil {
-					if os.IsNotExist(err) {
-						return preflightError(path, rosterName, slotIndex, "persona file %q does not exist", personaPath)
-					}
-					return preflightError(path, rosterName, slotIndex, "inspect persona file %q: %v", personaPath, err)
-				}
-			}
-		}
-		if _, err := exec.LookPath(slot.Provider); err != nil {
-			return preflightError(path, rosterName, slotIndex, "provider CLI %q is not available on PATH", slot.Provider)
+		if !validEffort(slot.Effort) {
+			return preflightError(path, mode, modelIndex, "effort must be low, medium, or high")
 		}
 	}
 	return nil
@@ -198,25 +213,25 @@ func degradeBuiltInDefault(slots []RosterSlot) []RosterSlot {
 	return filtered
 }
 
-func validateStrategy(file *RostersFile, rosterName string, slotIndex int, strategy string) error {
+func validateStrategy(file *Config, mode string, modelIndex int, strategy string) error {
 	strategyPath := filepath.Join("prompts", "strategies", strategy+".md")
 	if _, err := os.Stat(strategyPath); err != nil {
 		if os.IsNotExist(err) {
-			return preflightError(filePath(file), rosterName, slotIndex, "strategy file %q does not exist", strategyPath)
+			return preflightError(filePath(file), mode, modelIndex, "strategy file %q does not exist", strategyPath)
 		}
-		return preflightError(filePath(file), rosterName, slotIndex, "inspect strategy file %q: %v", strategyPath, err)
+		return preflightError(filePath(file), mode, modelIndex, "inspect strategy file %q: %v", strategyPath, err)
 	}
 	return nil
 }
 
 func warnDuplicates(w io.Writer, slots []RosterSlot) {
-	triples := make(map[string]int)
+	entries := make(map[string]int)
 	providerModels := make(map[string]int)
 	for _, slot := range slots {
-		triple := slot.Provider + "\x00" + slot.Model + "\x00" + slot.Strategy
-		triples[triple]++
-		if triples[triple] == 2 {
-			fmt.Fprintf(w, "warning: duplicate reviewer slot tuple (provider=%s, model=%s, strategy=%s)\n", slot.Provider, slot.Model, slot.Strategy)
+		entry := slot.Provider + "\x00" + slot.Model + "\x00" + slot.Effort + "\x00" + slot.Strategy
+		entries[entry]++
+		if entries[entry] == 2 {
+			fmt.Fprintf(w, "warning: duplicate reviewer model (provider=%s, model=%s, effort=%s, strategy=%s)\n", slot.Provider, slot.Model, slot.Effort, slot.Strategy)
 		}
 		providerModel := slot.Provider + "\x00" + slot.Model
 		providerModels[providerModel]++
@@ -226,15 +241,15 @@ func warnDuplicates(w io.Writer, slots []RosterSlot) {
 	}
 }
 
-func resolveRosterRelativePath(file *RostersFile, path string) string {
+func resolveConfigRelativePath(file *Config, path string) string {
 	if filepath.IsAbs(path) || file == nil || file.FilePath == "" {
 		return path
 	}
-	rosterPath, err := filepath.Abs(file.FilePath)
+	configPath, err := filepath.Abs(file.FilePath)
 	if err != nil {
-		rosterPath = file.FilePath
+		configPath = file.FilePath
 	}
-	return filepath.Join(filepath.Dir(rosterPath), path)
+	return filepath.Join(filepath.Dir(configPath), path)
 }
 
 func validProvider(provider string) bool {
@@ -246,18 +261,18 @@ func validProvider(provider string) bool {
 	}
 }
 
-func validMode(mode string) bool {
-	switch mode {
-	case "fast", "smart", "max":
+func validEffort(effort string) bool {
+	switch effort {
+	case "low", "medium", "high":
 		return true
 	default:
 		return false
 	}
 }
 
-func preflightError(path, rosterName string, slotIndex int, format string, args ...any) error {
+func preflightError(path, mode string, modelIndex int, format string, args ...any) error {
 	var message bytes.Buffer
-	fmt.Fprintf(&message, "roster preflight %s roster %q slot %d: ", path, rosterName, slotIndex)
+	fmt.Fprintf(&message, "config preflight %s mode %q model %d: ", path, mode, modelIndex)
 	fmt.Fprintf(&message, format, args...)
 	return fmt.Errorf("%s", message.String())
 }

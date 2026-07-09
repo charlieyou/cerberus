@@ -66,7 +66,7 @@ func validateClaudeArgs(args []string) error {
 				return fmt.Errorf("unsupported claude output format %q", value)
 			}
 			i = next
-		case "--model", "--append-system-prompt":
+		case "--model", "--append-system-prompt", "--effort":
 			_, next, err := requireValue(args, i)
 			if err != nil {
 				return err
@@ -91,7 +91,7 @@ func validateCodexArgs(args []string) error {
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--json", "--help", "-h", "--version", "-V":
-		case "--model", "-m":
+		case "--model", "-m", "--config", "-c":
 			_, next, err := requireValue(args, i)
 			if err != nil {
 				return err
@@ -156,6 +156,11 @@ func recordInvocation(provider string, prompt []byte) {
 	}
 	_ = os.MkdirAll(recordDir, 0o755)
 	_ = os.WriteFile(filepath.Join(recordDir, provider+".stdin"), prompt, 0o644)
+	if settingsPath := os.Getenv("GEMINI_CLI_SYSTEM_SETTINGS_PATH"); provider == "gemini" && settingsPath != "" {
+		if settings, err := os.ReadFile(settingsPath); err == nil {
+			_ = os.WriteFile(filepath.Join(recordDir, provider+".settings.json"), settings, 0o644)
+		}
+	}
 	args := strings.Join(os.Args[1:], "\n")
 	if args != "" {
 		args += "\n"

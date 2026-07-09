@@ -6,7 +6,7 @@ import (
 	"github.com/charlieyou/cerberus/internal/reviewer"
 )
 
-func runProvider(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+func runProvider(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 	if instanceID == "" {
 		instanceID = providerName + "#1"
 	}
@@ -18,6 +18,8 @@ func runProvider(ctx context.Context, root, providerName, model, instanceID, sys
 		InstanceID:         instanceID,
 		Provider:           providerName,
 		Model:              model,
+		Effort:             effort,
+		Mode:               mode,
 		System:             []byte(systemPrompt),
 		User:               []byte(userPrompt),
 		Root:               root,

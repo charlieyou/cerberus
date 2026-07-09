@@ -61,10 +61,10 @@ Cerberus builds itself locally on first use, so every install needs:
 
 The built-in default panel is Claude + Codex + Gemini. If one of those CLIs is
 missing, the built-in panel drops that reviewer and prints a warning. Custom
-rosters are strict: every reviewer you name must be available.
+configured modes are strict: every provider they name must be available.
 
 Code review and epic verification runs with findings also run an automatic
-post-review verification/dedup agent. That agent defaults to `codex:gpt-5.5:low`,
+post-review verification/dedup agent. That agent defaults to `codex:gpt-5.6-sol:low`,
 so install `codex` or pass `--post-reviewer <provider>:<model>:<effort>` when
 using a different available provider.
 
@@ -74,9 +74,14 @@ describes argv and system-prompt shape.
 
 | Reviewer | Invocation shape |
 | --- | --- |
-| Claude | `claude --print --output-format json [--model <model>] --append-system-prompt <system>` |
-| Codex | `codex exec --json --model <model> <system>` |
-| Gemini | `gemini --output-format json --model <model> --prompt <system> --policy <policy.toml>` |
+| Claude | `claude --print --output-format json [--model <model>] --effort <low\|medium\|high> --append-system-prompt <system>` |
+| Codex | `codex exec --json --model <model> -c model_reasoning_effort=\"<low\|medium\|high>\" <system>` |
+| Gemini | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<temp-settings.json> gemini --output-format json --model cerberus-reviewer --prompt <system> --policy <policy.toml>` |
+
+Each model entry supplies its own effort independently of the selected mode's
+name. For Gemini, the temporary settings file defines the `cerberus-reviewer`
+model alias with the requested model and matching
+`thinkingConfig.thinkingLevel`.
 
 After upgrading reviewer CLIs, maintainers should run:
 
@@ -222,18 +227,11 @@ Cerberus is designed for one active Cerberus review per project at a time.
 
 | Flag | Meaning |
 | --- | --- |
-| `--mode fast\|smart\|max` | Trade off speed and depth. |
+| `--mode <name>` | Select a model panel defined under `roster.<name>` in `config.yaml`. |
 | `--debate` | Run a debate instead of only independent reviews. Requires at least two reviewers. |
 | `--max-rounds <N>` | Limit review iterations or debate rounds. |
 | `--consensus majority\|all\|any` | Choose how many reviewers must pass. Blocking findings still block. |
-| `--agents claude,codex,gemini` | Quick built-in provider filter. Mutually exclusive with rosters and inline reviewers. |
-| `--roster <name>` | Select a named YAML roster. |
-| `--reviewer provider:model[:strategy]` | Add an inline reviewer slot. |
-| `--post-reviewer provider:model[:effort]` | Choose the automatic post-review verification/dedup agent for code and epic verification findings. Effort accepts `low`/`medium`/`high` (aliases: `fast`/`smart`/`max`). Defaults to `codex:gpt-5.5:low`. |
-| `--replace-slot <instance_id>` | Replace one resolved roster slot with the inline reviewer. |
-
-Prefer rosters over `--agents` when you need model versions, repeated providers,
-personas, or reviewer strategies.
+| `--post-reviewer provider:model[:effort]` | Choose the automatic post-review verification/dedup agent for code and epic verification findings. Effort accepts `low`/`medium`/`high`. Defaults to `codex:gpt-5.6-sol:low`. |
 
 Ask also accepts ask-only prompt inputs:
 
@@ -242,26 +240,25 @@ Ask also accepts ask-only prompt inputs:
 | `--context-file <path>` | Add context to an ask prompt. |
 | `--prompt-file <path>` | Read the ask prompt from a file. |
 
-## Reviewer rosters
+## Configuration
 
-Rosters define named panels without changing source code. Cerberus searches for
-the first roster file in this order:
+`config.yaml` defines one model panel for each mode. Cerberus loads the first
+file in this order:
 
-1. `./.cerberus/rosters.yaml`
-2. `$XDG_CONFIG_HOME/cerberus/rosters.yaml`
-3. `~/.cerberus/rosters.yaml`
-4. The built-in default panel, if no roster file exists.
+1. `./.cerberus/config.yaml`
+2. `$XDG_CONFIG_HOME/cerberus/config.yaml`
+3. `~/.cerberus/config.yaml`
+4. The built-in `fast`, `smart`, and `max` modes when no config file exists.
 
-If a roster file exists, Cerberus uses it as the source of truth. A missing
-requested roster is an error; Cerberus does not silently fall back.
+A config file is authoritative. The selected mode must exist under `roster`,
+and each provider CLI used by that mode must be available. Cerberus does not read
+`rosters.yaml`, merge project and user configs, or translate the previous
+named-roster schema.
 
-The generators (`cerberus generate`, behind `/cerberus:create-plan` and
-`/cerberus:create-spec`) draft with the same `default` roster, so editing it
-changes both the review panel and the drafter panel. Generators support repeated
-providers: each drafter writes to `$OUTPUT_DIR/<provider>/draft.md`, and
-additional instances of the same provider get a numeric suffix (for example a
-second codex slot writes to `$OUTPUT_DIR/codex-2/draft.md`). `cerberus generate`
-prints one `draft.md` path per successful drafter to stdout.
+Reviews and generators select the same mode, so one mode controls both reviewer
+and drafter models. Generators support repeated providers: each drafter writes
+to `$OUTPUT_DIR/<provider>/draft.md`, and additional instances receive a numeric
+suffix such as `$OUTPUT_DIR/codex-2/draft.md`.
 
 ### Schema
 
@@ -270,22 +267,41 @@ version: 1
 defaults:
   mode: smart
   max_rounds: 3
-rosters:
-  default:
-    reviewers:
+roster:
+  fast:
+    models:
+      - provider: codex
+        model: gpt-5.6-sol
+        effort: low
+  smart:
+    models:
       - provider: claude
         model: "opus[1m]"
+        effort: medium
       - provider: codex
-        model: gpt-5.5
+        model: gpt-5.6-sol
+        effort: medium
         strategy: verification-first
       - provider: gemini
         model: gemini-3.1-pro-preview
+        effort: medium
         persona: personas/security.md
+  deep-review:
+    models:
+      - provider: codex
+        model: gpt-5.6-sol
+        effort: high
+      - provider: codex
+        model: gpt-5.4
+        effort: high
+        strategy: falsification-first
 ```
 
-Allowed providers are `claude`, `codex`, and `gemini`. `strategy`, `mode`, and
-`persona` are optional per reviewer. Persona files are resolved relative to the
-roster file and must exist. `consensus` is a CLI flag, not a roster YAML key.
+Mode names may contain lowercase letters, digits, underscores, and hyphens.
+Each mode requires a non-empty `models` list. Allowed providers are `claude`,
+`codex`, and `gemini`; `effort` is required and must be `low`, `medium`, or
+`high`. `strategy` and `persona` are optional. Persona paths are resolved
+relative to `config.yaml` and must exist. `consensus` remains a CLI flag.
 
 ### Multi-instance example
 
@@ -294,40 +310,37 @@ version: 1
 defaults:
   mode: smart
   max_rounds: 3
-rosters:
+roster:
   diverse-codex:
-    reviewers:
+    models:
       - provider: codex
-        model: gpt-5.5
+        model: gpt-5.6-sol
+        effort: high
         strategy: verification-first
       - provider: codex
         model: gpt-5.4
+        effort: high
         strategy: falsification-first
       - provider: codex
         model: gpt-5.3-codex
+        effort: medium
         strategy: decompose
       - provider: claude
         model: "opus[1m]"
+        effort: high
       - provider: gemini
         model: gemini-3.1-pro-preview
+        effort: high
 ```
 
 Run it with:
 
 ```text
-/cerberus:review-code --roster diverse-codex
+/cerberus:review-code --mode diverse-codex
 ```
 
-Cerberus assigns instance IDs after roster resolution, for example `codex#1`,
-`codex#2`, `codex#3`, `claude#1`, and `gemini#1`. You can use those IDs with
-`--replace-slot`:
-
-```text
-/cerberus:review-code \
-  --roster diverse-codex \
-  --replace-slot codex#2 \
-  --reviewer codex:gpt-5.5:decompose
-```
+Cerberus assigns instance IDs after mode resolution, for example `codex#1`,
+`codex#2`, `codex#3`, `claude#1`, and `gemini#1`.
 
 Exact duplicate reviewer slots are allowed but warn, because they are often
 accidental.
@@ -339,7 +352,7 @@ is useful for automation and debugging:
 
 ```bash
 ${CERBERUS_ROOT}/bin/cerberus spawn-code-review --mode smart
-${CERBERUS_ROOT}/bin/cerberus spawn-code-review --debate --roster diverse-codex
+${CERBERUS_ROOT}/bin/cerberus spawn-code-review --debate --mode diverse-codex
 ${CERBERUS_ROOT}/bin/cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
 ${CERBERUS_ROOT}/bin/cerberus status --json
 ${CERBERUS_ROOT}/bin/cerberus resolve --reason "manual clear"
@@ -358,7 +371,7 @@ export CERBERUS_STATE_ROOT=/tmp/cerberus-state
 export CERBERUS_PROJECT_KEY=my-project
 export CERBERUS_RUN_KEY="ci-${BUILD_ID:-local}"
 
-cerberus spawn-code-review --agents codex --base main
+cerberus spawn-code-review --mode smart --base main
 cerberus wait --json --session-key "$CERBERUS_RUN_KEY"
 ```
 
@@ -437,20 +450,20 @@ Cerberus expects one active run per project. Inspect it with:
 Then either finish the review, address the findings, or intentionally clear the
 gate.
 
-### A custom roster references a missing CLI
+### A configured mode references a missing CLI
 
-Install the named provider CLI or remove that reviewer from the roster. Only the
+Install the named provider CLI or remove that model from the mode. Only the
 built-in default panel degrades by dropping unavailable reviewers.
 
 ### `--debate` says there are not enough reviewers
 
-Debate requires at least two reviewers after roster resolution. Install another
-provider CLI, choose a larger roster, add `--reviewer`, or remove `--debate`.
+Debate requires at least two reviewers after mode resolution. Install another
+provider CLI, choose a mode with more models, or remove `--debate`.
 
 ### Missing persona file
 
-Fix `persona` in the roster or create the referenced file. Persona paths are
-relative to the roster file.
+Fix `persona` in `config.yaml` or create the referenced file. Persona paths are
+relative to the config file.
 
 ## Development
 

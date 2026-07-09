@@ -169,7 +169,7 @@ func TestGenerateRunUnwrapsClaudeAndGeminiEnvelopes(t *testing.T) {
 			writeGeneratePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 
 			originalRunner := providerRunner
-			providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+			providerRunner = func(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 				return []byte(tc.stdout), nil, nil
 			}
 			t.Cleanup(func() { providerRunner = originalRunner })
@@ -181,7 +181,7 @@ func TestGenerateRunUnwrapsClaudeAndGeminiEnvelopes(t *testing.T) {
 				Mode:          "smart",
 				Prompt:        "fixture prompt",
 				Root:          root,
-				Providers:     []string{tc.provider},
+				Panel:         testPanel(tc.provider),
 				SkipInterview: true,
 			}); err != nil {
 				t.Fatalf("Run() error = %v", err)
@@ -203,7 +203,7 @@ func TestGenerateRunFailsOnEmptyClaudeResult(t *testing.T) {
 	writeGeneratePrompt(t, root, "prompts/generators/create-spec.md", "create spec generator")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(`{"type":"result","result":"   "}`), nil, nil
 	}
 	t.Cleanup(func() { providerRunner = originalRunner })
@@ -215,7 +215,7 @@ func TestGenerateRunFailsOnEmptyClaudeResult(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
-		Providers:     []string{"claude"},
+		Panel:         testPanel("claude"),
 		SkipInterview: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "produced empty draft") {
@@ -242,7 +242,7 @@ func TestGenerateRunWritesCodexDraftFromAgentMessage(t *testing.T) {
 	}, "\n")
 
 	originalRunner := providerRunner
-	providerRunner = func(ctx context.Context, root, providerName, model, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
+	providerRunner = func(ctx context.Context, root, providerName, model, effort, mode, instanceID, systemPrompt, userPrompt string) ([]byte, []byte, error) {
 		return []byte(stream), nil, nil
 	}
 	t.Cleanup(func() { providerRunner = originalRunner })
@@ -254,7 +254,7 @@ func TestGenerateRunWritesCodexDraftFromAgentMessage(t *testing.T) {
 		Mode:          "smart",
 		Prompt:        "fixture prompt",
 		Root:          root,
-		Providers:     []string{"codex"},
+		Panel:         testPanel("codex"),
 		SkipInterview: true,
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
