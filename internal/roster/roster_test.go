@@ -146,7 +146,7 @@ roster:
         model: gpt
 `)
 	_, err := LoadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "effort must be low, medium, or high") {
+	if err == nil || !strings.Contains(err.Error(), "effort must be low, medium, high, xhigh, or max") {
 		t.Fatalf("LoadConfig() error = %v, want required effort error", err)
 	}
 }
@@ -172,10 +172,29 @@ roster:
 	if err == nil {
 		t.Fatal("LoadConfig() error = nil, want invalid unused mode rejection")
 	}
-	for _, want := range []string{`mode "unused"`, "model 1", "effort must be low, medium, or high"} {
+	for _, want := range []string{`mode "unused"`, "model 1", "effort must be low, medium, high, xhigh, or max"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("LoadConfig() error = %q, want %q", err, want)
 		}
+	}
+}
+
+func TestLoadConfigAcceptsExtendedEfforts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, `version: 1
+roster:
+  smart:
+    models:
+      - provider: codex
+        model: gpt
+        effort: xhigh
+      - provider: claude
+        model: opus
+        effort: max
+`)
+
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig() error = %v, want xhigh and max efforts accepted", err)
 	}
 }
 

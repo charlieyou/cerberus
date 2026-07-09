@@ -624,10 +624,10 @@ func parsePostReviewer(value string) (orchestrator.ReviewerSlot, error) {
 
 func parsePostReviewEffort(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "medium", "high":
+	case "low", "medium", "high", "xhigh", "max":
 		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "", fmt.Errorf("--post-reviewer effort must be low, medium, or high")
+		return "", fmt.Errorf("--post-reviewer effort must be low, medium, high, xhigh, or max")
 	}
 }
 

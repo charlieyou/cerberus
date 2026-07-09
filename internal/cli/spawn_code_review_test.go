@@ -1003,14 +1003,27 @@ func TestParseSpawnCodeReviewPostReviewer(t *testing.T) {
 		t.Fatalf("custom post reviewer = %#v, want claude/opus/high", slot)
 	}
 
+	opts, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:max"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(max effort) error = %v", err)
+	}
+	slot = opts.postReviewSlot()
+	if slot.Provider != "codex" || slot.Model != "gpt" || slot.Effort != "max" {
+		t.Fatalf("max-effort post reviewer = %#v, want codex/gpt/max", slot)
+	}
+
+	opts, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "gemini:pro:xhigh"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseSpawnCodeReviewFlags(xhigh effort) error = %v", err)
+	}
+	slot = opts.postReviewSlot()
+	if slot.Provider != "gemini" || slot.Model != "pro" || slot.Effort != "xhigh" {
+		t.Fatalf("xhigh-effort post reviewer = %#v, want gemini/pro/xhigh", slot)
+	}
+
 	_, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:turbo"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--post-reviewer effort") {
 		t.Fatalf("invalid post reviewer error = %v, want effort error", err)
-	}
-
-	_, err = parseSpawnCodeReviewFlags([]string{"--post-reviewer", "codex:gpt:max"}, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "low, medium, or high") {
-		t.Fatalf("legacy post reviewer effort error = %v, want strict effort error", err)
 	}
 }
 

@@ -195,7 +195,7 @@ func validateModelDefinitions(file *Config, mode string, slots []RosterSlot) err
 			return preflightError(path, mode, modelIndex, "model is required")
 		}
 		if !validEffort(slot.Effort) {
-			return preflightError(path, mode, modelIndex, "effort must be low, medium, or high")
+			return preflightError(path, mode, modelIndex, "effort must be low, medium, high, xhigh, or max")
 		}
 	}
 	return nil
@@ -263,7 +263,7 @@ func validProvider(provider string) bool {
 
 func validEffort(effort string) bool {
 	switch effort {
-	case "low", "medium", "high":
+	case "low", "medium", "high", "xhigh", "max":
 		return true
 	default:
 		return false

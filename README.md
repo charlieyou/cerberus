@@ -74,13 +74,14 @@ describes argv and system-prompt shape.
 
 | Reviewer | Invocation shape |
 | --- | --- |
-| Claude | `claude --print --output-format json [--model <model>] --effort <low\|medium\|high> --append-system-prompt <system>` |
-| Codex | `codex exec --json --model <model> -c model_reasoning_effort=\"<low\|medium\|high>\" <system>` |
+| Claude | `claude --print --output-format json [--model <model>] --effort <effort> --append-system-prompt <system>` |
+| Codex | `codex exec --json --model <model> -c model_reasoning_effort=\"<effort>\" <system>` |
 | Gemini | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<temp-settings.json> gemini --output-format json --model cerberus-reviewer --prompt <system> --policy <policy.toml>` |
 
 Each model entry supplies its own effort independently of the selected mode's
-name. For Gemini, the temporary settings file defines the `cerberus-reviewer`
-model alias with the requested model and matching
+name. Allowed efforts are `low`, `medium`, `high`, `xhigh`, and `max`. For
+Gemini, the temporary settings file defines the `cerberus-reviewer` model alias
+with the requested model and matching
 `thinkingConfig.thinkingLevel`.
 
 After upgrading reviewer CLIs, maintainers should run:
@@ -231,7 +232,7 @@ Cerberus is designed for one active Cerberus review per project at a time.
 | `--debate` | Run a debate instead of only independent reviews. Requires at least two reviewers. |
 | `--max-rounds <N>` | Limit review iterations or debate rounds. |
 | `--consensus majority\|all\|any` | Choose how many reviewers must pass. Blocking findings still block. |
-| `--post-reviewer provider:model[:effort]` | Choose the automatic post-review verification/dedup agent for code and epic verification findings. Effort accepts `low`/`medium`/`high`. Defaults to `codex:gpt-5.6-sol:low`. |
+| `--post-reviewer provider:model[:effort]` | Choose the automatic post-review verification/dedup agent for code and epic verification findings. Effort accepts `low`/`medium`/`high`/`xhigh`/`max`. Defaults to `codex:gpt-5.6-sol:low`. |
 
 Ask also accepts ask-only prompt inputs:
 
@@ -299,9 +300,10 @@ roster:
 
 Mode names may contain lowercase letters, digits, underscores, and hyphens.
 Each mode requires a non-empty `models` list. Allowed providers are `claude`,
-`codex`, and `gemini`; `effort` is required and must be `low`, `medium`, or
-`high`. `strategy` and `persona` are optional. Persona paths are resolved
-relative to `config.yaml` and must exist. `consensus` remains a CLI flag.
+`codex`, and `gemini`; `effort` is required and must be `low`, `medium`,
+`high`, `xhigh`, or `max`. `strategy` and `persona` are optional. Persona
+paths are resolved relative to `config.yaml` and must exist. `consensus`
+remains a CLI flag.
 
 ### Multi-instance example
 
