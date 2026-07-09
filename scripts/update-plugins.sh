@@ -80,9 +80,9 @@ install_one() {
 }
 
 if [ "$update_claude" -eq 1 ]; then
-    install_one "$HOME/.claude/plugins/cache/cerberus/cerberus/2.0.21"
+    install_one "$HOME/.claude/plugins/cache/cerberus/cerberus/2.0.22"
 fi
 
 if [ "$update_codex" -eq 1 ]; then
-    install_one "$HOME/.codex/plugins/cache/cerberus/cerberus/2.0.21"
+    install_one "$HOME/.codex/plugins/cache/cerberus/cerberus/2.0.22"
 fi
