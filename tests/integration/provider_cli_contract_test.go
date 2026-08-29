@@ -20,7 +20,7 @@ func TestProviderCLIContractMatchesMocks(t *testing.T) {
 			binary:     "claude",
 			versionArg: []string{"--version"},
 			helpArgs:   []string{"--help"},
-			wantHelp:   []string{"--print", "--output-format", "--append-system-prompt", "--model"},
+			wantHelp:   []string{"--print", "--output-format", "--append-system-prompt", "--model", "--restricted", "--tools"},
 		},
 		{
 			name:       "codex",

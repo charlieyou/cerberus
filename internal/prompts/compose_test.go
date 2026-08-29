@@ -123,6 +123,33 @@ func TestComposeKeepsLargeDiffOutOfSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestEpicVerifyPromptSupportsReadOnlyReviewerWithoutTask(t *testing.T) {
+	prompt, err := os.ReadFile(filepath.Join("..", "..", "prompts", "reviewers", "epic-verify.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(epic-verify.md) error = %v", err)
+	}
+	body := string(prompt)
+	for _, want := range []string{
+		"When Task is unavailable",
+		"verify each criterion group yourself with Read, Grep, and Glob",
+		"do not attempt to call it or wait for subagents",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("epic verification prompt missing no-Task instruction %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"You MUST use subagents",
+		"You MUST spawn Task",
+		"Subagents spawned?",
+		"ONLY AFTER subagents return",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("epic verification prompt still mandates unavailable Task behavior %q", forbidden)
+		}
+	}
+}
+
 func TestComposeGeneratorIncludesInterviewWhenEnabled(t *testing.T) {
 	root := t.TempDir()
 	writePrompt(t, root, "prompts/interview-engine.md", "interview engine")

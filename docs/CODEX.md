@@ -200,6 +200,11 @@ Cerberus passes each Gemini model entry's configured effort as its thinking
 level through a temporary `GEMINI_CLI_SYSTEM_SETTINGS_PATH` file and
 runs Gemini with the `cerberus-reviewer` model alias.
 
+Claude reviewer subprocesses run with `--restricted --tools Read,Grep,Glob`
+on every host, so they can inspect the repository without invoking commands,
+editing files, fetching web content, or spawning subagents. This restriction
+does not apply to Claude generator subprocesses.
+
 ## Default Mode Degradation
 
 The built-in default mode is `[claude, codex, gemini]`. On a Codex-only host,

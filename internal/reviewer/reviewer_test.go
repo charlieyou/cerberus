@@ -64,6 +64,9 @@ func TestRunnerCommandConstructionAndStdinForProviders(t *testing.T) {
 				if !strings.Contains(args, "--effort\nhigh") {
 					t.Fatalf("claude argv = %q, want max-mode effort flag", args)
 				}
+				if !strings.Contains(args, "--restricted\n--tools\nRead,Grep,Glob\n") {
+					t.Fatalf("claude argv = %q, want restricted read-only tools", args)
+				}
 			}
 			if provider == "codex" {
 				if !strings.Contains(args, "exec\n--json\n--model\nmodel-name") {

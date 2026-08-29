@@ -24,6 +24,7 @@ import (
 
 func TestSpawnCodeReviewModeConsensusHappyPath(t *testing.T) {
 	setSpawnTestEnv(t)
+	isolateRosters(t)
 	startRuntimeInlineForTest(t, nil)
 	var stdout, stderr bytes.Buffer
 

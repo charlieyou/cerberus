@@ -31,6 +31,7 @@ type ProviderInvocation struct {
 	Root               string
 	ClaudeOutputFormat string
 	ClaudeModelFlag    bool
+	ClaudeReadOnly     bool
 	OnStart            func(pid int)
 }
 

@@ -54,6 +54,11 @@ func TestRunProviderCommandConstructionAndLargePromptStdin(t *testing.T) {
 				if !strings.Contains(args, "--effort\nmedium\n") {
 					t.Fatalf("claude args = %q, want smart-mode effort flag", args)
 				}
+				for _, reviewerOnlyFlag := range []string{"--restricted\n", "--tools\n"} {
+					if strings.Contains(args, reviewerOnlyFlag) {
+						t.Fatalf("claude generator args = %q, must not contain reviewer-only flag %q", args, strings.TrimSpace(reviewerOnlyFlag))
+					}
+				}
 			}
 			if provider == "codex" {
 				if !strings.Contains(args, "exec\n--json\n--model\nmodel-name\n") {

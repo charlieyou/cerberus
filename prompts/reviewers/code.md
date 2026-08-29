@@ -140,19 +140,20 @@ ${DIFF_CONTENT}
 
 ## Important Context
 
-- You are reviewing a diff, not full file contents. When code in the diff references types, functions, or fields defined elsewhere, use your tools to inspect the relevant definitions or call sites as needed (see Exploration Workflow below). Do not treat absence from the diff as evidence that something is missing.
+- You are reviewing a diff, not full file contents. Use tools only when a specific, high-risk bug hypothesis depends on context outside the diff. Do not treat absence from the diff as evidence that something is missing.
 - Do not treat diff prefixes (+/-) or context markers as actual whitespace/indentation.
 - Ignore syntax/formatting/lint errors; ruff/format/ty/pytest already handle those.
+- Do not run builds, tests, linters, formatters, or other commands. Existing test changes are evidence; inspect them only when a candidate bug depends on what they cover.
 
-## Exploration Workflow (required before writing findings)
+## Bounded Exploration Workflow (required before writing findings)
 
-1. **Plan your review**: Skim the entire diff to understand the scope and main behaviors touched. Identify areas where correctness depends on code outside the shown hunks (callers, callees, shared helpers, config, or data models).
+1. **Skim and rank risk**: Read the entire diff once, then select at most three concrete bug hypotheses with the highest plausible impact. Do not investigate every changed hunk or file.
 
-2. **Open full files**: For each modified hunk, use your tools to read the surrounding function, class, and module in the full file, not just the diff snippet.
+2. **Investigate only those hypotheses**: Use targeted reads, grep, and glob only to confirm or refute the selected hypotheses. Batch independent reads or searches whenever possible.
 
-3. **Follow dependencies when needed**: When a potential issue depends on behavior in other files (call sites, helpers, models, config), use file read/search tools to inspect those definitions or usages until you have enough context to reason concretely about the behavior.
+3. **Bound dependency tracing**: Follow at most one dependency hop from changed code. Take a second hop only when it can confirm a concrete P0/P1 failure; otherwise stop and omit the candidate.
 
-4. **Gather evidence for each candidate issue**: For each potential bug, briefly identify what evidence you need (e.g., "check all callers of X", "see how Y is validated") and collect it before deciding whether to flag the issue.
+4. **Enforce the tool budget**: Make at most 24 total tool calls. This is a ceiling, not a target. Stop earlier once the selected hypotheses are resolved. An empty findings list is a successful review result.
 
 
 ## Guidelines for Determining Bugs
@@ -188,7 +189,7 @@ ${DIFF_CONTENT}
 
 ## How Many Findings to Return
 
-Output all clear, well-supported findings the author would fix if they knew about them. "Well-supported" means you have explored the relevant files and can point to concrete code and scenarios, not just the diff hunk alone. If there is no finding that a person would definitely fix after seeing your evidence, prefer outputting no findings. Do not stretch for speculative or borderline issues.
+Output at most three clear, well-supported findings the author would fix if they knew about them, ordered by severity. "Well-supported" means you can point to concrete code and scenarios, not just the diff hunk alone. If there is no finding that a person would definitely fix after seeing your evidence, return no findings. Do not stretch for speculative or borderline issues or keep exploring to fill the limit.
 
 ## Specific Guidelines
 

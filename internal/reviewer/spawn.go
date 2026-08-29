@@ -108,6 +108,7 @@ func (runner Runner) Spawn(ctx context.Context, request Request) (Response, erro
 		Root:               firstNonEmpty(request.Root, runner.Root),
 		ClaudeOutputFormat: "json",
 		ClaudeModelFlag:    true,
+		ClaudeReadOnly:     true,
 		OnStart: func(pid int) {
 			writeReviewerProcessEvent(runRoot, telemetry.EventReviewerProcessStarted, request, iteration, round, time.Now().UTC(), map[string]any{
 				"pid":         pid,
@@ -346,6 +347,9 @@ func command(ctx context.Context, invocation ProviderInvocation) (*exec.Cmd, fun
 	case "claude":
 		outputFormat := firstNonEmpty(invocation.ClaudeOutputFormat, "json")
 		args = []string{"--print", "--output-format", outputFormat}
+		if invocation.ClaudeReadOnly {
+			args = append(args, "--restricted", "--tools", "Read,Grep,Glob")
+		}
 		if invocation.ClaudeModelFlag {
 			args = append(args, "--model", invocation.Model)
 		}

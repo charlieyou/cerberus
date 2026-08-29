@@ -79,13 +79,18 @@ func TestSinglePassCLIWaitResolveStatusWithDefaultPanel(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
 	binary := buildIntegrationCerberus(t, repoRoot)
 	stateRoot := t.TempDir()
+	recordDir := t.TempDir()
 	projectRoot := initIntegrationGitRepo(t)
+	home := t.TempDir()
 	env := []string{
 		"CERBERUS_HOST=generic",
 		"CERBERUS_ROOT=" + repoRoot,
 		"CERBERUS_STATE_ROOT=" + stateRoot,
 		"CERBERUS_PROJECT_KEY=single-pass-cli",
 		"CERBERUS_RUN_KEY=default-panel",
+		"CERBERUS_MOCK_RECORD_DIR=" + recordDir,
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"PATH=" + integrationMockPath(t, repoRoot) + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 
@@ -106,6 +111,13 @@ func TestSinglePassCLIWaitResolveStatusWithDefaultPanel(t *testing.T) {
 	runRoot := filepath.Join(stateRoot, "single-pass-cli", "default-panel")
 	for _, reviewerID := range []string{"claude#1", "codex#1", "gemini#1"} {
 		assertReviewerTelemetryID(t, runRoot, reviewerID)
+	}
+	claudeArgs, err := os.ReadFile(filepath.Join(recordDir, "claude.args"))
+	if err != nil {
+		t.Fatalf("ReadFile(claude.args) error = %v", err)
+	}
+	if !strings.Contains(string(claudeArgs), "--restricted\n--tools\nRead,Grep,Glob\n") {
+		t.Fatalf("claude reviewer args = %q, want restricted read-only tools", claudeArgs)
 	}
 }
 

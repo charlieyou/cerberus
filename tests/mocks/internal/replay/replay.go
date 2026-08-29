@@ -56,7 +56,7 @@ func validateInvocation(provider string, args []string) error {
 func validateClaudeArgs(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--print", "-p", "--help", "-h", "--version", "-v":
+		case "--print", "-p", "--restricted", "--help", "-h", "--version", "-v":
 		case "--output-format":
 			value, next, err := requireValue(args, i)
 			if err != nil {
@@ -66,7 +66,7 @@ func validateClaudeArgs(args []string) error {
 				return fmt.Errorf("unsupported claude output format %q", value)
 			}
 			i = next
-		case "--model", "--append-system-prompt", "--effort":
+		case "--model", "--append-system-prompt", "--effort", "--tools":
 			_, next, err := requireValue(args, i)
 			if err != nil {
 				return err

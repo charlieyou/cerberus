@@ -11,7 +11,7 @@ func TestValidateInvocationAcceptsCerberusProviderArgs(t *testing.T) {
 		{
 			name:     "claude reviewer",
 			provider: "claude",
-			args:     []string{"--print", "--output-format", "json", "--model", "claude-opus-4-7", "--effort", "medium", "--append-system-prompt", "system"},
+			args:     []string{"--print", "--output-format", "json", "--restricted", "--tools", "Read,Grep,Glob", "--model", "claude-opus-4-7", "--effort", "medium", "--append-system-prompt", "system"},
 		},
 		{
 			name:     "claude generator",

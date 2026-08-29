@@ -74,9 +74,12 @@ describes argv and system-prompt shape.
 
 | Reviewer | Invocation shape |
 | --- | --- |
-| Claude | `claude --print --output-format json [--model <model>] --effort <effort> --append-system-prompt <system>` |
+| Claude | `claude --print --output-format json --restricted --tools Read,Grep,Glob [--model <model>] --effort <effort> --append-system-prompt <system>` |
 | Codex | `codex exec --json --model <model> -c model_reasoning_effort=\"<effort>\" <system>` |
 | Gemini | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<temp-settings.json> gemini --output-format json --model cerberus-reviewer --prompt <system> --policy <policy.toml>` |
+
+Claude reviewer processes are restricted to read, grep, and glob operations;
+Claude generator processes keep their normal tool access.
 
 Each model entry supplies its own effort independently of the selected mode's
 name. Allowed efforts are `low`, `medium`, `high`, `xhigh`, and `max`. For
@@ -302,8 +305,7 @@ Mode names may contain lowercase letters, digits, underscores, and hyphens.
 Each mode requires a non-empty `models` list. Allowed providers are `claude`,
 `codex`, and `gemini`; `effort` is required and must be `low`, `medium`,
 `high`, `xhigh`, or `max`. `strategy` and `persona` are optional. Persona
-paths are resolved relative to `config.yaml` and must exist. `consensus`
-remains a CLI flag.
+paths are resolved relative to `config.yaml` and must exist. `consensus` remains a CLI flag.
 
 ### Multi-instance example
 
